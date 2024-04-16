@@ -20,6 +20,8 @@ lightning = { version = "0.0.121", default-features = false}
 secp256k1 = { version = "0.27.0", default-features = false, features = ["recovery", "alloc"] }
 serde = { version = "1.0.118", optional = true }
 bitcoin = { version = "0.30.2", default-features = false }
+ckb-types = "0.114.0"
+
 
 [dev-dependencies]
 lightning = { version = "0.0.121", default-features = false, features = ["_test_utils"] }

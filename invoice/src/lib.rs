@@ -23,6 +23,7 @@
 #[cfg(not(any(feature = "std", feature = "no-std")))]
 compile_error!("at least one of the `std` or `no-std` features must be enabled");
 
+//pub mod network;
 pub mod payment;
 pub mod utils;
 
@@ -58,6 +59,8 @@ use core::ops::Deref;
 use core::slice::Iter;
 use core::str;
 use core::time::Duration;
+
+use ckb_types::packed::Script;
 
 #[cfg(feature = "serde")]
 use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
@@ -151,7 +154,7 @@ pub const DEFAULT_MIN_FINAL_CLTV_EXPIRY_DELTA: u64 = 18;
 /// ```
 /// extern crate secp256k1;
 /// extern crate lightning;
-/// extern crate lightning_invoice;
+/// extern crate ckb_pcn_invoice;
 /// extern crate bitcoin;
 ///
 /// use bitcoin::hashes::Hash;
@@ -162,7 +165,7 @@ pub const DEFAULT_MIN_FINAL_CLTV_EXPIRY_DELTA: u64 = 18;
 ///
 /// use lightning::ln::PaymentSecret;
 ///
-/// use lightning_invoice::{Currency, InvoiceBuilder};
+/// use ckb_pcn_invoice::{Currency, InvoiceBuilder};
 ///
 /// # #[cfg(not(feature = "std"))]
 /// # fn main() {}
@@ -213,6 +216,7 @@ pub struct InvoiceBuilder<
     C: tb::Bool,
     S: tb::Bool,
     M: tb::Bool,
+    X: tb::Bool,
 > {
     currency: Currency,
     amount: Option<u64>,
@@ -220,6 +224,7 @@ pub struct InvoiceBuilder<
     timestamp: Option<PositiveTimestamp>,
     tagged_fields: Vec<TaggedField>,
     error: Option<CreationError>,
+    script: Option<Script>,
 
     phantom_d: core::marker::PhantomData<D>,
     phantom_h: core::marker::PhantomData<H>,
@@ -227,6 +232,7 @@ pub struct InvoiceBuilder<
     phantom_c: core::marker::PhantomData<C>,
     phantom_s: core::marker::PhantomData<S>,
     phantom_m: core::marker::PhantomData<M>,
+    phantom_sc: core::marker::PhantomData<X>,
 }
 
 /// Represents a syntactically and semantically correct lightning BOLT11 invoice.
@@ -240,6 +246,9 @@ pub struct InvoiceBuilder<
 #[derive(Eq, PartialEq, Debug, Clone, Hash, Ord, PartialOrd)]
 pub struct Bolt11Invoice {
     signed_invoice: SignedRawBolt11Invoice,
+
+    /// whether the invoice is a hodl invoice
+    is_hodl: bool,
 }
 
 /// Represents the description of an invoice which has to be either a directly included string or
@@ -390,6 +399,12 @@ pub enum Currency {
 
     /// Bitcoin signet
     Signet,
+
+    /// CKB mainnet
+    Ckbcoin,
+
+    /// CKB testent
+    CkbcoinTestnet,
 }
 
 impl From<Network> for Currency {
@@ -399,6 +414,8 @@ impl From<Network> for Currency {
             Network::Testnet => Currency::BitcoinTestnet,
             Network::Regtest => Currency::Regtest,
             Network::Signet => Currency::Signet,
+            // Network::Ckb => Currency::Ckbcoin,
+            // Network::CkbTestNet => Currency::CkbcoinTestnet,
             _ => {
                 debug_assert!(false, "Need to handle new rust-bitcoin network type");
                 Currency::Regtest
@@ -415,6 +432,9 @@ impl From<Currency> for Network {
             Currency::Regtest => Network::Regtest,
             Currency::Simnet => Network::Regtest,
             Currency::Signet => Network::Signet,
+            // Currency::Ckbcoin => Network::Ckb,
+            // Currency::CkbcoinTestnet => Network::CkbTestNet,
+            _ => todo!(),
         }
     }
 }
@@ -543,7 +563,7 @@ pub mod constants {
     pub const TAG_FEATURES: u8 = 5;
 }
 
-impl InvoiceBuilder<tb::False, tb::False, tb::False, tb::False, tb::False, tb::False> {
+impl InvoiceBuilder<tb::False, tb::False, tb::False, tb::False, tb::False, tb::False, tb::False> {
     /// Construct new, empty `InvoiceBuilder`. All necessary fields have to be filled first before
     /// `InvoiceBuilder::build(self)` becomes available.
     pub fn new(currency: Currency) -> Self {
@@ -554,6 +574,7 @@ impl InvoiceBuilder<tb::False, tb::False, tb::False, tb::False, tb::False, tb::F
             timestamp: None,
             tagged_fields: Vec::with_capacity(8),
             error: None,
+            script: None,
 
             phantom_d: core::marker::PhantomData,
             phantom_h: core::marker::PhantomData,
@@ -561,12 +582,13 @@ impl InvoiceBuilder<tb::False, tb::False, tb::False, tb::False, tb::False, tb::F
             phantom_c: core::marker::PhantomData,
             phantom_s: core::marker::PhantomData,
             phantom_m: core::marker::PhantomData,
+            phantom_sc: core::marker::PhantomData,
         }
     }
 }
 
-impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
-    InvoiceBuilder<D, H, T, C, S, M>
+impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<D, H, T, C, S, M, X>
 {
     /// Helper function to set the completeness flags.
     fn set_flags<
@@ -578,14 +600,15 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Boo
         MN: tb::Bool,
     >(
         self,
-    ) -> InvoiceBuilder<DN, HN, TN, CN, SN, MN> {
-        InvoiceBuilder::<DN, HN, TN, CN, SN, MN> {
+    ) -> InvoiceBuilder<DN, HN, TN, CN, SN, MN, X> {
+        InvoiceBuilder::<DN, HN, TN, CN, SN, MN, X> {
             currency: self.currency,
             amount: self.amount,
             si_prefix: self.si_prefix,
             timestamp: self.timestamp,
             tagged_fields: self.tagged_fields,
             error: self.error,
+            script: self.script,
 
             phantom_d: core::marker::PhantomData,
             phantom_h: core::marker::PhantomData,
@@ -593,6 +616,7 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Boo
             phantom_c: core::marker::PhantomData,
             phantom_s: core::marker::PhantomData,
             phantom_m: core::marker::PhantomData,
+            phantom_sc: core::marker::PhantomData,
         }
     }
 
@@ -641,8 +665,8 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Boo
     }
 }
 
-impl<D: tb::Bool, H: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
-    InvoiceBuilder<D, H, tb::True, C, S, M>
+impl<D: tb::Bool, H: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<D, H, tb::True, C, S, M, X>
 {
     /// Builds a [`RawBolt11Invoice`] if no [`CreationError`] occurred while construction any of the
     /// fields.
@@ -675,11 +699,14 @@ impl<D: tb::Bool, H: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
     }
 }
 
-impl<H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
-    InvoiceBuilder<tb::False, H, T, C, S, M>
+impl<H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<tb::False, H, T, C, S, M, X>
 {
     /// Set the description. This function is only available if no description (hash) was set.
-    pub fn description(mut self, description: String) -> InvoiceBuilder<tb::True, H, T, C, S, M> {
+    pub fn description(
+        mut self,
+        description: String,
+    ) -> InvoiceBuilder<tb::True, H, T, C, S, M, X> {
         match Description::new(description) {
             Ok(d) => self.tagged_fields.push(TaggedField::Description(d)),
             Err(e) => self.error = Some(e),
@@ -691,7 +718,7 @@ impl<H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
     pub fn description_hash(
         mut self,
         description_hash: sha256::Hash,
-    ) -> InvoiceBuilder<tb::True, H, T, C, S, M> {
+    ) -> InvoiceBuilder<tb::True, H, T, C, S, M, X> {
         self.tagged_fields
             .push(TaggedField::DescriptionHash(Sha256(description_hash)));
         self.set_flags()
@@ -701,7 +728,7 @@ impl<H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
     pub fn invoice_description(
         self,
         description: Bolt11InvoiceDescription,
-    ) -> InvoiceBuilder<tb::True, H, T, C, S, M> {
+    ) -> InvoiceBuilder<tb::True, H, T, C, S, M, X> {
         match description {
             Bolt11InvoiceDescription::Direct(desc) => self.description(desc.clone().into_inner().0),
             Bolt11InvoiceDescription::Hash(hash) => self.description_hash(hash.0),
@@ -709,23 +736,26 @@ impl<H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
     }
 }
 
-impl<D: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
-    InvoiceBuilder<D, tb::False, T, C, S, M>
+impl<D: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<D, tb::False, T, C, S, M, X>
 {
     /// Set the payment hash. This function is only available if no payment hash was set.
-    pub fn payment_hash(mut self, hash: sha256::Hash) -> InvoiceBuilder<D, tb::True, T, C, S, M> {
+    pub fn payment_hash(
+        mut self,
+        hash: sha256::Hash,
+    ) -> InvoiceBuilder<D, tb::True, T, C, S, M, X> {
         self.tagged_fields
             .push(TaggedField::PaymentHash(Sha256(hash)));
         self.set_flags()
     }
 }
 
-impl<D: tb::Bool, H: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
-    InvoiceBuilder<D, H, tb::False, C, S, M>
+impl<D: tb::Bool, H: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<D, H, tb::False, C, S, M, X>
 {
     /// Sets the timestamp to a specific [`SystemTime`].
     #[cfg(feature = "std")]
-    pub fn timestamp(mut self, time: SystemTime) -> InvoiceBuilder<D, H, tb::True, C, S, M> {
+    pub fn timestamp(mut self, time: SystemTime) -> InvoiceBuilder<D, H, tb::True, C, S, M, X> {
         match PositiveTimestamp::from_system_time(time) {
             Ok(t) => self.timestamp = Some(t),
             Err(e) => self.error = Some(e),
@@ -739,7 +769,7 @@ impl<D: tb::Bool, H: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
     pub fn duration_since_epoch(
         mut self,
         time: Duration,
-    ) -> InvoiceBuilder<D, H, tb::True, C, S, M> {
+    ) -> InvoiceBuilder<D, H, tb::True, C, S, M, X> {
         match PositiveTimestamp::from_duration_since_epoch(time) {
             Ok(t) => self.timestamp = Some(t),
             Err(e) => self.error = Some(e),
@@ -750,21 +780,21 @@ impl<D: tb::Bool, H: tb::Bool, C: tb::Bool, S: tb::Bool, M: tb::Bool>
 
     /// Sets the timestamp to the current system time.
     #[cfg(feature = "std")]
-    pub fn current_timestamp(mut self) -> InvoiceBuilder<D, H, tb::True, C, S, M> {
+    pub fn current_timestamp(mut self) -> InvoiceBuilder<D, H, tb::True, C, S, M, X> {
         let now = PositiveTimestamp::from_system_time(SystemTime::now());
         self.timestamp = Some(now.expect("for the foreseeable future this shouldn't happen"));
         self.set_flags()
     }
 }
 
-impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, S: tb::Bool, M: tb::Bool>
-    InvoiceBuilder<D, H, T, tb::False, S, M>
+impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, S: tb::Bool, M: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<D, H, T, tb::False, S, M, X>
 {
     /// Sets `min_final_cltv_expiry_delta`.
     pub fn min_final_cltv_expiry_delta(
         mut self,
         min_final_cltv_expiry_delta: u64,
-    ) -> InvoiceBuilder<D, H, T, tb::True, S, M> {
+    ) -> InvoiceBuilder<D, H, T, tb::True, S, M, X> {
         self.tagged_fields
             .push(TaggedField::MinFinalCltvExpiryDelta(
                 MinFinalCltvExpiryDelta(min_final_cltv_expiry_delta),
@@ -773,14 +803,14 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, S: tb::Bool, M: tb::Bool>
     }
 }
 
-impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, M: tb::Bool>
-    InvoiceBuilder<D, H, T, C, tb::False, M>
+impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, M: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<D, H, T, C, tb::False, M, X>
 {
     /// Sets the payment secret and relevant features.
     pub fn payment_secret(
         mut self,
         payment_secret: PaymentSecret,
-    ) -> InvoiceBuilder<D, H, T, C, tb::True, M> {
+    ) -> InvoiceBuilder<D, H, T, C, tb::True, M, X> {
         let mut found_features = false;
         for field in self.tagged_fields.iter_mut() {
             if let TaggedField::Features(f) = field {
@@ -801,8 +831,8 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, M: tb::Bool>
     }
 }
 
-impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool>
-    InvoiceBuilder<D, H, T, C, S, tb::False>
+impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<D, H, T, C, S, tb::False, X>
 {
     /// Sets the payment metadata.
     ///
@@ -813,7 +843,7 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool>
     pub fn payment_metadata(
         mut self,
         payment_metadata: Vec<u8>,
-    ) -> InvoiceBuilder<D, H, T, C, S, tb::True> {
+    ) -> InvoiceBuilder<D, H, T, C, S, tb::True, X> {
         self.tagged_fields
             .push(TaggedField::PaymentMetadata(payment_metadata));
         let mut found_features = false;
@@ -832,12 +862,12 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool>
     }
 }
 
-impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool>
-    InvoiceBuilder<D, H, T, C, S, tb::True>
+impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<D, H, T, C, S, tb::True, X>
 {
     /// Sets forwarding of payment metadata as required. A reader of the invoice which does not
     /// support sending payment metadata will fail to read the invoice.
-    pub fn require_payment_metadata(mut self) -> InvoiceBuilder<D, H, T, C, S, tb::True> {
+    pub fn require_payment_metadata(mut self) -> InvoiceBuilder<D, H, T, C, S, tb::True, X> {
         for field in self.tagged_fields.iter_mut() {
             if let TaggedField::Features(f) = field {
                 f.set_payment_metadata_required();
@@ -847,8 +877,8 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, S: tb::Bool>
     }
 }
 
-impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, M: tb::Bool>
-    InvoiceBuilder<D, H, T, C, tb::True, M>
+impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, M: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<D, H, T, C, tb::True, M, X>
 {
     /// Sets the `basic_mpp` feature as optional.
     pub fn basic_mpp(mut self) -> Self {
@@ -861,7 +891,9 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, M: tb::Bool>
     }
 }
 
-impl<M: tb::Bool> InvoiceBuilder<tb::True, tb::True, tb::True, tb::True, tb::True, M> {
+impl<M: tb::Bool, X: tb::Bool>
+    InvoiceBuilder<tb::True, tb::True, tb::True, tb::True, tb::True, M, X>
+{
     /// Builds and signs an invoice using the supplied `sign_function`. This function MAY NOT fail
     /// and MUST produce a recoverable signature valid for the given hash and if applicable also for
     /// the included payee public key.
@@ -900,6 +932,7 @@ impl<M: tb::Bool> InvoiceBuilder<tb::True, tb::True, tb::True, tb::True, tb::Tru
 
         let invoice = Bolt11Invoice {
             signed_invoice: signed,
+            is_hodl: false,
         };
 
         invoice
@@ -1373,7 +1406,7 @@ impl Bolt11Invoice {
 
     /// Constructs a `Bolt11Invoice` from a [`SignedRawBolt11Invoice`] by checking all its invariants.
     /// ```
-    /// use lightning_invoice::*;
+    /// use ckb_pcn_invoice::*;
     ///
     /// let invoice = "lnbc100p1psj9jhxdqud3jxktt5w46x7unfv9kz6mn0v3jsnp4q0d3p2sfluzdx45tqcs\
     /// h2pu5qc7lgq0xs578ngs6s0s68ua4h7cvspp5q6rmq35js88zp5dvwrv9m459tnk2zunwj5jalqtyxqulh0l\
@@ -1394,7 +1427,10 @@ impl Bolt11Invoice {
     pub fn from_signed(
         signed_invoice: SignedRawBolt11Invoice,
     ) -> Result<Self, Bolt11SemanticError> {
-        let invoice = Bolt11Invoice { signed_invoice };
+        let invoice = Bolt11Invoice {
+            signed_invoice,
+            is_hodl: false,
+        };
         invoice.check_field_counts()?;
         invoice.check_feature_bits()?;
         invoice.check_signature()?;
@@ -1999,6 +2035,7 @@ mod test {
                     )
                     .unwrap(),
                 ),
+                is_hodl: false,
             };
 
         assert!(invoice.check_signature());

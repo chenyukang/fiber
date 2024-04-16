@@ -1,22 +1,22 @@
 extern crate bech32;
-extern crate lightning;
-extern crate lightning_invoice;
-extern crate secp256k1;
+extern crate ckb_pcn_invoice;
 extern crate hex;
+extern crate lightning;
+extern crate secp256k1;
 
 use bitcoin::address::WitnessVersion;
-use bitcoin::{PubkeyHash, ScriptHash};
 use bitcoin::hashes::hex::FromHex;
 use bitcoin::hashes::{sha256, Hash};
-use lightning_invoice::*;
-use secp256k1::PublicKey;
+use bitcoin::{PubkeyHash, ScriptHash};
+use ckb_pcn_invoice::*;
 use secp256k1::ecdsa::{RecoverableSignature, RecoveryId};
+use secp256k1::PublicKey;
 use std::collections::HashSet;
-use std::time::Duration;
 use std::str::FromStr;
+use std::time::Duration;
 
 fn get_test_tuples() -> Vec<(String, SignedRawBolt11Invoice, bool, bool)> {
-	vec![
+    vec![
 		(
 			"lnbc1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq9qrsgq357wnc5r2ueh7ck6q93dj32dlqnls087fxdwk8qakdyafkq3yap9us6v52vjjsrvywa6rt52cm9r9zqt8r2t7mlcwspyetp5h2tztugp9lfyql".to_owned(),
 			InvoiceBuilder::new(Currency::Bitcoin)
@@ -383,60 +383,80 @@ fn get_test_tuples() -> Vec<(String, SignedRawBolt11Invoice, bool, bool)> {
 
 #[test]
 fn invoice_deserialize() {
-	for (serialized, deserialized, ignore_feature_diff, ignore_unknown_fields) in get_test_tuples() {
-		eprintln!("Testing invoice {}...", serialized);
-		let parsed = serialized.parse::<SignedRawBolt11Invoice>().unwrap();
+    for (serialized, deserialized, ignore_feature_diff, ignore_unknown_fields) in get_test_tuples()
+    {
+        eprintln!("Testing invoice {}...", serialized);
+        let parsed = serialized.parse::<SignedRawBolt11Invoice>().unwrap();
 
-		let (parsed_invoice, _, parsed_sig) = parsed.into_parts();
-		let (deserialized_invoice, _, deserialized_sig) = deserialized.into_parts();
+        let (parsed_invoice, _, parsed_sig) = parsed.into_parts();
+        let (deserialized_invoice, _, deserialized_sig) = deserialized.into_parts();
 
-		assert_eq!(deserialized_sig, parsed_sig);
-		assert_eq!(deserialized_invoice.hrp, parsed_invoice.hrp);
-		assert_eq!(deserialized_invoice.data.timestamp, parsed_invoice.data.timestamp);
+        assert_eq!(deserialized_sig, parsed_sig);
+        assert_eq!(deserialized_invoice.hrp, parsed_invoice.hrp);
+        assert_eq!(
+            deserialized_invoice.data.timestamp,
+            parsed_invoice.data.timestamp
+        );
 
-		let mut deserialized_hunks: HashSet<_> = deserialized_invoice.data.tagged_fields.iter().collect();
-		let mut parsed_hunks: HashSet<_> = parsed_invoice.data.tagged_fields.iter().collect();
-		if ignore_feature_diff {
-			deserialized_hunks.retain(|h|
-				if let RawTaggedField::KnownSemantics(TaggedField::Features(_)) = h { false } else { true });
-			parsed_hunks.retain(|h|
-				if let RawTaggedField::KnownSemantics(TaggedField::Features(_)) = h { false } else { true });
-		}
-		if ignore_unknown_fields {
-			parsed_hunks.retain(|h|
-				if let RawTaggedField::UnknownSemantics(_) = h { false } else { true });
-		}
-		assert_eq!(deserialized_hunks, parsed_hunks);
+        let mut deserialized_hunks: HashSet<_> =
+            deserialized_invoice.data.tagged_fields.iter().collect();
+        let mut parsed_hunks: HashSet<_> = parsed_invoice.data.tagged_fields.iter().collect();
+        if ignore_feature_diff {
+            deserialized_hunks.retain(|h| {
+                if let RawTaggedField::KnownSemantics(TaggedField::Features(_)) = h {
+                    false
+                } else {
+                    true
+                }
+            });
+            parsed_hunks.retain(|h| {
+                if let RawTaggedField::KnownSemantics(TaggedField::Features(_)) = h {
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        if ignore_unknown_fields {
+            parsed_hunks.retain(|h| {
+                if let RawTaggedField::UnknownSemantics(_) = h {
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        assert_eq!(deserialized_hunks, parsed_hunks);
 
-		Bolt11Invoice::from_signed(serialized.parse::<SignedRawBolt11Invoice>().unwrap()).unwrap();
-	}
+        Bolt11Invoice::from_signed(serialized.parse::<SignedRawBolt11Invoice>().unwrap()).unwrap();
+    }
 }
 
 #[test]
 fn test_bolt_invalid_invoices() {
-	// Tests the BOLT 11 invalid invoice test vectors
-	assert_eq!(Bolt11Invoice::from_str(
+    // Tests the BOLT 11 invalid invoice test vectors
+    assert_eq!(Bolt11Invoice::from_str(
 		"lnbc25m1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5vdhkven9v5sxyetpdeessp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9q4psqqqqqqqqqqqqqqqqsgqtqyx5vggfcsll4wu246hz02kp85x4katwsk9639we5n5yngc3yhqkm35jnjw4len8vrnqnf5ejh0mzj9n3vz2px97evektfm2l6wqccp3y7372"
 		), Err(ParseOrSemanticError::SemanticError(Bolt11SemanticError::InvalidFeatures)));
-	assert_eq!(Bolt11Invoice::from_str(
+    assert_eq!(Bolt11Invoice::from_str(
 		"lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpquwpc4curk03c9wlrswe78q4eyqc7d8d0xqzpuyk0sg5g70me25alkluzd2x62aysf2pyy8edtjeevuv4p2d5p76r4zkmneet7uvyakky2zr4cusd45tftc9c5fh0nnqpnl2jfll544esqchsrnt"
 		), Err(ParseOrSemanticError::ParseError(Bolt11ParseError::Bech32Error(bech32::Error::InvalidChecksum))));
-	assert_eq!(Bolt11Invoice::from_str(
+    assert_eq!(Bolt11Invoice::from_str(
 		"pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpquwpc4curk03c9wlrswe78q4eyqc7d8d0xqzpuyk0sg5g70me25alkluzd2x62aysf2pyy8edtjeevuv4p2d5p76r4zkmneet7uvyakky2zr4cusd45tftc9c5fh0nnqpnl2jfll544esqchsrny"
 		), Err(ParseOrSemanticError::ParseError(Bolt11ParseError::Bech32Error(bech32::Error::MissingSeparator))));
-	assert_eq!(Bolt11Invoice::from_str(
+    assert_eq!(Bolt11Invoice::from_str(
 		"LNBC2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpquwpc4curk03c9wlrswe78q4eyqc7d8d0xqzpuyk0sg5g70me25alkluzd2x62aysf2pyy8edtjeevuv4p2d5p76r4zkmneet7uvyakky2zr4cusd45tftc9c5fh0nnqpnl2jfll544esqchsrny"
 		), Err(ParseOrSemanticError::ParseError(Bolt11ParseError::Bech32Error(bech32::Error::MixedCase))));
-	assert_eq!(Bolt11Invoice::from_str(
+    assert_eq!(Bolt11Invoice::from_str(
 		"lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpusp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9qrsgqwgt7mcn5yqw3yx0w94pswkpq6j9uh6xfqqqtsk4tnarugeektd4hg5975x9am52rz4qskukxdmjemg92vvqz8nvmsye63r5ykel43pgz7zq0g2"
 		), Err(ParseOrSemanticError::SemanticError(Bolt11SemanticError::InvalidSignature)));
-	assert_eq!(Bolt11Invoice::from_str(
+    assert_eq!(Bolt11Invoice::from_str(
 		"lnbc1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6na6hlh"
 		), Err(ParseOrSemanticError::ParseError(Bolt11ParseError::TooShortDataPart)));
-	assert_eq!(Bolt11Invoice::from_str(
+    assert_eq!(Bolt11Invoice::from_str(
 		"lnbc2500x1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpusp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9qrsgqrrzc4cvfue4zp3hggxp47ag7xnrlr8vgcmkjxk3j5jqethnumgkpqp23z9jclu3v0a7e0aruz366e9wqdykw6dxhdzcjjhldxq0w6wgqcnu43j"
 		), Err(ParseOrSemanticError::ParseError(Bolt11ParseError::UnknownSiPrefix)));
-	assert_eq!(Bolt11Invoice::from_str(
+    assert_eq!(Bolt11Invoice::from_str(
 		"lnbc2500000001p1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpusp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9qrsgq0lzc236j96a95uv0m3umg28gclm5lqxtqqwk32uuk4k6673k6n5kfvx3d2h8s295fad45fdhmusm8sjudfhlf6dcsxmfvkeywmjdkxcp99202x"
 		), Err(ParseOrSemanticError::SemanticError(Bolt11SemanticError::ImpreciseAmount)));
 }

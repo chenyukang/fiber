@@ -664,6 +664,7 @@ version = "0.29.0"
 dependencies = [
  "bech32 0.9.1",
  "bitcoin",
+ "ckb-types",
  "lightning",
  "secp256k1 0.27.0",
 ]
