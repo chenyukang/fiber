@@ -2,8 +2,8 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+use ckb_pcn_invoice::Bolt11Invoice;
 use hex::ToHex;
-use lightning_invoice::Bolt11Invoice;
 use tokio::{select, sync::mpsc};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
