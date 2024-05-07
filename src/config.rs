@@ -27,6 +27,7 @@ fn get_default_config_file() -> PathBuf {
     path
 }
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Serialize, Deserialize, Parser, Copy, Clone, Debug, PartialEq)]
 enum Service {
     #[serde(alias = "ckb", alias = "CKB")]

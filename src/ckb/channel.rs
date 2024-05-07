@@ -74,7 +74,7 @@ fn get_random_preimage() -> Hash256 {
 impl From<(u64, AddTlcCommand)> for TLC {
     fn from((id, command): (u64, AddTlcCommand)) -> Self {
         let preimage = command.preimage.unwrap_or(get_random_preimage());
-        let hash = blake2b_256(&preimage);
+        let hash = blake2b_256(preimage);
         TLC {
             id,
             amount: command.amount,
@@ -311,10 +311,7 @@ impl ChannelActor {
         command: TxCollaborationCommand,
     ) -> Result<(), ProcessingChannelError> {
         debug!("Handling tx collaboration command: {:?}", &command);
-        let is_complete_command = match command {
-            TxCollaborationCommand::TxComplete(_) => true,
-            _ => false,
-        };
+        let is_complete_command = matches!(command, TxCollaborationCommand::TxComplete(_));
         let is_waiting_for_remote = match state.state {
             ChannelState::CollaboratingFundingTx(flags) => {
                 flags.contains(CollaboratingFundingTxFlags::AWAITING_REMOTE_TX_COLLABORATION_MSG)
