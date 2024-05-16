@@ -788,7 +788,7 @@ fn open_channel(
     announced_channel: bool,
     with_anchors: bool,
     channel_manager: Arc<ChannelManager>,
-) -> Result<(), ()> {
+) -> Result<ChannelId, ()> {
     let config = UserConfig {
         channel_handshake_limits: ChannelHandshakeLimits {
             // lnd's max to_self_delay is 2016, so we want to be compatible.
@@ -804,9 +804,9 @@ fn open_channel(
     };
 
     match channel_manager.create_channel(peer_pubkey, channel_amt_sat, 0, 0, None, Some(config)) {
-        Ok(_) => {
+        Ok(channel_id) => {
             println!("EVENT: initiated channel with peer {}. ", peer_pubkey);
-            Ok(())
+            Ok(channel_id)
         }
         Err(e) => {
             println!("ERROR: failed to open channel: {:?}", e);

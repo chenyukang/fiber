@@ -6,7 +6,7 @@ use log::{debug, error, info, warn};
 use ractor::{
     async_trait as rasync_trait, call_t, cast, Actor, ActorCell, ActorProcessingErr, ActorRef,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr, FromInto};
 use std::collections::HashSet;
 use std::{collections::HashMap, str};
@@ -157,12 +157,18 @@ pub enum NetworkActorEvent {
     NetworkServiceEvent(NetworkServiceEvent),
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub enum NetworkActorMessageReply {
+    AcceptChannel(Hash256, u128),
+    Empty(()),
+}
+
 #[derive(Debug)]
 pub enum NetworkActorMessage {
     Command(
         NetworkActorCommand,
         // TODO: we may need to refine the following type according to each commands.
-        Option<mpsc::Sender<crate::Result<()>>>,
+        Option<mpsc::Sender<crate::Result<NetworkActorMessageReply>>>,
     ),
     Event(NetworkActorEvent),
 }
@@ -257,7 +263,8 @@ impl NetworkActor {
         myself: ActorRef<NetworkActorMessage>,
         state: &mut NetworkActorState,
         command: NetworkActorCommand,
-    ) -> crate::Result<()> {
+    ) -> crate::Result<NetworkActorMessageReply> {
+        let default_reply = Ok(NetworkActorMessageReply::Empty(()));
         match command {
             NetworkActorCommand::SendPcnMessageToSession(PCNMessageWithSessionId {
                 session_id,
@@ -318,16 +325,16 @@ impl NetworkActor {
                         Some(tx) => tx,
                         _ => {
                             error!("Obtained empty funding tx");
-                            return Ok(());
+                            return default_reply;
                         }
                     },
                     Ok(Err(err)) => {
                         error!("Failed to fund channel: {}", err);
-                        return Ok(());
+                        return default_reply;
                     }
                     Err(err) => {
                         error!("Failed to call chain actor: {}", err);
-                        return Ok(());
+                        return default_reply;
                     }
                 };
                 debug!("Funding transaction updated on our part: {:?}", tx);
@@ -440,7 +447,7 @@ impl NetworkActor {
                     .expect("network actor alive");
             }
         };
-        Ok(())
+        default_reply
     }
 }
 

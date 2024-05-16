@@ -1,13 +1,17 @@
 mod config;
+use crate::ckb::NetworkActorMessageReply;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 pub use config::RpcConfig;
 use log::{debug, error, info};
 use serde::Deserialize;
+use serde_json::json;
 use std::{future::Future, sync::Arc};
 use tokio::sync::mpsc;
 
-pub type NetworkActorCommandWithReply =
-    (NetworkActorCommand, Option<mpsc::Sender<crate::Result<()>>>);
+pub type NetworkActorCommandWithReply = (
+    NetworkActorCommand,
+    Option<mpsc::Sender<crate::Result<NetworkActorMessageReply>>>,
+);
 
 pub type InvoiceCommandWithReply = (InvoiceCommand, Option<mpsc::Sender<crate::Result<String>>>);
 
@@ -48,12 +52,12 @@ async fn serve_ckb_rpc(
         .await
         .expect("send command");
     match receiver.recv().await {
-        Some(Ok(_)) => StatusCode::OK,
+        Some(Ok(res)) => (StatusCode::OK, json!(res).to_string()),
         Some(Err(err)) => {
             error!("Error processing command: {:?}", err);
-            StatusCode::BAD_REQUEST
+            (StatusCode::BAD_REQUEST, "".to_owned())
         }
-        None => StatusCode::INTERNAL_SERVER_ERROR,
+        None => (StatusCode::INTERNAL_SERVER_ERROR, "".to_owned()),
     }
 }
 
