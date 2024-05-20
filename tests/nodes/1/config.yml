@@ -16,7 +16,6 @@ ckb_chain:
 
   rpc_url: "https://testnet.ckb.dev/"
 
-
 services:
   - ckb
   - rpc
