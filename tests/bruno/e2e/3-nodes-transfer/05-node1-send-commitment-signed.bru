@@ -28,6 +28,11 @@ body:json {
   }
 }
 
+script:pre-request {
+  // wait for 10 seconds to make sure the previous operation is finished.
+  await new Promise(r => setTimeout(r, 10*1000));
+}
+
 assert {
   res.status: eq 200
 }

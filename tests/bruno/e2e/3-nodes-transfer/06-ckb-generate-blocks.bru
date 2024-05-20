@@ -39,6 +39,8 @@ script:pre-request {
     console.log("Started generating blocks for channel 1...");
     bru.setVar("iteration", 0);
   }
+  // wait for 10 seconds to make sure the previous operation is finished.
+  await new Promise(r => setTimeout(r, 10 * 1000));
 }
 
 script:post-response {
@@ -53,5 +55,5 @@ script:post-response {
   // await new Promise(r => setTimeout(r, 10));
   // console.log("Generated the " + bru.getVar("iteration") + "th block");
 
-  await new Promise(r => setTimeout(r, 100 * 1000));
+  // await new Promise(r => setTimeout(r, 100 * 1000));
 }
