@@ -1,5 +1,6 @@
 use ckb_sdk::{CkbRpcClient, RpcError};
 use ckb_types::{core::TransactionView, packed, prelude::*};
+use log::warn;
 use ractor::{
     concurrency::{sleep, Duration},
     Actor, ActorProcessingErr, ActorRef, RpcReplyPort,
@@ -112,8 +113,9 @@ impl Actor for CkbChainActor {
                                 if (e.code.code() == -1107 || e.code.code() == -1111) =>
                             {
                                 log::warn!(
-                                    "[{}] transaction already in pool",
-                                    myself.get_name().unwrap_or_default()
+                                    "[{}] transaction {} already in pool",
+                                    myself.get_name().unwrap_or_default(),
+                                    tx.hash()
                                 );
                             }
                             _ => {
@@ -147,7 +149,14 @@ impl Actor for CkbChainActor {
                     let tx_hash = tx_hash.clone();
                     let status = tokio::task::block_in_place(move || {
                         let ckb_client = CkbRpcClient::new(&rpc_url);
-                        match ckb_client.get_transaction_status(tx_hash.unpack()) {
+                        let resp = ckb_client.get_transaction_status(tx_hash.unpack());
+                        if let Ok(resp) = &resp {
+                            warn!(
+                                "get_transaction_status {:?} status: {:?}",
+                                tx_hash, resp.tx_status.status
+                            );
+                        }
+                        match resp {
                             Ok(resp) => match resp.tx_status.status {
                                 ckb_jsonrpc_types::Status::Committed => {
                                     match ckb_client.get_tip_block_number() {
