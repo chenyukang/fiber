@@ -137,7 +137,7 @@ impl Actor for CkbChainActor {
                 reply_port,
             ) => {
                 log::info!(
-                    "[{}] trace transaction {} with {} confs",
+                    "[{}] trace transaction {} with {} confirmations",
                     myself.get_name().unwrap_or_default(),
                     tx_hash,
                     confirmations
@@ -167,6 +167,11 @@ impl Actor for CkbChainActor {
                                                 .block_number
                                                 .unwrap_or_default()
                                                 .into();
+                                            warn!(
+                                                "track tx tip_number: {}, commit_number: {}",
+                                                tip_number,
+                                                commit_number + confirmations
+                                            );
                                             (tip_number >= commit_number + confirmations)
                                                 .then_some(ckb_jsonrpc_types::Status::Committed)
                                         }

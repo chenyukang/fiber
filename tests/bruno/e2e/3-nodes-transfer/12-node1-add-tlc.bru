@@ -39,8 +39,6 @@ assert {
 script:pre-request {
   console.log("sending node2 AddTlc:", bru.getVar("payment_hash"));
   console.log("amount: ", bru.getVar("payment_amount"));
-  // wait for 10 seconds to make sure the previous operation is finished.
-  await new Promise(r => setTimeout(r, 10 * 1000));
 }
 
 script:post-response {

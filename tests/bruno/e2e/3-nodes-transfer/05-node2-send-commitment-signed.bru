@@ -28,6 +28,11 @@ body:json {
   }
 }
 
+script:pre-request {
+  // wait for 10 seconds to make sure the previous operation is finished.
+  await new Promise(r => setTimeout(r, 10 * 1000));
+}
+
 assert {
   res.status: eq 200
 }
@@ -35,5 +40,5 @@ assert {
 
 script:post-response {
   // Sleep for sometime to make sure current operation finishes before next request starts.
-  await new Promise(r => setTimeout(r, 10 * 1000));
+  await new Promise(r => setTimeout(r, 1000));
 }

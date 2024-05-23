@@ -53,7 +53,10 @@ use crate::{unwrap_or_return, Error, RpcError};
 
 pub const PCN_PROTOCOL_ID: ProtocolId = ProtocolId::new(42);
 
-pub const DEFAULT_CHAIN_ACTOR_TIMEOUT: u64 = 60000;
+// Average block time is 8s in the testnet/mainnet.
+// We requires 4 confirmations, theoritically, 60 seconds should be enough.
+// setting it to 120 seconds to make it more reliable.
+pub const DEFAULT_CHAIN_ACTOR_TIMEOUT: u64 = 120 * 1000;
 
 #[derive(Debug, Serialize)]
 pub struct OpenChannelResponse {

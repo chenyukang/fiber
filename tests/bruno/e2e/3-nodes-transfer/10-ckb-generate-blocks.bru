@@ -40,8 +40,7 @@ script:pre-request {
     bru.setVar("iteration", 0);
   }
 
-  // wait for 10 seconds to make sure the previous operation is finished.
-  await new Promise(r => setTimeout(r, 10 * 1000));
+  await new Promise(r => setTimeout(r, 120 * 1000));
 }
 
 script:post-response {
