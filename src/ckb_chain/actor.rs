@@ -40,6 +40,8 @@ pub enum CkbChainMessage {
     Sign(FundingTx, RpcReplyPort<Result<FundingTx, FundingError>>),
     SendTx(TransactionView, RpcReplyPort<Result<(), RpcError>>),
     TraceTx(TraceTxRequest, RpcReplyPort<ckb_jsonrpc_types::Status>),
+    #[cfg(not(release))]
+    TestTx(TransactionView, RpcReplyPort<Result<(), RpcError>>),
 }
 
 #[ractor::async_trait]
@@ -103,6 +105,27 @@ impl Actor for CkbChainActor {
                         }
                     });
                 }
+            }
+            #[cfg(not(release))]
+            TestTx(tx, reply_port) => {
+                let rpc_url = state.config.rpc_url.clone();
+                tokio::task::block_in_place(move || {
+                    let ckb_client = CkbRpcClient::new(&rpc_url);
+                    let result = match ckb_client.test_tx_pool_accept(tx.data().into(), None) {
+                        Ok(_) => Ok(()),
+                        Err(err) => {
+                            log::error!(
+                                "[{}] test transaction failed: {:?}",
+                                myself.get_name().unwrap_or_default(),
+                                err
+                            );
+                            Err(err)
+                        }
+                    };
+                    if !reply_port.is_closed() {
+                        reply_port.send(result).expect("reply ok");
+                    }
+                });
             }
             SendTx(tx, reply_port) => {
                 let rpc_url = state.config.rpc_url.clone();

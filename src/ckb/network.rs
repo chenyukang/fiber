@@ -169,6 +169,10 @@ pub enum NetworkActorEvent {
     /// A funding transaction has been confirmed.
     FundingTransactionFailed(OutPoint),
 
+    #[cfg(not(release))]
+    /// A commitment transaction is created, try to verify it
+    CommitmentTransactionCreated(TransactionView),
+
     /// Network service events to be sent to outside observers.
     /// We will not do any processing on these events.
     NetworkServiceEvent(NetworkServiceEvent),
@@ -835,6 +839,18 @@ impl NetworkActorState {
         }
         Ok(())
     }
+
+    async fn on_commitment_transaction_created(&mut self, transaction: TransactionView) {
+        let res = call_t!(
+            self.chain_actor,
+            CkbChainMessage::TestTx,
+            DEFAULT_CHAIN_ACTOR_TIMEOUT,
+            transaction.clone()
+        )
+        .expect("chain alive")
+        .expect("valid funding tx");
+        eprintln!("TestTx: {:?}", res);
+    }
 }
 
 #[rasync_trait]
@@ -1063,6 +1079,10 @@ where
                 }
                 NetworkActorEvent::FundingTransactionConfirmed(outpoint) => {
                     state.on_funding_transaction_confirmed(outpoint).await?
+                }
+                #[cfg(not(release))]
+                NetworkActorEvent::CommitmentTransactionCreated(tx) => {
+                    state.on_commitment_transaction_created(tx).await?;
                 }
                 NetworkActorEvent::FundingTransactionFailed(_outpoint) => {
                     unimplemented!("handling funding transaction failed");
