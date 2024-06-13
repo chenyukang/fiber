@@ -130,7 +130,7 @@ pub struct ChannelCommandWithId {
 }
 
 pub const DEFAULT_FEE_RATE: u64 = 0;
-pub const DEFAULT_COMMITMENT_FEE_RATE: u64 = 2_000;
+pub const DEFAULT_COMMITMENT_FEE_RATE: u64 = 20_000;
 pub const DEFAULT_MAX_TLC_VALUE_IN_FLIGHT: u128 = u128::MAX;
 pub const DEFAULT_MAX_ACCEPT_TLCS: u64 = u64::MAX;
 pub const DEFAULT_MIN_TLC_VALUE: u128 = 0;
@@ -211,6 +211,7 @@ impl<S> ChannelActor<S> {
                             state.funding_udt_type_script.clone(),
                             state.local_ckb_amount,
                             state.remote_ckb_amount,
+                            state.commitment_fee_rate,
                         ),
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
@@ -1733,10 +1734,11 @@ impl ChannelActorState {
 
     pub fn get_funding_request(&self) -> FundingRequest {
         let commitment_fee_rate = if self.is_acceptor {
-            self.commitment_fee_rate
+            0
         } else {
             self.commitment_fee_rate
         };
+        debug!("anan commitment_fee_rate: {:?}", commitment_fee_rate);
         FundingRequest {
             udt_info: self.funding_udt_type_script.as_ref().map(|script| {
                 FundingUdtInfo::new(script, self.local_ckb_amount, self.remote_ckb_amount)
@@ -2482,6 +2484,10 @@ impl ChannelActorState {
         // TODO: check if the tx is valid
         let tx = tx.clone().into_view();
 
+        if tx.outputs().len() == 0 {
+            warn!("this is the first time we see the tx, so we don't know if it is final or not");
+            return Ok(false);
+        }
         let first_output = tx
             .outputs()
             .get(0)

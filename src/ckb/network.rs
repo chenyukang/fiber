@@ -1,6 +1,6 @@
 use ckb_jsonrpc_types::Status;
 use ckb_types::core::TransactionView;
-use ckb_types::packed::{OutPoint, Script, Transaction};
+use ckb_types::packed::{OutPoint, Script, Transaction, TransactionBuilder};
 use ckb_types::prelude::{IntoTransactionView, Pack, Unpack};
 use log::{debug, error, info, warn};
 
@@ -44,7 +44,7 @@ use super::{
 };
 
 use crate::ckb::channel::{TxCollaborationCommand, TxUpdateCommand};
-use crate::ckb::types::TxSignatures;
+use crate::ckb::types::{TxSignatures, TxUpdate};
 use crate::ckb_chain::{
     CkbChainMessage, FundingRequest, FundingTx, FundingUdtInfo, TraceTxRequest,
 };
@@ -173,6 +173,7 @@ pub enum NetworkActorEvent {
         u128,
         Script,
         Option<Script>,
+        u64,
         u64,
         u64,
     ),
@@ -357,6 +358,7 @@ where
                 funding_script,
                 local_ckb_amount,
                 remote_ckb_amount,
+                commitment_fee_rate,
             ) => {
                 assert_ne!(new, old, "new and old channel id must be different");
                 if let Some(session) = state.get_peer_session(&peer_id) {
@@ -371,27 +373,37 @@ where
                         debug!("Starting funding channel");
                         // TODO: Here we implies the one who receives AcceptChannel message
                         //  (i.e. the channel initiator) will send TxUpdate message first.
-                        myself
-                            .send_message(NetworkActorMessage::new_command(
-                                NetworkActorCommand::UpdateChannelFunding(
-                                    new,
-                                    Default::default(),
-                                    FundingRequest {
-                                        udt_info: funding_script.as_ref().map(|type_script| {
-                                            FundingUdtInfo::new(
-                                                type_script,
-                                                local_ckb_amount,
-                                                remote_ckb_amount,
-                                            )
-                                        }),
-                                        script,
-                                        local_amount: local as u64,
-                                        local_fee_rate: 0,
-                                        remote_amount: remote as u64,
-                                    },
-                                ),
-                            ))
-                            .expect(ASSUME_NETWORK_MYSELF_ALIVE);
+                        let pcn_msg = PCNMessage::TxUpdate(TxUpdate {
+                            channel_id: new,
+                            tx: Transaction::default(),
+                        });
+                        myself.send_message(NetworkActorMessage::Command(
+                            NetworkActorCommand::SendPcnMessage(PCNMessageWithPeerId {
+                                peer_id: peer_id.clone(),
+                                message: pcn_msg,
+                            }),
+                        ))?;
+                        // myself
+                        //     .send_message(NetworkActorMessage::new_command(
+                        //         NetworkActorCommand::UpdateChannelFunding(
+                        //             new,
+                        //             Default::default(),
+                        //             FundingRequest {
+                        //                 udt_info: funding_script.as_ref().map(|type_script| {
+                        //                     FundingUdtInfo::new(
+                        //                         type_script,
+                        //                         local_ckb_amount,
+                        //                         remote_ckb_amount,
+                        //                     )
+                        //                 }),
+                        //                 script,
+                        //                 local_amount: local as u64,
+                        //                 local_fee_rate: commitment_fee_rate,
+                        //                 remote_amount: remote as u64,
+                        //             },
+                        //         ),
+                        //     ))
+                        //     .expect(ASSUME_NETWORK_MYSELF_ALIVE);
                     }
                 }
             }

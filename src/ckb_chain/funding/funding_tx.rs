@@ -307,6 +307,7 @@ impl FundingTxBuilder {
             Box::new(sighash_unlocker) as Box<dyn ScriptUnlocker>,
         );
 
+        warn!("anan build funding: {:?}", self.request.local_fee_rate);
         let sender = self.context.funding_source_lock_script.clone();
         // Build CapacityBalancer
         let placeholder_witness = packed::WitnessArgs::new_builder()

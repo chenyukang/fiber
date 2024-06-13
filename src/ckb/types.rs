@@ -1134,6 +1134,7 @@ pub enum PCNMessage {
     CommitmentSigned(CommitmentSigned),
     TxSignatures(TxSignatures),
     ChannelReady(ChannelReady),
+    //TxBegin(()),
     TxUpdate(TxUpdate),
     TxComplete(TxComplete),
     TxAbort(TxAbort),
