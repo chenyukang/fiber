@@ -443,7 +443,6 @@ dependencies = [
 [[package]]
 name = "ckb-sdk"
 version = "3.2.0"
-source = "git+https://github.com/chenyukang/ckb-sdk-rust.git?branch=pcn-udt#940ca3d87b9556b3b995725bb8b0db038bbf4a2a"
 dependencies = [
  "anyhow",
  "bech32",

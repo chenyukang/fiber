@@ -21,7 +21,6 @@ use std::{error::Error as StdErr, str::FromStr};
 
 const SIMPLE_CODE_HASH: H256 =
     h256!("0xe1e354d6d643ad42724d40967e334984534e0367405c5ae42a9d7d63d77df419");
-const CKB_SHANNONS: u64 = 100_000_000;
 
 fn get_env_hex(name: &str) -> H256 {
     let value = std::env::var(name).expect("env var");
@@ -83,6 +82,15 @@ fn generate_configuration(
     return Ok((network_info, configuration));
 }
 
+fn gen_udt_type_script(onwer_script: &Script) -> Script {
+    let script = Script::new_builder()
+        .code_hash(SIMPLE_CODE_HASH.pack())
+        .hash_type(ScriptHashType::Data1.into())
+        .args(onwer_script.calc_script_hash().as_bytes().pack())
+        .build();
+    return script;
+}
+
 fn init_or_send_udt(
     issuer_address: &str,
     sender_info: &(String, H256),
@@ -103,6 +111,7 @@ fn init_or_send_udt(
     let iterator = InputIterator::new_with_address(&[sender.clone()], &network_info);
     let owner_mode = receiver_address.is_none();
     let mut builder = SudtTransactionBuilder::new(configuration, iterator, &issuer, owner_mode)?;
+    builder.set_sudt_type_script(gen_udt_type_script(&(&issuer).into()));
     builder.add_output(&receiver, sudt_amount);
 
     let mut tx_with_groups = builder.build(&Default::default())?;
@@ -129,22 +138,6 @@ fn init_or_send_udt(
         println!(">>> check tx result: {:?}  <<<", result);
     }
 
-    Ok(())
-}
-
-fn check_account(address: &str, issuer_address: &str) -> Result<(), Box<dyn StdErr>> {
-    let (network_info, configuration) = generate_configuration()?;
-    let issuer = Address::from_str(issuer_address)?;
-    let sender = Address::from_str(address)?;
-    let iterator = InputIterator::new_with_address(&[sender.clone()], &network_info);
-    let builder = SudtTransactionBuilder::new(configuration, iterator, &issuer, false)?;
-
-    let (account_ckb_amount, account_udt_amount) = builder.check()?;
-    eprintln!(
-        "account: {:?} udt_amount: {}",
-        account_ckb_amount / CKB_SHANNONS,
-        account_udt_amount
-    );
     Ok(())
 }
 
@@ -219,11 +212,6 @@ fn main() -> Result<(), Box<dyn StdErr>> {
         true,
     )?;
     generate_blocks(4).expect("ok");
-
-    check_account(&udt_owner.0, &udt_owner.0)?;
-    check_account(&wallets[0].0, &udt_owner.0)?;
-    check_account(&wallets[1].0, &udt_owner.0)?;
-    check_account(&wallets[2].0, &udt_owner.0)?;
 
     let script = generate_udt_type_script(&udt_owner.0);
     println!("initialized udt_type_script: {} ...", script);
