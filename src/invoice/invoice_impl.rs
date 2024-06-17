@@ -167,7 +167,7 @@ pub struct CkbInvoice {
     #[serde_as(as = "Option<U128Hex>")]
     pub amount: Option<u128>,
     pub prefix: Option<SiPrefix>,
-    pub signature: Option<InvoiceSignature>,
+    pub signature: InvoiceSignature,
     pub data: InvoiceData,
 }
 
@@ -220,10 +220,6 @@ impl CkbInvoice {
     /// Checks if the signature is valid for the included payee public key or if none exists if it's
     /// valid for the recovered signature (which should always be true?).
     fn validate_signature(&self) -> bool {
-        if self.signature.is_none() {
-            return true;
-        }
-        let signature = self.signature.as_ref().expect("expect signature");
         let included_pub_key = self.payee_pub_key();
 
         let mut recovered_pub_key = Option::None;
@@ -244,7 +240,7 @@ impl CkbInvoice {
 
         let secp_context = Secp256k1::new();
         let verification_result =
-            secp_context.verify_ecdsa(&hash, &signature.0.to_standard(), pub_key);
+            secp_context.verify_ecdsa(&hash, &self.signature.0.to_standard(), pub_key);
         match verification_result {
             Ok(()) => true,
             Err(_) => false,
@@ -258,7 +254,7 @@ impl CkbInvoice {
         let hash = self.hash();
         let message = Message::from_slice(&hash).unwrap();
         let signature = sign_function(&message);
-        self.signature = Some(InvoiceSignature(signature));
+        self.signature = InvoiceSignature(signature);
         self.check_signature()?;
         Ok(())
     }
@@ -268,14 +264,8 @@ impl CkbInvoice {
         let hash = Message::from_slice(&self.hash()[..])
             .expect("Hash is 32 bytes long, same as MESSAGE_SIZE");
 
-        let res = secp256k1::Secp256k1::new()
-            .recover_ecdsa(&hash, &self.signature.as_ref().unwrap().0)
-            .unwrap();
+        let res = secp256k1::Secp256k1::new().recover_ecdsa(&hash, &self.signature.0)?;
         Ok(res)
-    }
-
-    pub fn is_signed(&self) -> bool {
-        self.signature.is_some()
     }
 
     pub fn payment_hash(&self) -> &Hash256 {
@@ -284,9 +274,6 @@ impl CkbInvoice {
 
     /// Check that the invoice is signed correctly and that key recovery works
     pub fn check_signature(&self) -> Result<(), InvoiceError> {
-        if self.signature.is_none() {
-            return Ok(());
-        }
         match self.recover_payee_pub_key() {
             Err(secp256k1::Error::InvalidRecoveryId) => {
                 return Err(InvoiceError::InvalidRecoveryId)
@@ -355,6 +342,15 @@ impl Ord for InvoiceSignature {
     }
 }
 
+impl Default for InvoiceSignature {
+    fn default() -> Self {
+        InvoiceSignature(
+            RecoverableSignature::from_compact(&[0; 64], RecoveryId::from_i32(0).unwrap())
+                .expect("Default signature is always valid"),
+        )
+    }
+}
+
 impl Serialize for InvoiceSignature {
     fn serialize<S>(
         &self,
@@ -417,18 +413,11 @@ impl ToString for CkbInvoice {
     ///   hrp: ln{currency}{amount}{prefix}
     ///   data: compressed(InvoiceData) + signature
     ///   signature: 64 bytes + 1 byte recovery id = Vec<u8>
-    ///     if signature is present: bech32m(hrp, 1 + data + signature)
-    ///     else if signature is not present: bech32m(hrp, 0 + data)
+    ///   final encoded with `bech32m(hrp, data + signature)`
     fn to_string(&self) -> String {
         let hrp = self.hrp_part();
         let mut data = self.data_part();
-        data.insert(
-            0,
-            u5::try_from_u8(if self.signature.is_some() { 1 } else { 0 }).unwrap(),
-        );
-        if let Some(signature) = &self.signature {
-            data.extend_from_slice(&signature.to_base32());
-        }
+        data.extend_from_slice(&self.signature.to_base32());
         encode(&hrp, data, Variant::Bech32m).unwrap()
     }
 }
@@ -447,25 +436,13 @@ impl FromStr for CkbInvoice {
             return Err(InvoiceError::TooShortDataPart);
         }
         let (currency, amount, prefix) = parse_hrp(&hrp)?;
-        let is_signed = data[0].to_u8() == 1;
-        let data_end = if is_signed {
-            data.len() - SIGNATURE_U5_SIZE
-        } else {
-            data.len()
-        };
+        let data_end = data.len() - SIGNATURE_U5_SIZE;
         let data_part =
-            Vec::<u8>::from_base32(&data[1..data_end]).map_err(InvoiceError::Bech32Error)?;
+            Vec::<u8>::from_base32(&data[0..data_end]).map_err(InvoiceError::Bech32Error)?;
         let data_part = ar_decompress(&data_part).unwrap();
         let invoice_data = RawInvoiceData::from_slice(&data_part)
             .map_err(|err| InvoiceError::MoleculeError(VerificationError(err)))?;
-        let signature = if is_signed {
-            Some(InvoiceSignature::from_base32(
-                &data[data.len() - SIGNATURE_U5_SIZE..],
-            )?)
-        } else {
-            None
-        };
-
+        let signature = InvoiceSignature::from_base32(&data[data.len() - SIGNATURE_U5_SIZE..])?;
         let invoice = CkbInvoice {
             currency,
             amount,
@@ -667,7 +644,7 @@ impl InvoiceBuilder {
             currency: self.currency,
             amount: self.amount,
             prefix: self.prefix,
-            signature: None,
+            signature: InvoiceSignature::default(),
             data: InvoiceData {
                 timestamp,
                 payment_hash,
@@ -710,15 +687,15 @@ impl TryFrom<gen_invoice::RawCkbInvoice> for CkbInvoice {
                 .to_opt()
                 .map(|x| u8::from(x).try_into())
                 .transpose()?,
-            signature: invoice.signature().to_opt().map(|x| {
-                InvoiceSignature::from_base32(
-                    &x.as_bytes()
-                        .into_iter()
-                        .map(|x| u5::try_from_u8(x).unwrap())
-                        .collect::<Vec<u5>>(),
-                )
-                .unwrap()
-            }),
+            signature: InvoiceSignature::from_base32(
+                &invoice
+                    .signature()
+                    .as_bytes()
+                    .into_iter()
+                    .map(|x| u5::try_from_u8(x).unwrap())
+                    .collect::<Vec<u5>>(),
+            )
+            .unwrap(),
             data: InvoiceData::try_from(invoice.data()).map_err(InvoiceError::MoleculeError)?,
         })
     }
@@ -739,19 +716,18 @@ impl From<CkbInvoice> for RawCkbInvoice {
                     .build(),
             )
             .signature(
-                SignatureOpt::new_builder()
+                Signature::new_builder()
                     .set({
-                        invoice.signature.map(|x| {
-                            let bytes: [Byte; SIGNATURE_U5_SIZE] = x
-                                .to_base32()
-                                .iter()
-                                .map(|x| u8_to_byte(x.to_u8()))
-                                .collect::<Vec<_>>()
-                                .as_slice()
-                                .try_into()
-                                .unwrap();
-                            Signature::new_builder().set(bytes).build()
-                        })
+                        let bytes: [Byte; SIGNATURE_U5_SIZE] = invoice
+                            .signature
+                            .to_base32()
+                            .iter()
+                            .map(|x| u8_to_byte(x.to_u8()))
+                            .collect::<Vec<_>>()
+                            .as_slice()
+                            .try_into()
+                            .unwrap();
+                        bytes
                     })
                     .build(),
             )
@@ -835,7 +811,7 @@ mod tests {
             currency: Currency::Ckb,
             amount: Some(1280),
             prefix: Some(SiPrefix::Kilo),
-            signature: None,
+            signature: InvoiceSignature::default(),
             data: InvoiceData {
                 payment_hash: rand_sha256_hash(),
                 timestamp: SystemTime::now()
@@ -951,7 +927,6 @@ mod tests {
     #[test]
     fn test_invoice_bc32m() {
         let invoice = mock_invoice();
-        assert_eq!(invoice.is_signed(), true);
         assert_eq!(invoice.check_signature(), Ok(()));
 
         let address = invoice.to_string();
@@ -959,7 +934,6 @@ mod tests {
 
         let decoded_invoice = address.parse::<CkbInvoice>().unwrap();
         assert_eq!(decoded_invoice, invoice);
-        assert_eq!(decoded_invoice.is_signed(), true);
         assert_eq!(
             decoded_invoice.amount_ckb_shannons(),
             Some(1280 * 1000 * 100_000_000)
@@ -1016,7 +990,7 @@ mod tests {
             currency: Currency::Ckb,
             amount: Some(1280),
             prefix: Some(SiPrefix::Kilo),
-            signature: Some(InvoiceSignature(signature)),
+            signature: InvoiceSignature(signature),
             data: InvoiceData {
                 payment_hash: [0u8; 32].into(),
                 timestamp: 0,
@@ -1031,6 +1005,7 @@ mod tests {
         };
 
         let address = invoice.to_string();
+        eprintln!("address now {}", address);
         let decoded_invoice = address.parse::<CkbInvoice>().unwrap();
         assert_eq!(decoded_invoice, invoice);
 
@@ -1071,6 +1046,7 @@ mod tests {
             .unwrap();
 
         let address = invoice.to_string();
+        eprintln!("address now: {:?}", address);
 
         assert_eq!(invoice, address.parse::<CkbInvoice>().unwrap());
 
@@ -1086,7 +1062,7 @@ mod tests {
     fn test_invoice_signature_check() {
         let gen_payment_hash = rand_sha256_hash();
         let (_, private_key) = gen_rand_keypair();
-        let public_key = gen_rand_public_key();
+        let another_public_key = gen_rand_public_key();
 
         let invoice = InvoiceBuilder::new(Currency::Ckb)
             .amount(Some(1280))
@@ -1094,7 +1070,7 @@ mod tests {
             .payment_hash(gen_payment_hash)
             .fallback_address("address".to_string())
             .expiry_time(Duration::from_secs(1024))
-            .payee_pub_key(public_key)
+            .payee_pub_key(another_public_key)
             .add_attr(Attribute::FinalHtlcTimeout(5))
             .add_attr(Attribute::FinalHtlcMinimumCltvExpiry(12))
             .add_attr(Attribute::Description("description".to_string()))
@@ -1102,6 +1078,45 @@ mod tests {
             .build_with_sign(|hash| Secp256k1::new().sign_ecdsa_recoverable(hash, &private_key));
 
         assert_eq!(invoice.err(), Some(InvoiceError::InvalidSignature));
+
+        let invoice = InvoiceBuilder::new(Currency::Ckb)
+            .amount(Some(1280))
+            .prefix(Some(SiPrefix::Kilo))
+            .payment_hash(gen_payment_hash)
+            .fallback_address("address".to_string())
+            .expiry_time(Duration::from_secs(1024))
+            .payee_pub_key(another_public_key)
+            .add_attr(Attribute::FinalHtlcTimeout(5))
+            .add_attr(Attribute::FinalHtlcMinimumCltvExpiry(12))
+            .add_attr(Attribute::Description("description".to_string()))
+            .add_attr(Attribute::UdtScript(CkbScript(Script::default())))
+            .build()
+            .unwrap();
+        assert_eq!(
+            invoice.check_signature(),
+            Err(InvoiceError::InvalidSignature)
+        );
+    }
+
+    #[test]
+    fn test_invoice_recovery_public_key() {
+        let gen_payment_hash = rand_sha256_hash();
+        let (public_key, private_key) = gen_rand_keypair();
+        let invoice = InvoiceBuilder::new(Currency::Ckb)
+            .amount(Some(1280))
+            .prefix(Some(SiPrefix::Kilo))
+            .payment_hash(gen_payment_hash)
+            .fallback_address("address".to_string())
+            .expiry_time(Duration::from_secs(1024))
+            .add_attr(Attribute::FinalHtlcTimeout(5))
+            .add_attr(Attribute::FinalHtlcMinimumCltvExpiry(12))
+            .add_attr(Attribute::Description("description".to_string()))
+            .add_attr(Attribute::UdtScript(CkbScript(Script::default())))
+            .build_with_sign(|hash| Secp256k1::new().sign_ecdsa_recoverable(hash, &private_key))
+            .unwrap();
+        assert_eq!(invoice.check_signature(), Ok(()));
+        let recovered_public_key = invoice.recover_payee_pub_key().unwrap();
+        assert_eq!(recovered_public_key, public_key);
     }
 
     #[test]

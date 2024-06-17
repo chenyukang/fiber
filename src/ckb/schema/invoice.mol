@@ -4,7 +4,6 @@ array PaymentHash [byte; 32];
 array Preimage [byte; 32];
 array Signature [byte; 104];
 option ExpiryTimeOpt (Duration);
-option SignatureOpt (Signature);
 
 option AmountOpt (Uint128);
 
@@ -86,6 +85,6 @@ table RawCkbInvoice {
     currency: byte,
     amount: AmountOpt,
     prefix: SiPrefixOpt,
-    signature: SignatureOpt,
+    signature: Signature,
     data: RawInvoiceData,
 }

@@ -2830,170 +2830,6 @@ impl molecule::prelude::Builder for ExpiryTimeOptBuilder {
     }
 }
 #[derive(Clone)]
-pub struct SignatureOpt(molecule::bytes::Bytes);
-impl ::core::fmt::LowerHex for SignatureOpt {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        use molecule::hex_string;
-        if f.alternate() {
-            write!(f, "0x")?;
-        }
-        write!(f, "{}", hex_string(self.as_slice()))
-    }
-}
-impl ::core::fmt::Debug for SignatureOpt {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        write!(f, "{}({:#x})", Self::NAME, self)
-    }
-}
-impl ::core::fmt::Display for SignatureOpt {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        if let Some(v) = self.to_opt() {
-            write!(f, "{}(Some({}))", Self::NAME, v)
-        } else {
-            write!(f, "{}(None)", Self::NAME)
-        }
-    }
-}
-impl ::core::default::Default for SignatureOpt {
-    fn default() -> Self {
-        let v = molecule::bytes::Bytes::from_static(&Self::DEFAULT_VALUE);
-        SignatureOpt::new_unchecked(v)
-    }
-}
-impl SignatureOpt {
-    const DEFAULT_VALUE: [u8; 0] = [];
-    pub fn is_none(&self) -> bool {
-        self.0.is_empty()
-    }
-    pub fn is_some(&self) -> bool {
-        !self.0.is_empty()
-    }
-    pub fn to_opt(&self) -> Option<Signature> {
-        if self.is_none() {
-            None
-        } else {
-            Some(Signature::new_unchecked(self.0.clone()))
-        }
-    }
-    pub fn as_reader<'r>(&'r self) -> SignatureOptReader<'r> {
-        SignatureOptReader::new_unchecked(self.as_slice())
-    }
-}
-impl molecule::prelude::Entity for SignatureOpt {
-    type Builder = SignatureOptBuilder;
-    const NAME: &'static str = "SignatureOpt";
-    fn new_unchecked(data: molecule::bytes::Bytes) -> Self {
-        SignatureOpt(data)
-    }
-    fn as_bytes(&self) -> molecule::bytes::Bytes {
-        self.0.clone()
-    }
-    fn as_slice(&self) -> &[u8] {
-        &self.0[..]
-    }
-    fn from_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
-        SignatureOptReader::from_slice(slice).map(|reader| reader.to_entity())
-    }
-    fn from_compatible_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
-        SignatureOptReader::from_compatible_slice(slice).map(|reader| reader.to_entity())
-    }
-    fn new_builder() -> Self::Builder {
-        ::core::default::Default::default()
-    }
-    fn as_builder(self) -> Self::Builder {
-        Self::new_builder().set(self.to_opt())
-    }
-}
-#[derive(Clone, Copy)]
-pub struct SignatureOptReader<'r>(&'r [u8]);
-impl<'r> ::core::fmt::LowerHex for SignatureOptReader<'r> {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        use molecule::hex_string;
-        if f.alternate() {
-            write!(f, "0x")?;
-        }
-        write!(f, "{}", hex_string(self.as_slice()))
-    }
-}
-impl<'r> ::core::fmt::Debug for SignatureOptReader<'r> {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        write!(f, "{}({:#x})", Self::NAME, self)
-    }
-}
-impl<'r> ::core::fmt::Display for SignatureOptReader<'r> {
-    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
-        if let Some(v) = self.to_opt() {
-            write!(f, "{}(Some({}))", Self::NAME, v)
-        } else {
-            write!(f, "{}(None)", Self::NAME)
-        }
-    }
-}
-impl<'r> SignatureOptReader<'r> {
-    pub fn is_none(&self) -> bool {
-        self.0.is_empty()
-    }
-    pub fn is_some(&self) -> bool {
-        !self.0.is_empty()
-    }
-    pub fn to_opt(&self) -> Option<SignatureReader<'r>> {
-        if self.is_none() {
-            None
-        } else {
-            Some(SignatureReader::new_unchecked(self.as_slice()))
-        }
-    }
-}
-impl<'r> molecule::prelude::Reader<'r> for SignatureOptReader<'r> {
-    type Entity = SignatureOpt;
-    const NAME: &'static str = "SignatureOptReader";
-    fn to_entity(&self) -> Self::Entity {
-        Self::Entity::new_unchecked(self.as_slice().to_owned().into())
-    }
-    fn new_unchecked(slice: &'r [u8]) -> Self {
-        SignatureOptReader(slice)
-    }
-    fn as_slice(&self) -> &'r [u8] {
-        self.0
-    }
-    fn verify(slice: &[u8], compatible: bool) -> molecule::error::VerificationResult<()> {
-        if !slice.is_empty() {
-            SignatureReader::verify(&slice[..], compatible)?;
-        }
-        Ok(())
-    }
-}
-#[derive(Debug, Default)]
-pub struct SignatureOptBuilder(pub(crate) Option<Signature>);
-impl SignatureOptBuilder {
-    pub fn set(mut self, v: Option<Signature>) -> Self {
-        self.0 = v;
-        self
-    }
-}
-impl molecule::prelude::Builder for SignatureOptBuilder {
-    type Entity = SignatureOpt;
-    const NAME: &'static str = "SignatureOptBuilder";
-    fn expected_length(&self) -> usize {
-        self.0
-            .as_ref()
-            .map(|ref inner| inner.as_slice().len())
-            .unwrap_or(0)
-    }
-    fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
-        self.0
-            .as_ref()
-            .map(|ref inner| writer.write_all(inner.as_slice()))
-            .unwrap_or(Ok(()))
-    }
-    fn build(&self) -> Self::Entity {
-        let mut inner = Vec::with_capacity(self.expected_length());
-        self.write(&mut inner)
-            .unwrap_or_else(|_| panic!("{} build should be ok", Self::NAME));
-        SignatureOpt::new_unchecked(inner.into())
-    }
-}
-#[derive(Clone)]
 pub struct AmountOpt(molecule::bytes::Bytes);
 impl ::core::fmt::LowerHex for AmountOpt {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -7300,11 +7136,14 @@ impl ::core::default::Default for RawCkbInvoice {
     }
 }
 impl RawCkbInvoice {
-    const DEFAULT_VALUE: [u8; 93] = [
-        93, 0, 0, 0, 24, 0, 0, 0, 25, 0, 0, 0, 25, 0, 0, 0, 25, 0, 0, 0, 25, 0, 0, 0, 0, 68, 0, 0,
-        0, 16, 0, 0, 0, 32, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    const DEFAULT_VALUE: [u8; 197] = [
+        197, 0, 0, 0, 24, 0, 0, 0, 25, 0, 0, 0, 25, 0, 0, 0, 25, 0, 0, 0, 129, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 4, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 68, 0, 0, 0, 16, 0, 0, 0, 32, 0, 0, 0, 64, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
     ];
     pub const FIELD_COUNT: usize = 5;
     pub fn total_size(&self) -> usize {
@@ -7341,11 +7180,11 @@ impl RawCkbInvoice {
         let end = molecule::unpack_number(&slice[16..]) as usize;
         SiPrefixOpt::new_unchecked(self.0.slice(start..end))
     }
-    pub fn signature(&self) -> SignatureOpt {
+    pub fn signature(&self) -> Signature {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[16..]) as usize;
         let end = molecule::unpack_number(&slice[20..]) as usize;
-        SignatureOpt::new_unchecked(self.0.slice(start..end))
+        Signature::new_unchecked(self.0.slice(start..end))
     }
     pub fn data(&self) -> RawInvoiceData {
         let slice = self.as_slice();
@@ -7458,11 +7297,11 @@ impl<'r> RawCkbInvoiceReader<'r> {
         let end = molecule::unpack_number(&slice[16..]) as usize;
         SiPrefixOptReader::new_unchecked(&self.as_slice()[start..end])
     }
-    pub fn signature(&self) -> SignatureOptReader<'r> {
+    pub fn signature(&self) -> SignatureReader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[16..]) as usize;
         let end = molecule::unpack_number(&slice[20..]) as usize;
-        SignatureOptReader::new_unchecked(&self.as_slice()[start..end])
+        SignatureReader::new_unchecked(&self.as_slice()[start..end])
     }
     pub fn data(&self) -> RawInvoiceDataReader<'r> {
         let slice = self.as_slice();
@@ -7524,7 +7363,7 @@ impl<'r> molecule::prelude::Reader<'r> for RawCkbInvoiceReader<'r> {
         ByteReader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
         AmountOptReader::verify(&slice[offsets[1]..offsets[2]], compatible)?;
         SiPrefixOptReader::verify(&slice[offsets[2]..offsets[3]], compatible)?;
-        SignatureOptReader::verify(&slice[offsets[3]..offsets[4]], compatible)?;
+        SignatureReader::verify(&slice[offsets[3]..offsets[4]], compatible)?;
         RawInvoiceDataReader::verify(&slice[offsets[4]..offsets[5]], compatible)?;
         Ok(())
     }
@@ -7534,7 +7373,7 @@ pub struct RawCkbInvoiceBuilder {
     pub(crate) currency: Byte,
     pub(crate) amount: AmountOpt,
     pub(crate) prefix: SiPrefixOpt,
-    pub(crate) signature: SignatureOpt,
+    pub(crate) signature: Signature,
     pub(crate) data: RawInvoiceData,
 }
 impl RawCkbInvoiceBuilder {
@@ -7551,7 +7390,7 @@ impl RawCkbInvoiceBuilder {
         self.prefix = v;
         self
     }
-    pub fn signature(mut self, v: SignatureOpt) -> Self {
+    pub fn signature(mut self, v: Signature) -> Self {
         self.signature = v;
         self
     }
