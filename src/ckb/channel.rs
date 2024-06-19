@@ -2973,7 +2973,7 @@ impl ChannelActorState {
                 ChannelState::CollaboratingFundingTx(flags) => flags,
                 _ => {
                     panic!(
-                        "Must be in CollaboratingFundingTx state while running update_funding_tx"
+                        "Must be in CollaboratingFundingTx state while running update_funding_tx: {:?}", self.state
                     );
                 }
             };

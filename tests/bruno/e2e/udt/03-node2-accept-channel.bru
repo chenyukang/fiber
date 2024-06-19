@@ -33,9 +33,13 @@ assert {
   res.body.result.channels: isDefined
 }
 
+script:pre-request {
+    await new Promise(r => setTimeout(r, 1000 * 120));
+}
+
 script:post-response {
   // Sleep for sometime to make sure current operation finishes before next request starts.
-  await new Promise(r => setTimeout(r, 2000));
+  await new Promise(r => setTimeout(r, 1000));
   console.log("accept channel result: ", res.body);
   bru.setVar("N1N2_CHANNEL_ID", res.body.result.channels[0].channel_id);
 }

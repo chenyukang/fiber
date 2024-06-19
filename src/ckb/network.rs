@@ -53,7 +53,7 @@ use crate::{unwrap_or_return, Error};
 
 pub const CFN_PROTOCOL_ID: ProtocolId = ProtocolId::new(42);
 
-pub const DEFAULT_CHAIN_ACTOR_TIMEOUT: u64 = 60000;
+pub const DEFAULT_CHAIN_ACTOR_TIMEOUT: u64 = 140000;
 
 // This is a temporary way to document that we assume the chain actor is always alive.
 // We may later relax this assumption. At the moment, if the chain actor fails, we
@@ -286,6 +286,10 @@ where
                 match state.on_open_channel_msg(peer_id, open_channel).await {
                     Ok(()) => {
                         if state.auto_accept_channel_ckb_funding_amount > 0 {
+                            eprintln!(
+                                "Auto accepting channel : {:?}",
+                                state.auto_accept_channel_ckb_funding_amount
+                            );
                             let open_channel = AcceptChannelCommand {
                                 temp_channel_id,
                                 funding_amount: state.auto_accept_channel_ckb_funding_amount,

@@ -224,6 +224,7 @@ impl FundingTxBuilder {
         cell_deps: &mut HashSet<packed::CellDep>,
     ) -> Result<(), TxBuilderError> {
         let udt_amount = self.request.local_amount as u128;
+        eprintln!("request: {:?}", self.request);
         let udt_info = match &self.request.udt_info {
             Some(ref udt_info) if self.request.local_amount > 0 => udt_info,
             _ => return Ok(()),
