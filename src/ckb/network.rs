@@ -2,7 +2,7 @@ use ckb_jsonrpc_types::Status;
 use ckb_types::core::TransactionView;
 use ckb_types::packed::{OutPoint, Script, Transaction};
 use ckb_types::prelude::{IntoTransactionView, Pack, Unpack};
-use log::{debug, error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use ractor::{
     async_trait as rasync_trait, call_t, Actor, ActorCell, ActorProcessingErr, ActorRef,
@@ -845,7 +845,7 @@ impl NetworkActorState {
         let seed = self.generate_channel_seed();
         let (tx, rx) = oneshot::channel::<Hash256>();
         let channel = Actor::spawn_linked(
-            None,
+            Some(format!("Channel {} <-> {}", self.peer_id, peer_id)),
             ChannelActor::new(peer_id.clone(), network.clone(), store),
             ChannelInitializationParameter::OpenChannel(OpenChannelParameter {
                 funding_amount,
@@ -896,7 +896,7 @@ impl NetworkActorState {
         let seed = self.generate_channel_seed();
         let (tx, rx) = oneshot::channel::<Hash256>();
         let channel = Actor::spawn_linked(
-            None,
+            Some(format!("Channel {} <-> {}", self.peer_id, peer_id)),
             ChannelActor::new(peer_id.clone(), network.clone(), store),
             ChannelInitializationParameter::AcceptChannel(AcceptChannelParameter {
                 funding_amount,
@@ -1025,7 +1025,7 @@ impl NetworkActorState {
         for channel_id in store.get_channel_ids_by_peer(&peer_id) {
             debug!("Reestablishing channel {:?}", &channel_id);
             if let Ok((channel, _)) = Actor::spawn_linked(
-                None,
+                Some(format!("Channel {} <-> {}", self.peer_id, peer_id)),
                 ChannelActor::new(peer_id.clone(), self.network.clone(), store.clone()),
                 ChannelInitializationParameter::ReestablishChannel(channel_id),
                 self.network.get_cell(),
@@ -1485,8 +1485,14 @@ pub async fn start_ckb<S: ChannelActorStateStore + Clone + Send + Sync + 'static
     root_actor: ActorCell,
     store: S,
 ) -> ActorRef<NetworkActorMessage> {
+    let secio_kp: SecioKeyPair = config
+        .read_or_generate_secret_key()
+        .expect("read or generate secret key")
+        .into();
+    let my_peer_id = PeerId::from_public_key(&secio_kp.public_key());
+
     let (actor, _handle) = Actor::spawn_linked(
-        Some("network actor".to_string()),
+        Some(format!("Network {}", my_peer_id)),
         NetworkActor::new(event_sender, chain_actor, store),
         (config, tracker),
         root_actor,
