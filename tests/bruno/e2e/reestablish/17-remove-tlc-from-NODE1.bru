@@ -38,6 +38,7 @@ assert {
 }
 
 script:post-response {
+  console.log("remove_tlc response: ", res.body);
   // Sleep for sometime to make sure current operation finishes before next request starts.
   await new Promise(r => setTimeout(r, 100));
 }

@@ -37,5 +37,6 @@ assert {
 }
 
 script:post-response {
+  console.log("add tlc: ", res.body);
   bru.setVar("TLC_ID1", res.body.result.tlc_id);
 }

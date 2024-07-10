@@ -369,10 +369,11 @@ impl<S: ChannelActorStateStore> ChannelActor<S> {
                     ChannelState::ShuttingDown(flags)
                         if flags.contains(ShuttingDownFlags::THEIR_SHUTDOWN_SENT) =>
                     {
-                        return Err(ProcessingChannelError::InvalidParameter(
-                            "Received Shutdown message, but we're already in ShuttingDown state"
-                                .to_string(),
-                        ));
+                        // return Err(ProcessingChannelError::InvalidParameter(
+                        //     "Received Shutdown message, but we're already in ShuttingDown state"
+                        //         .to_string(),
+                        // ));
+                        flags
                     }
                     ChannelState::ShuttingDown(flags) => flags,
                     _ => {
@@ -403,6 +404,10 @@ impl<S: ChannelActorStateStore> ChannelActor<S> {
                         ))
                         .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                     state.local_shutdown_script = Some(funding_source_lock_script.clone());
+                    warn!(
+                        "now this is our shutdown script: {:?}",
+                        &state.local_shutdown_script
+                    );
                     state.local_shutdown_fee_rate = Some(0);
                     flags |= ShuttingDownFlags::OUR_SHUTDOWN_SENT;
                     debug!("Auto accept shutdown ...");
@@ -430,6 +435,11 @@ impl<S: ChannelActorStateStore> ChannelActor<S> {
                 // We do this to simplify the handling of the message.
                 // We may change this in the future.
                 // We also didn't check the state here.
+                warn!("got remote shutdown signature {:?}", &partial_signature);
+                warn!(
+                    "our local shutdown signature {:?}",
+                    &state.local_shutdown_signature
+                );
                 state.remote_shutdown_signature = Some(partial_signature);
 
                 state.maybe_transition_to_shutdown(&self.network)?;
@@ -636,6 +646,7 @@ impl<S: ChannelActorStateStore> ChannelActor<S> {
             state.to_remote_amount
         );
         state.maybe_transition_to_shutdown(&self.network)?;
+        warn!("anan finished remove tlc command");
 
         Ok(())
     }
@@ -655,10 +666,11 @@ impl<S: ChannelActorStateStore> ChannelActor<S> {
                 debug!("Handling shutdown command in ChannelReady state");
                 ShuttingDownFlags::empty()
             }
-            ChannelState::ShuttingDown(flags) => {
-                debug!("we already in shutting down state: {:?}", &flags);
-                return Ok(());
-            }
+            ChannelState::ShuttingDown(flags) => flags,
+            // ChannelState::ShuttingDown(flags) => {
+            //     debug!("we already in shutting down state: {:?}", &flags);
+            //     return Ok(());
+            // }
             _ => {
                 debug!("Handling shutdown command in state {:?}", &state.state);
                 return Err(ProcessingChannelError::InvalidState(format!(
@@ -819,8 +831,10 @@ impl<S: ChannelActorStateStore> ChannelActor<S> {
             }
             ChannelCommand::RemoveTlc(command, reply) => {
                 match self.handle_remove_tlc_command(state, command) {
-                    Ok(_) => {
+                    Ok(_res) => {
+                        warn!("anan here begin to handle commitment signed");
                         self.handle_commitment_signed_command(state)?;
+                        warn!("anan here end commitment signed");
                         let _ = reply.send(Ok(()));
                         Ok(())
                     }
@@ -1231,6 +1245,7 @@ where
             ChannelActorMessage::Command(command) => {
                 if let Err(err) = self.handle_command(state, command) {
                     error!("Error while processing channel command: {:?}", err);
+                    return Err(err.into());
                 }
             }
             ChannelActorMessage::Event(e) => {
@@ -2717,6 +2732,10 @@ impl ChannelActorState {
 
         let verify_ctx = Musig2VerifyContext::from(self);
 
+        warn!(
+            "Partial signatures: {:?} message: {:?}",
+            partial_signatures, message
+        );
         let signature = aggregate_partial_signatures_for_msg(
             message.as_slice(),
             verify_ctx,
@@ -2780,16 +2799,24 @@ impl ChannelActorState {
         let sign_ctx = Musig2SignContext::from(&*self);
 
         // Create our shutdown signature if we haven't already.
-        let local_shutdown_signature = match self.local_shutdown_signature {
-            Some(signature) => signature,
-            None => {
-                let signature = sign_ctx.sign(message.as_slice())?;
-                self.local_shutdown_signature = Some(signature);
-                debug!(
-                    "We have signed shutdown tx ({:?}) message {:?} with signature {:?}",
-                    &shutdown_tx, &message, &signature,
-                );
-
+        let local_shutdown_signature = {
+            warn!(
+                "our old local shutdown signature: {:?}",
+                self.local_shutdown_signature
+            );
+            let old_shutdown_signature = self.local_shutdown_signature.clone();
+            let signature = sign_ctx.sign(message.as_slice())?;
+            self.local_shutdown_signature = Some(signature);
+            debug!(
+                "We have signed shutdown tx ({:?}) message {:?} with signature {:?}",
+                &shutdown_tx, &message, &signature,
+            );
+            warn!(
+                "now build our new local shutdown signature: {:?}",
+                signature
+            );
+            if old_shutdown_signature != self.local_shutdown_signature {
+                self.remote_shutdown_signature = None;
                 network
                     .send_message(NetworkActorMessage::new_command(
                         NetworkActorCommand::SendCFNMessage(CFNMessageWithPeerId {
@@ -2801,13 +2828,17 @@ impl ChannelActorState {
                         }),
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                signature
             }
+            signature
         };
 
         match self.remote_shutdown_signature {
             Some(remote_shutdown_signature) => {
                 self.update_state(ChannelState::Closed);
+                debug!(
+                    "got remote_shutdown_signature: {:?}",
+                    remote_shutdown_signature
+                );
                 let tx = self.aggregate_partial_signatures_to_consume_funding_cell(
                     [local_shutdown_signature, remote_shutdown_signature],
                     u64::MAX,
@@ -5385,5 +5416,164 @@ mod tests {
                 _ => false,
             })
             .await;
+    }
+
+    #[tokio::test]
+    async fn test_add_tlc() {
+        let [mut node_a, mut node_b] = NetworkNode::new_n_interconnected_nodes(2)
+            .await
+            .try_into()
+            .unwrap();
+        let node_a_funding_amount = 100000000000;
+        let node_b_funidng_amount = 6200000000;
+        let message = |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::OpenChannel(
+                OpenChannelCommand {
+                    peer_id: node_b.peer_id.clone(),
+                    funding_amount: node_a_funding_amount,
+                    funding_udt_type_script: None,
+                    commitment_fee_rate: None,
+                    funding_fee_rate: None,
+                },
+                rpc_reply,
+            ))
+        };
+        let open_channel_result = call!(node_a.network_actor, message)
+            .expect("node_a alive")
+            .expect("open channel success");
+        node_b
+            .expect_event(|event| match event {
+                NetworkServiceEvent::ChannelPendingToBeAccepted(peer_id, channel_id) => {
+                    println!("A channel ({:?}) to {:?} create", &channel_id, peer_id);
+                    assert_eq!(peer_id, &node_a.peer_id);
+                    true
+                }
+                _ => false,
+            })
+            .await;
+        let message = |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::AcceptChannel(
+                AcceptChannelCommand {
+                    temp_channel_id: open_channel_result.channel_id,
+                    funding_amount: node_b_funidng_amount,
+                },
+                rpc_reply,
+            ))
+        };
+        let accept_channel_result = call!(node_b.network_actor, message)
+            .expect("node_b alive")
+            .expect("accept channel success");
+        let new_channel_id = accept_channel_result.new_channel_id;
+        node_a
+            .expect_event(|event| match event {
+                NetworkServiceEvent::ChannelReady(peer_id, channel_id) => {
+                    println!(
+                        "A channel ({:?}) to {:?} is now ready",
+                        &channel_id, &peer_id
+                    );
+                    assert_eq!(peer_id, &node_b.peer_id);
+                    assert_eq!(channel_id, &new_channel_id);
+                    true
+                }
+                _ => false,
+            })
+            .await;
+        node_b
+            .expect_event(|event| match event {
+                NetworkServiceEvent::ChannelReady(peer_id, channel_id) => {
+                    println!(
+                        "A channel ({:?}) to {:?} is now ready",
+                        &channel_id, &peer_id
+                    );
+                    assert_eq!(peer_id, &node_a.peer_id);
+                    assert_eq!(channel_id, &new_channel_id);
+                    true
+                }
+                _ => false,
+            })
+            .await;
+        let preimage = [1; 32];
+        let algorithm = HashAlgorithm::CkbHash;
+        let digest = algorithm.hash(&preimage);
+        let tlc_amount = 1000000000;
+        let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::ControlCfnChannel(
+                ChannelCommandWithId {
+                    channel_id: new_channel_id,
+                    command: ChannelCommand::AddTlc(
+                        AddTlcCommand {
+                            amount: tlc_amount,
+                            hash_algorithm: HashAlgorithm::CkbHash,
+                            payment_hash: Some(digest.into()),
+                            expiry: LockTime::new(100),
+                            preimage: None,
+                        },
+                        rpc_reply,
+                    ),
+                },
+            ))
+        })
+        .expect("node_b alive")
+        .expect("successfully added tlc");
+        dbg!(&add_tlc_result);
+        dbg!("Sleeping for some time to wait for the AddTlc processed by both party");
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        let remove_tlc_result = call!(node_b.network_actor, |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::ControlCfnChannel(
+                ChannelCommandWithId {
+                    channel_id: new_channel_id,
+                    command: ChannelCommand::RemoveTlc(
+                        RemoveTlcCommand {
+                            id: add_tlc_result.tlc_id,
+                            reason: RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill {
+                                payment_preimage: preimage.into(),
+                            }),
+                        },
+                        rpc_reply,
+                    ),
+                },
+            ))
+        })
+        .expect("node_b alive")
+        .expect("successfully removed tlc");
+        dbg!(&remove_tlc_result);
+        let shutdown_channel_result = call!(node_b.network_actor, |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::ControlCfnChannel(
+                ChannelCommandWithId {
+                    channel_id: new_channel_id,
+                    command: ChannelCommand::Shutdown(
+                        ShutdownCommand {
+                            close_script: Script::default().as_builder().build(),
+                            fee_rate: FeeRate::from_u64(DEFAULT_COMMITMENT_FEE_RATE),
+                        },
+                        rpc_reply,
+                    ),
+                },
+            ))
+        })
+        .expect("node_b alive")
+        .expect("successfully removed tlc");
+
+        dbg!(&shutdown_channel_result);
+
+        let shutdown_channel_result = call!(node_a.network_actor, |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::ControlCfnChannel(
+                ChannelCommandWithId {
+                    channel_id: new_channel_id,
+                    command: ChannelCommand::Shutdown(
+                        ShutdownCommand {
+                            close_script: Script::default().as_builder().build(),
+                            fee_rate: FeeRate::from_u64(DEFAULT_COMMITMENT_FEE_RATE),
+                        },
+                        rpc_reply,
+                    ),
+                },
+            ))
+        })
+        .expect("node_b alive")
+        .expect("successfully shutdown channel");
+
+        dbg!(&shutdown_channel_result);
+        eprintln!("finished ....");
     }
 }
