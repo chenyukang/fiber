@@ -32,7 +32,7 @@ pub(crate) struct NewInvoiceParams {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct NewInvoiceResult {
+pub(crate) struct InvoiceResult {
     invoice_address: String,
     invoice: CkbInvoice,
 }
@@ -47,19 +47,30 @@ pub(crate) struct ParseInvoiceResult {
     invoice: CkbInvoice,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GetInvoiceParams {
+    payment_hash: Hash256,
+}
+
 #[rpc(server)]
 trait InvoiceRpc {
     #[method(name = "new_invoice")]
     async fn new_invoice(
         &self,
         params: NewInvoiceParams,
-    ) -> Result<NewInvoiceResult, ErrorObjectOwned>;
+    ) -> Result<InvoiceResult, ErrorObjectOwned>;
 
     #[method(name = "parse_invoice")]
     async fn parse_invoice(
         &self,
         params: ParseInvoiceParams,
     ) -> Result<ParseInvoiceResult, ErrorObjectOwned>;
+
+    #[method(name = "get_invoice")]
+    async fn get_invoice(
+        &self,
+        payment_hash: GetInvoiceParams,
+    ) -> Result<InvoiceResult, ErrorObjectOwned>;
 }
 
 pub(crate) struct InvoiceRpcServerImpl<S> {
@@ -81,7 +92,7 @@ where
     async fn new_invoice(
         &self,
         params: NewInvoiceParams,
-    ) -> Result<NewInvoiceResult, ErrorObjectOwned> {
+    ) -> Result<InvoiceResult, ErrorObjectOwned> {
         let mut invoice_builder = InvoiceBuilder::new(params.currency)
             .amount(Some(params.amount))
             .payment_preimage(params.payment_preimage);
@@ -116,7 +127,7 @@ where
                 .store
                 .insert_invoice(invoice.clone(), Some(params.payment_preimage))
             {
-                Ok(_) => Ok(NewInvoiceResult {
+                Ok(_) => Ok(InvoiceResult {
                     invoice_address: invoice.to_string(),
                     invoice,
                 }),
@@ -147,6 +158,23 @@ where
                 CALL_EXECUTION_FAILED_CODE,
                 e.to_string(),
                 Some(params),
+            )),
+        }
+    }
+
+    async fn get_invoice(
+        &self,
+        payment_hash: GetInvoiceParams,
+    ) -> Result<InvoiceResult, ErrorObjectOwned> {
+        match self.store.get_invoice(&payment_hash.payment_hash) {
+            Some(invoice) => Ok(InvoiceResult {
+                invoice_address: invoice.to_string(),
+                invoice,
+            }),
+            None => Err(ErrorObjectOwned::owned(
+                CALL_EXECUTION_FAILED_CODE,
+                "invoice not found".to_string(),
+                Some(payment_hash),
             )),
         }
     }
