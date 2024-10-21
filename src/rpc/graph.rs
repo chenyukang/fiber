@@ -2,7 +2,7 @@ use crate::ckb::config::UdtCfgInfos as ConfigUdtCfgInfos;
 use crate::fiber::graph::{NetworkGraph, NetworkGraphStateStore};
 use crate::fiber::serde_utils::EntityHex;
 use crate::fiber::serde_utils::{U128Hex, U32Hex, U64Hex};
-use crate::fiber::types::{Hash256, Pubkey};
+use crate::fiber::types::Pubkey;
 use ckb_jsonrpc_types::{DepType, JsonBytes, Script, ScriptHashType};
 use ckb_types::packed::OutPoint;
 use ckb_types::H256;
@@ -86,8 +86,6 @@ struct NodeInfo {
     node_id: Pubkey,
     #[serde_as(as = "U64Hex")]
     timestamp: u64,
-    chain_hash: Hash256,
-    #[serde_as(as = "U64Hex")]
     auto_accept_min_ckb_funding_amount: u64,
     udt_cfg_infos: UdtCfgInfos,
 }
@@ -111,10 +109,6 @@ pub(crate) struct GraphChannelsParams {
 struct ChannelInfo {
     #[serde_as(as = "EntityHex")]
     channel_outpoint: OutPoint,
-    #[serde_as(as = "U64Hex")]
-    funding_tx_block_number: u64,
-    #[serde_as(as = "U32Hex")]
-    funding_tx_index: u32,
     node1: Pubkey,
     node2: Pubkey,
     #[serde_as(as = "Option<U64Hex>")]
@@ -126,7 +120,6 @@ struct ChannelInfo {
     node2_to_node1_fee_rate: Option<u64>,
     #[serde_as(as = "U128Hex")]
     capacity: u128,
-    chain_hash: Hash256,
     udt_type_script: Option<Script>,
 }
 
@@ -194,7 +187,6 @@ where
                 addresses: node_info.anouncement_msg.addresses.clone(),
                 node_id: node_info.node_id,
                 timestamp: node_info.timestamp,
-                chain_hash: node_info.anouncement_msg.chain_hash,
                 udt_cfg_infos: node_info.anouncement_msg.udt_cfg_infos.clone().into(),
                 auto_accept_min_ckb_funding_amount: node_info
                     .anouncement_msg
@@ -210,7 +202,6 @@ where
     ) -> Result<GraphChannelsResult, ErrorObjectOwned> {
         let default_max_limit = 500;
         let network_graph = self.network_graph.read().await;
-        let chain_hash = network_graph.chain_hash();
         let (channels, last_cursor) = network_graph.get_channels_with_params(
             params.limit.unwrap_or(default_max_limit) as usize,
             params.after,
@@ -220,8 +211,6 @@ where
             .iter()
             .map(|channel_info| ChannelInfo {
                 channel_outpoint: channel_info.out_point(),
-                funding_tx_block_number: channel_info.funding_tx_block_number,
-                funding_tx_index: channel_info.funding_tx_index,
                 node1: channel_info.node1(),
                 node2: channel_info.node2(),
                 capacity: channel_info.capacity(),
@@ -229,7 +218,6 @@ where
                 created_timestamp: channel_info.timestamp,
                 node1_to_node2_fee_rate: channel_info.node1_to_node2.as_ref().map(|cu| cu.fee_rate),
                 node2_to_node1_fee_rate: channel_info.node2_to_node1.as_ref().map(|cu| cu.fee_rate),
-                chain_hash,
                 udt_type_script: channel_info
                     .announcement_msg
                     .udt_type_script
