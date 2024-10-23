@@ -2250,78 +2250,106 @@ where
         }
     }
 
+    async fn build_route_and_send_onion(
+        &self,
+        mut payment_session: PaymentSession,
+        payment_data: SendPaymentData,
+        state: &mut NetworkActorState<S>,
+    ) -> Result<PaymentSession, Error> {
+        let payment_hash = payment_data.payment_hash;
+        let hops_infos = match self
+            .network_graph
+            .read()
+            .await
+            .build_route(payment_data.clone())
+        {
+            Err(e) => {
+                let error = format!(
+                    "Failed to build route: {:?} with error {:?}",
+                    payment_hash, e
+                );
+                return Err(Error::SendPaymentError(error));
+            }
+            Ok(onion_path) => onion_path,
+        };
+        let first_channel_outpoint = hops_infos[0]
+            .channel_outpoint
+            .clone()
+            .expect("first hop channel outpoint");
+
+        // generate session key
+        let session_key = Privkey::from_slice(KeyPair::generate_random_key().as_ref());
+        let peeled_packet =
+            PeeledPaymentOnionPacket::create(session_key, hops_infos, &Secp256k1::signing_only())
+                .map_err(|err| Error::InvalidOnionPacket(err))?;
+
+        let (send, recv) = oneshot::channel::<Result<u64, TlcErrPacket>>();
+        let rpc_reply = RpcReplyPort::from(send);
+        let command = SendOnionPacketCommand {
+            packet: peeled_packet.serialize(),
+            previous_tlc: None,
+        };
+        self.handle_send_onion_packet_command(state, command, rpc_reply)
+            .await;
+        match recv.await.expect("msg recv error") {
+            Err(e) => {
+                if let Some(error_detail) = e.decode() {
+                    // This is the error implies we send payment request to the first hop failed
+                    let err = format!(
+                        "Failed to send onion packet with error {:?}",
+                        error_detail.error_code_as_str()
+                    );
+                    self.update_with_tcl_fail(&error_detail).await;
+                    return Err(Error::SendPaymentError(err));
+                } else {
+                    return Err(Error::SendPaymentError(format!(
+                        "Failed to send onion packet: {:?}",
+                        e
+                    )));
+                }
+            }
+            Ok(tlc_id) => {
+                payment_session.set_status(PaymentSessionStatus::Inflight);
+                payment_session.set_first_hop_info(first_channel_outpoint, tlc_id);
+                self.store.insert_payment_session(payment_session.clone());
+                return Ok(payment_session);
+            }
+        }
+    }
+
+    fn set_payment_session_failed(&self, payment_session: &mut PaymentSession, error: &str) {
+        payment_session.set_status(PaymentSessionStatus::Failed);
+        payment_session.set_failed_status(error);
+        self.store.insert_payment_session(payment_session.clone());
+    }
+
     async fn try_payment_session(
         &self,
         state: &mut NetworkActorState<S>,
         mut payment_session: PaymentSession,
     ) -> Result<PaymentSession, Error> {
         let payment_data = payment_session.request.clone();
-        let payment_hash = payment_data.payment_hash;
-        let mut error = None;
         while payment_session.can_retry() {
             payment_session.retried_times += 1;
-            let hops_infos = match self
-                .network_graph
-                .read()
+            match self
+                .build_route_and_send_onion(payment_session.clone(), payment_data.clone(), state)
                 .await
-                .build_route(payment_data.clone())
             {
-                Err(e) => {
-                    error!("Failed to build route: {:?}", e);
-                    error = Some(format!("Failed to build route: {:?}", payment_hash));
-                    break;
+                Ok(session) => {
+                    return Ok(session);
                 }
-                Ok(onion_path) => onion_path,
-            };
-            let first_channel_outpoint = hops_infos[0]
-                .channel_outpoint
-                .clone()
-                .expect("first hop channel outpoint");
-
-            // generate session key
-            let session_key = Privkey::from_slice(KeyPair::generate_random_key().as_ref());
-            let peeled_packet = PeeledPaymentOnionPacket::create(
-                session_key,
-                hops_infos,
-                &Secp256k1::signing_only(),
-            )
-            .map_err(|err| Error::InvalidOnionPacket(err))?;
-
-            let (send, recv) = oneshot::channel::<Result<u64, TlcErrPacket>>();
-            let rpc_reply = RpcReplyPort::from(send);
-            let command = SendOnionPacketCommand {
-                packet: peeled_packet.serialize(),
-                previous_tlc: None,
-            };
-            self.handle_send_onion_packet_command(state, command, rpc_reply)
-                .await;
-            match recv.await.expect("msg recv error") {
                 Err(e) => {
-                    if let Some(error_detail) = e.decode() {
-                        error!("Failed to send onion packet with error: {:?}", e);
-                        // This is the error implies we send payment request to the first hop failed
-                        let err = format!(
-                            "Failed to send onion packet with error {:?}",
-                            error_detail.error_code_as_str()
-                        );
-                        error = Some(err);
-                        self.update_with_tcl_fail(&error_detail).await;
-                    }
-                    continue;
-                }
-                Ok(tlc_id) => {
-                    payment_session.set_status(PaymentSessionStatus::Inflight);
-                    payment_session.set_first_hop_info(first_channel_outpoint, tlc_id);
-                    self.store.insert_payment_session(payment_session.clone());
-                    return Ok(payment_session);
+                    self.set_payment_session_failed(&mut payment_session, &e.to_string());
+                    return Err(e);
                 }
             }
         }
-        payment_session.set_status(PaymentSessionStatus::Failed);
-        let final_error = error.expect("expect error details");
-        payment_session.set_failed_status(&final_error);
-        self.store.insert_payment_session(payment_session);
-        return Err(Error::SendPaymentError(final_error));
+        let error = format!(
+            "Exhausted retries for payment: {:?}",
+            payment_data.payment_hash
+        );
+        self.set_payment_session_failed(&mut payment_session, &error);
+        return Err(Error::SendPaymentError(error));
     }
 
     async fn on_send_payment(
