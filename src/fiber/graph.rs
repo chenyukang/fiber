@@ -606,6 +606,7 @@ where
         let mut result = vec![];
         let mut nodes_visited = 0;
         let mut edges_expanded = 0;
+        let mut last_channel_outpoint = None;
         let mut nodes_heap = NodeHeap::new(nodes_len);
         let mut distances = HashMap::<Pubkey, NodeHeapElement>::new();
 
@@ -656,6 +657,13 @@ where
                 // if charge inbound fees for exit hop
                 if udt_type_script != channel_info.announcement_msg.udt_type_script {
                     continue;
+                }
+
+                // if the last channel is the same as the current channel, skip it
+                if let Some(last_channel) = last_channel_outpoint.as_ref() {
+                    if last_channel == &channel_info.out_point() {
+                        continue;
+                    }
                 }
 
                 edges_expanded += 1;
@@ -716,7 +724,6 @@ where
                     debug!("probability is too low: {:?}", probability);
                     continue;
                 }
-                debug!("probability: {:?}", probability);
                 let agg_weight =
                     self.edge_weight(amount_to_send, fee, channel_update.htlc_expiry_delta);
                 let weight = cur_hop.weight + agg_weight;
@@ -727,7 +734,7 @@ where
                         continue;
                     }
                 }
-                let node: NodeHeapElement = NodeHeapElement {
+                let node = NodeHeapElement {
                     node_id: from,
                     weight,
                     distance,
@@ -737,6 +744,7 @@ where
                     probability,
                     next_hop: Some((cur_hop.node_id, channel_info.out_point())),
                 };
+                last_channel_outpoint = Some(channel_info.out_point());
                 distances.insert(node.node_id, node.clone());
                 nodes_heap.push_or_fix(node);
             }

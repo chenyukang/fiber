@@ -548,24 +548,35 @@ where
                         "begin to remove tlc from previous channel: {:?}",
                         &previous_tlc
                     );
-                    let (send, recv) = oneshot::channel::<Result<(), String>>();
-                    let port = RpcReplyPort::from(send);
-                    self.network
-                        .send_message(NetworkActorMessage::new_command(
-                            NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                                channel_id: previous_channel_id,
-                                command: ChannelCommand::RemoveTlc(
-                                    RemoveTlcCommand {
-                                        id: previous_tlc.into(),
-                                        reason: remove_tlc.reason.clone(),
-                                    },
-                                    port,
-                                ),
-                            }),
-                        ))
-                        .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                    let res = recv.await.expect("remove tlc replied");
-                    info!("remove tlc from previous channel: {:?}", &res);
+                    if previous_channel_id != state.get_id() {
+                        let (send, recv) = oneshot::channel::<Result<(), String>>();
+                        let port = RpcReplyPort::from(send);
+                        self.network
+                            .send_message(NetworkActorMessage::new_command(
+                                NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
+                                    channel_id: previous_channel_id,
+                                    command: ChannelCommand::RemoveTlc(
+                                        RemoveTlcCommand {
+                                            id: previous_tlc.into(),
+                                            reason: remove_tlc.reason.clone(),
+                                        },
+                                        port,
+                                    ),
+                                }),
+                            ))
+                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                        let res = recv.await.expect("remove tlc replied");
+                        info!("remove tlc from previous channel: {:?}", &res);
+                    } else {
+                        let res = self.handle_remove_tlc_command(
+                            state,
+                            RemoveTlcCommand {
+                                id: previous_tlc.into(),
+                                reason: remove_tlc.reason.clone(),
+                            },
+                        );
+                        info!("remove tlc from previous same channel: {:?}", &res);
+                    }
                 } else {
                     // only the original sender of the TLC should send `TlcRemoveReceived` event
                     // because only the original sender cares about the TLC event to settle the payment
@@ -577,6 +588,7 @@ where
                             ),
                         ))
                         .expect("myself alive");
+                    error!("TLC removed without previous TLC: {:?}", tlc_details.tlc);
                 }
                 Ok(())
             }

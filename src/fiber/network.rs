@@ -2250,11 +2250,16 @@ where
         payment_hash: Hash256,
         reason: RemoveTlcReason,
     ) {
+        info!(
+            "yukang Received remove tlc for payment hash: {:?}, reason: {:?}",
+            payment_hash, reason
+        );
         if let Some(mut payment_session) = self.store.get_payment_session(payment_hash) {
             if payment_session.status == PaymentSessionStatus::Inflight {
                 match reason {
                     RemoveTlcReason::RemoveTlcFulfill(_) => {
                         payment_session.set_success_status();
+                        info!("Payment session success: {:?}", payment_hash);
                         self.store.insert_payment_session(payment_session);
                     }
                     RemoveTlcReason::RemoveTlcFail(reason) => {
