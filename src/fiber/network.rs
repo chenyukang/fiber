@@ -72,7 +72,7 @@ use crate::ckb::config::UdtCfgInfos;
 use crate::ckb::contracts::{check_udt_script, get_udt_whitelist, is_udt_type_auto_accept};
 use crate::ckb::{CkbChainMessage, FundingRequest, FundingTx, TraceTxRequest, TraceTxResponse};
 use crate::fiber::channel::{
-    AddTlcCommand, AddTlcResponse, TxCollaborationCommand, TxUpdateCommand,
+    AddTlcCommand, AddTlcResponse, RemoveTlcCommand, TxCollaborationCommand, TxUpdateCommand,
 };
 use crate::fiber::graph::{ChannelInfo, PaymentSession, PaymentSessionStatus};
 use crate::fiber::serde_utils::EntityHex;
@@ -202,7 +202,7 @@ pub enum NetworkActorCommand {
     // is for the current node.
     SendPaymentOnionPacket(
         SendOnionPacketCommand,
-        RpcReplyPort<Result<u64, TlcErrPacket>>,
+        Option<RpcReplyPort<Result<u64, TlcErrPacket>>>,
     ),
     PeelPaymentOnionPacket(
         Vec<u8>, // onion_packet
@@ -594,12 +594,6 @@ impl FiberMessageWithPeerId {
 #[derive(Debug)]
 pub struct FiberMessageWithSessionId {
     pub session_id: SessionId,
-    pub message: FiberMessage,
-}
-
-#[derive(Debug)]
-pub struct FiberMessageWithChannelId {
-    pub channel_id: Hash256,
     pub message: FiberMessage,
 }
 
@@ -2117,6 +2111,45 @@ where
         &self,
         state: &mut NetworkActorState<S>,
         command: SendOnionPacketCommand,
+        reply: Option<RpcReplyPort<Result<u64, TlcErrPacket>>>,
+    ) {
+        let (send, recv) = oneshot::channel::<Result<u64, TlcErrPacket>>();
+        let inner_rpc_reply = RpcReplyPort::from(send);
+
+        let previous_tlc = command.previous_tlc.clone();
+        self.try_send_onion_packet(state, command, inner_rpc_reply)
+            .await;
+
+        let res = recv.await.expect("expect command replied");
+        // If we failed to forward the onion packet, we should remove the tlc.
+        if let Err(res) = &res {
+            error!("Error forwarding onion packet: {:?}", res);
+            if let Some((channel_id, tlc_id)) = &previous_tlc {
+                let (send, _recv) = oneshot::channel::<Result<(), String>>();
+                let port = RpcReplyPort::from(send);
+                let _ = state
+                    .send_command_to_channel(
+                        *channel_id,
+                        ChannelCommand::RemoveTlc(
+                            RemoveTlcCommand {
+                                id: *tlc_id,
+                                reason: RemoveTlcReason::RemoveTlcFail(res.clone()),
+                            },
+                            port,
+                        ),
+                    )
+                    .await;
+            }
+        }
+        if let Some(reply) = reply {
+            reply.send(res).expect("msg send error");
+        }
+    }
+
+    async fn try_send_onion_packet(
+        &self,
+        state: &mut NetworkActorState<S>,
+        command: SendOnionPacketCommand,
         reply: RpcReplyPort<Result<u64, TlcErrPacket>>,
     ) {
         let SendOnionPacketCommand {
@@ -2164,6 +2197,10 @@ where
                 return unknown_next_peer(reply);
             }
         };
+        error!(
+            "debug yukang handle_send_onion channel id: {:?}",
+            channel_id
+        );
         let (send, recv) = oneshot::channel::<Result<AddTlcResponse, TlcErrPacket>>();
         let rpc_reply = RpcReplyPort::from(send);
         let command = ChannelCommand::AddTlc(
@@ -2179,14 +2216,16 @@ where
             rpc_reply,
         );
 
-        // we have already checked the channel_id is valid,
+        // we have already checked the channel_id is valid
         match state.send_command_to_channel(*channel_id, command).await {
-            Ok(()) => {}
+            Ok(()) => {
+                error!("send onion packet to channel: {:?} success!!!", channel_id);
+            }
             Err(Error::ChannelNotFound(_)) => {
                 return unknown_next_peer(reply);
             }
             Err(err) => {
-                // must be some error fron tentacle, set it as temporary node failure
+                // must be some error from tentacle, set it as temporary node failure
                 error!(
                     "Failed to send onion packet to channel: {:?} with err: {:?}",
                     channel_id, err
@@ -2198,6 +2237,10 @@ where
             }
         }
         let add_tlc_res = recv.await.expect("recv error").map(|res| res.tlc_id);
+        error!(
+            "debug yukang handle_send_onion add_tlc_res: {:?}",
+            add_tlc_res
+        );
         reply.send(add_tlc_res).expect("send error");
     }
 
@@ -2318,7 +2361,7 @@ where
                 packet: peeled_packet.serialize(),
                 previous_tlc: None,
             };
-            self.handle_send_onion_packet_command(state, command, rpc_reply)
+            self.handle_send_onion_packet_command(state, command, Some(rpc_reply))
                 .await;
             match recv.await.expect("msg recv error") {
                 Err(e) => {
@@ -3283,7 +3326,15 @@ where
             }
             _ => match self.channels.get(&channel_id) {
                 Some(actor) => {
-                    actor.send_message(ChannelActorMessage::Command(command))?;
+                    error!(
+                        "debug1 yukang add_tlc Sending command to channel actor: {:?}",
+                        &command
+                    );
+                    let res = actor.send_message(ChannelActorMessage::Command(command));
+                    error!(
+                        "debug yukang error add_tlc Sending command to channel actor res: {:?}",
+                        &res
+                    );
                     Ok(())
                 }
                 None => Err(Error::ChannelNotFound(channel_id)),
