@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 use ckb_jsonrpc_types::BlockNumber;
 use secp256k1::XOnlyPublicKey;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     fiber::{
@@ -548,24 +548,35 @@ where
                         "begin to remove tlc from previous channel: {:?}",
                         &previous_tlc
                     );
-                    let (send, recv) = oneshot::channel::<Result<(), String>>();
-                    let port = RpcReplyPort::from(send);
-                    self.network
-                        .send_message(NetworkActorMessage::new_command(
-                            NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                                channel_id: previous_channel_id,
-                                command: ChannelCommand::RemoveTlc(
-                                    RemoveTlcCommand {
-                                        id: previous_tlc.into(),
-                                        reason: remove_tlc.reason.clone(),
-                                    },
-                                    port,
-                                ),
-                            }),
-                        ))
-                        .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                    let res = recv.await.expect("remove tlc replied");
-                    info!("remove tlc from previous channel: {:?}", &res);
+                    if previous_channel_id != state.get_id() {
+                        let (send, recv) = oneshot::channel::<Result<(), String>>();
+                        let port = RpcReplyPort::from(send);
+                        self.network
+                            .send_message(NetworkActorMessage::new_command(
+                                NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
+                                    channel_id: previous_channel_id,
+                                    command: ChannelCommand::RemoveTlc(
+                                        RemoveTlcCommand {
+                                            id: previous_tlc.into(),
+                                            reason: remove_tlc.reason.clone(),
+                                        },
+                                        port,
+                                    ),
+                                }),
+                            ))
+                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                        let res = recv.await.expect("remove tlc replied");
+                        info!("remove tlc from previous channel: {:?}", &res);
+                    } else {
+                        let res = self.handle_remove_tlc_command(
+                            state,
+                            RemoveTlcCommand {
+                                id: previous_tlc.into(),
+                                reason: remove_tlc.reason.clone(),
+                            },
+                        );
+                        info!("remove tlc from previous same channel: {:?}", &res);
+                    }
                 } else {
                     // only the original sender of the TLC should send `TlcRemoveReceived` event
                     // because only the original sender cares about the TLC event to settle the payment
@@ -577,6 +588,7 @@ where
                             ),
                         ))
                         .expect("myself alive");
+                    error!("TLC removed without previous TLC: {:?}", tlc_details.tlc);
                 }
                 Ok(())
             }
@@ -773,10 +785,8 @@ where
             } else if let Some(preimage) = self.store.get_invoice_preimage(&tlc.payment_hash) {
                 preimage
             } else {
-                error!(
-                    "No preimage found for payment hash: {:?}",
-                    &tlc.payment_hash
-                );
+                // here maybe the tlc is not the last hop, we can not settle down it now.
+                // maybe we should exclude it from the settle down list.
                 continue;
             };
             let command = RemoveTlcCommand {
@@ -922,8 +932,6 @@ where
         onion_packet: Vec<u8>,
         added_tlc_id: u64,
     ) -> Result<(), ProcessingChannelError> {
-        let (send, recv) = oneshot::channel::<Result<u64, TlcErrPacket>>();
-        let rpc_reply = RpcReplyPort::from(send);
         self.network
             .send_message(NetworkActorMessage::Command(
                 NetworkActorCommand::SendPaymentOnionPacket(
@@ -931,35 +939,34 @@ where
                         packet: onion_packet,
                         previous_tlc: Some((state.get_id(), added_tlc_id)),
                     },
-                    rpc_reply,
+                    None,
                 ),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-        let res = match recv.await.expect("expect command replied") {
-            Ok(tlc_id) => Ok(tlc_id),
-            Err(e) => Err(e),
-        };
-        // If we failed to forward the onion packet, we should remove the tlc.
-        if let Err(res) = res {
-            error!("Error forwarding onion packet: {:?}", res);
-            let (send, recv) = oneshot::channel::<Result<(), String>>();
-            let port = RpcReplyPort::from(send);
-            self.network
-                .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                        channel_id: state.get_id(),
-                        command: ChannelCommand::RemoveTlc(
-                            RemoveTlcCommand {
-                                id: added_tlc_id,
-                                reason: RemoveTlcReason::RemoveTlcFail(res),
-                            },
-                            port,
-                        ),
-                    }),
-                ))
-                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-            let _ = recv.await.expect("RemoveTlc command replied");
-        }
+        //let res = recv.await.expect("SendPaymentOnionPacket replied");
+        //debug!("forward onion packet result: {:?}", res);
+        //error!("debug yukang forwarding onion packet result: {:?}", res);
+        // // If we failed to forward the onion packet, we should remove the tlc.
+        // if let Err(res) = res {
+        //     error!("Error forwarding onion packet: {:?}", res);
+        //     let (send, recv) = oneshot::channel::<Result<(), String>>();
+        //     let port = RpcReplyPort::from(send);
+        //     self.network
+        //         .send_message(NetworkActorMessage::new_command(
+        //             NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
+        //                 channel_id: state.get_id(),
+        //                 command: ChannelCommand::RemoveTlc(
+        //                     RemoveTlcCommand {
+        //                         id: added_tlc_id,
+        //                         reason: RemoveTlcReason::RemoveTlcFail(res),
+        //                     },
+        //                     port,
+        //                 ),
+        //             }),
+        //         ))
+        //         .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+        //     let _ = recv.await.expect("RemoveTlc command replied");
+        // }
         Ok(())
     }
 
@@ -1845,8 +1852,8 @@ where
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        trace!(
-            "Channel actor processing message: id: {:?}, state: {:?}, message: {:?}",
+        error!(
+            "debug handle Channel actor processing message: id: {:?}, state: {:?}, message: {:?}",
             &state.get_id(),
             &message,
             &state.state
@@ -3478,17 +3485,17 @@ impl ChannelActorState {
     }
 
     pub fn insert_tlc(&mut self, tlc: TLC) -> Result<DetailedTLCInfo, ProcessingChannelError> {
-        let payment_hash = tlc.payment_hash;
-        if let Some(tlc) = self
-            .tlcs
-            .values()
-            .find(|tlc| tlc.tlc.payment_hash == payment_hash && tlc.removed_at.is_none())
-        {
-            return Err(ProcessingChannelError::InvalidParameter(format!(
-                "Trying to insert tlc with duplicate payment hash {:?} with tlc {:?}",
-                payment_hash, tlc
-            )));
-        }
+        // let payment_hash = tlc.payment_hash;
+        // if let Some(tlc) = self
+        //     .tlcs
+        //     .values()
+        //     .find(|tlc| tlc.tlc.payment_hash == payment_hash && tlc.removed_at.is_none())
+        // {
+        //     return Err(ProcessingChannelError::InvalidParameter(format!(
+        //         "Trying to insert tlc with duplicate payment hash {:?} with tlc {:?}",
+        //         payment_hash, tlc
+        //     )));
+        // }
         if let Some(current) = self.tlcs.get(&tlc.id) {
             if current.tlc == tlc {
                 debug!(
@@ -3510,7 +3517,10 @@ impl ChannelActorState {
             // TODO: We should actually also consider all our fulfilled tlcs here.
             // Because this is also the amount that we can actually spend.
             let sent_tlc_value = self.get_offered_tlc_balance();
-            debug!("Value of local sent tlcs: {}", sent_tlc_value);
+            debug!(
+                "Value of local sent tlcs: {}, tlc.amount: {}, self.to_local_amount: {}",
+                sent_tlc_value, tlc.amount, self.to_local_amount
+            );
             debug_assert!(self.to_local_amount >= sent_tlc_value);
             // TODO: handle transaction fee here.
             if sent_tlc_value + tlc.amount > self.to_local_amount {
