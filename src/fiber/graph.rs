@@ -12,7 +12,7 @@ use ckb_jsonrpc_types::JsonBytes;
 use ckb_types::packed::{OutPoint, Script};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tentacle::secio::PeerId;
 use thiserror::Error;
 use tracing::log::error;
@@ -615,7 +615,8 @@ where
         // when we starting iterate channels from A, we may considerting channel_1 and channel_2,
         // and we selected channel_1 according to weight
         // in this case, `last_hop_channels` stores (B -> channel_1) so that we can skip channel_1 when we iterate channels from B
-        let mut last_hop_channels = HashMap::new();
+        //let mut last_hop_channels = HashMap::new();
+        let mut last_hop_channels = HashSet::new();
 
         if amount == 0 {
             return Err(GraphError::Amount(
@@ -657,7 +658,11 @@ where
         while let Some(cur_hop) = nodes_heap.pop() {
             nodes_visited += 1;
 
-            for (from, channel_info, channel_update) in self.get_node_inbounds(cur_hop.node_id) {
+            let mut channels: Vec<(Pubkey, &ChannelInfo, &ChannelUpdateInfo)> =
+                self.get_node_inbounds(cur_hop.node_id).collect();
+            channels.sort_by(|a, b| b.2.fee_rate.cmp(&a.2.fee_rate));
+
+            for (from, channel_info, channel_update) in channels {
                 if from == target && !route_to_self {
                     continue;
                 }
@@ -666,10 +671,13 @@ where
                 }
 
                 // if the channel is already visited in the last hop, skip it
-                if last_hop_channels
-                    .values()
-                    .any(|x| x == &channel_info.out_point())
-                {
+                // if last_hop_channels
+                //     .values()
+                //     .any(|x| x == &channel_info.out_point())
+                // {
+                //     continue;
+                // }
+                if last_hop_channels.contains(&channel_info.out_point()) {
                     continue;
                 }
 
@@ -735,7 +743,8 @@ where
                     probability,
                     next_hop: Some((cur_hop.node_id, channel_info.out_point())),
                 };
-                last_hop_channels.insert(node.node_id, channel_info.out_point());
+                //last_hop_channels.insert(node.node_id, channel_info.out_point());
+                last_hop_channels.insert(channel_info.out_point());
                 distances.insert(node.node_id, node.clone());
                 nodes_heap.push_or_fix(node);
             }
