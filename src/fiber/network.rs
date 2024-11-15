@@ -59,8 +59,8 @@ use super::graph_syncer::{GraphSyncer, GraphSyncerMessage};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
     ChannelAnnouncement, ChannelAnnouncementQuery, ChannelUpdate, ChannelUpdateQuery,
-    EcdsaSignature, FiberBroadcastMessage, FiberBroadcastMessageQuery, FiberMessage, Hash256,
-    NodeAnnouncement, NodeAnnouncementQuery, OpenChannel, Privkey, Pubkey, RemoveTlc,
+    EcdsaSignature, FiberBroadcastMessage, FiberBroadcastMessageQuery, FiberMessage, GossipMessage,
+    Hash256, NodeAnnouncement, NodeAnnouncementQuery, OpenChannel, Privkey, Pubkey, RemoveTlc,
     RemoveTlcReason, TlcErr, TlcErrData, TlcErrPacket, TlcErrorCode,
 };
 use super::{FiberConfig, ASSUME_NETWORK_ACTOR_ALIVE};
@@ -82,6 +82,8 @@ use crate::invoice::{CkbInvoice, InvoiceStore};
 use crate::{unwrap_or_return, Error};
 
 pub const FIBER_PROTOCOL_ID: ProtocolId = ProtocolId::new(42);
+
+pub const GOSSIP_PROTOCOL_ID: ProtocolId = ProtocolId::new(43);
 
 pub const DEFAULT_CHAIN_ACTOR_TIMEOUT: u64 = 300000;
 
@@ -1031,7 +1033,7 @@ where
     ) -> crate::Result<()> {
         match command {
             NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId { peer_id, message }) => {
-                state.send_message_to_peer(&peer_id, message).await?;
+                state.send_fiber_message_to_peer(&peer_id, message).await?;
             }
 
             NetworkActorCommand::ConnectPeer(addr) => {
@@ -1310,7 +1312,7 @@ where
                     .expect("network actor alive");
             }
             NetworkActorCommand::BroadcastMessage(message) => {
-                // TODO: implement broadcast message
+                // TODO: gossip protocol refactor, fix me
             }
             NetworkActorCommand::SignMessage(message, reply) => {
                 let signature = state.private_key.sign(message);
@@ -2858,7 +2860,7 @@ where
         Ok(())
     }
 
-    async fn send_message_to_session(
+    async fn send_fiber_message_to_session(
         &self,
         session_id: SessionId,
         message: FiberMessage,
@@ -2869,13 +2871,35 @@ where
         Ok(())
     }
 
-    async fn send_message_to_peer(
+    async fn send_fiber_message_to_peer(
         &self,
         peer_id: &PeerId,
         message: FiberMessage,
     ) -> crate::Result<()> {
         match self.get_peer_session(peer_id) {
-            Some(session) => self.send_message_to_session(session, message).await,
+            Some(session) => self.send_fiber_message_to_session(session, message).await,
+            None => Err(Error::PeerNotFound(peer_id.clone())),
+        }
+    }
+
+    async fn send_gossip_message_to_session(
+        &self,
+        session_id: SessionId,
+        message: GossipMessage,
+    ) -> crate::Result<()> {
+        self.control
+            .send_message_to(session_id, GOSSIP_PROTOCOL_ID, message.to_molecule_bytes())
+            .await?;
+        Ok(())
+    }
+
+    async fn send_gossip_message_to_peer(
+        &self,
+        peer_id: &PeerId,
+        message: GossipMessage,
+    ) -> crate::Result<()> {
+        match self.get_peer_session(peer_id) {
+            Some(session) => self.send_gossip_message_to_session(session, message).await,
             None => Err(Error::PeerNotFound(peer_id.clone())),
         }
     }
@@ -3524,9 +3548,12 @@ where
         );
         let secio_kp = SecioKeyPair::from(kp);
         let secio_pk = secio_kp.public_key();
-        let handle = Handle::new(myself.clone());
+        let handle = MyServiceHandle::new(myself.clone());
+        let fiber_handle = FiberProtocolHandle::from(&handle);
+        let gossip_handle = GossipProtocolHandle::from(&handle);
         let mut service = ServiceBuilder::default()
-            .insert_protocol(handle.clone().create_meta(FIBER_PROTOCOL_ID))
+            .insert_protocol(fiber_handle.create_meta())
+            .insert_protocol(gossip_handle.create_meta())
             .handshake_type(secio_kp.into())
             .build(handle);
         let mut listening_addr = service
@@ -3752,32 +3779,22 @@ where
 }
 
 #[derive(Clone, Debug)]
-struct Handle {
+struct GossipProtocolHandle {
     actor: ActorRef<NetworkActorMessage>,
 }
 
-impl Handle {
-    pub fn new(actor: ActorRef<NetworkActorMessage>) -> Self {
-        Self { actor }
+impl From<&MyServiceHandle> for GossipProtocolHandle {
+    fn from(handle: &MyServiceHandle) -> Self {
+        GossipProtocolHandle {
+            actor: handle.actor.clone(),
+        }
     }
+}
 
-    fn send_actor_message(&self, message: NetworkActorMessage) {
-        // If we are closing the whole network service, we may have already stopped the network actor.
-        // In that case the send_message will fail.
-        // Ideally, we should close tentacle network service first, then stop the network actor.
-        // But ractor provides only api for `post_stop` instead of `pre_stop`.
-        let _ = self.actor.send_message(message);
-    }
-
-    fn emit_event(&self, event: NetworkServiceEvent) {
-        self.send_actor_message(NetworkActorMessage::Event(
-            NetworkActorEvent::NetworkServiceEvent(event),
-        ));
-    }
-
-    fn create_meta(self, id: ProtocolId) -> ProtocolMeta {
+impl GossipProtocolHandle {
+    fn create_meta(self) -> ProtocolMeta {
         MetaBuilder::new()
-            .id(id)
+            .id(GOSSIP_PROTOCOL_ID)
             .service_handle(move || {
                 let handle = Box::new(self);
                 ProtocolHandle::Callback(handle)
@@ -3787,7 +3804,41 @@ impl Handle {
 }
 
 #[async_trait]
-impl ServiceProtocol for Handle {
+impl ServiceProtocol for GossipProtocolHandle {
+    async fn init(&mut self, _context: &mut ProtocolContext) {}
+
+    async fn connected(&mut self, _context: ProtocolContextMutRef<'_>, _version: &str) {}
+
+    async fn disconnected(&mut self, _context: ProtocolContextMutRef<'_>) {}
+
+    async fn received(&mut self, _context: ProtocolContextMutRef<'_>, data: Bytes) {
+        let msg = unwrap_or_return!(GossipMessage::from_molecule_slice(&data), "parse message");
+        debug!("Received gossip message: {:?}", &msg);
+        // TODO: handle gossip message
+    }
+
+    async fn notify(&mut self, _context: &mut ProtocolContext, _token: u64) {}
+}
+
+#[derive(Clone, Debug)]
+struct FiberProtocolHandle {
+    actor: ActorRef<NetworkActorMessage>,
+}
+
+impl FiberProtocolHandle {
+    fn create_meta(self) -> ProtocolMeta {
+        MetaBuilder::new()
+            .id(FIBER_PROTOCOL_ID)
+            .service_handle(move || {
+                let handle = Box::new(self);
+                ProtocolHandle::Callback(handle)
+            })
+            .build()
+    }
+}
+
+#[async_trait]
+impl ServiceProtocol for FiberProtocolHandle {
     async fn init(&mut self, _context: &mut ProtocolContext) {}
 
     async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
@@ -3799,13 +3850,14 @@ impl ServiceProtocol for Handle {
 
         if let Some(remote_pubkey) = context.session.remote_pubkey.clone() {
             let remote_peer_id = PeerId::from_public_key(&remote_pubkey);
-            self.send_actor_message(NetworkActorMessage::new_event(
-                NetworkActorEvent::PeerConnected(
+            try_send_actor_message(
+                &self.actor,
+                NetworkActorMessage::new_event(NetworkActorEvent::PeerConnected(
                     remote_peer_id,
                     remote_pubkey.into(),
                     context.session.clone(),
-                ),
-            ));
+                )),
+            );
         } else {
             warn!("Peer connected without remote pubkey {:?}", context.session);
         }
@@ -3820,9 +3872,13 @@ impl ServiceProtocol for Handle {
         match context.session.remote_pubkey.as_ref() {
             Some(pubkey) => {
                 let peer_id = PeerId::from_public_key(pubkey);
-                self.send_actor_message(NetworkActorMessage::new_event(
-                    NetworkActorEvent::PeerDisconnected(peer_id, context.session.clone()),
-                ));
+                try_send_actor_message(
+                    &self.actor,
+                    NetworkActorMessage::new_event(NetworkActorEvent::PeerDisconnected(
+                        peer_id,
+                        context.session.clone(),
+                    )),
+                );
             }
             None => {
                 unreachable!("Received message without remote pubkey");
@@ -3835,9 +3891,10 @@ impl ServiceProtocol for Handle {
         match context.session.remote_pubkey.as_ref() {
             Some(pubkey) => {
                 let peer_id = PeerId::from_public_key(pubkey);
-                self.send_actor_message(NetworkActorMessage::new_event(
-                    NetworkActorEvent::PeerMessage(peer_id, msg),
-                ));
+                try_send_actor_message(
+                    &self.actor,
+                    NetworkActorMessage::new_event(NetworkActorEvent::PeerMessage(peer_id, msg)),
+                );
             }
             None => {
                 unreachable!("Received message without remote pubkey");
@@ -3848,14 +3905,48 @@ impl ServiceProtocol for Handle {
     async fn notify(&mut self, _context: &mut ProtocolContext, _token: u64) {}
 }
 
+#[derive(Clone, Debug)]
+struct MyServiceHandle {
+    actor: ActorRef<NetworkActorMessage>,
+}
+
+impl MyServiceHandle {
+    fn new(actor: ActorRef<NetworkActorMessage>) -> Self {
+        MyServiceHandle { actor }
+    }
+
+    fn emit_event(&self, event: NetworkServiceEvent) {
+        try_send_actor_message(
+            &self.actor,
+            NetworkActorMessage::Event(NetworkActorEvent::NetworkServiceEvent(event)),
+        );
+    }
+}
+
+impl From<&MyServiceHandle> for FiberProtocolHandle {
+    fn from(handle: &MyServiceHandle) -> Self {
+        FiberProtocolHandle {
+            actor: handle.actor.clone(),
+        }
+    }
+}
+
 #[async_trait]
-impl ServiceHandle for Handle {
+impl ServiceHandle for MyServiceHandle {
     async fn handle_error(&mut self, _context: &mut ServiceContext, error: ServiceError) {
         self.emit_event(NetworkServiceEvent::ServiceError(error));
     }
     async fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
         self.emit_event(NetworkServiceEvent::ServiceEvent(event));
     }
+}
+
+// If we are closing the whole network service, we may have already stopped the network actor.
+// In that case the send_message will fail.
+// Ideally, we should close tentacle network service first, then stop the network actor.
+// But ractor provides only api for `post_stop` instead of `pre_stop`.
+fn try_send_actor_message(actor: &ActorRef<NetworkActorMessage>, message: NetworkActorMessage) {
+    let _ = actor.send_message(message);
 }
 
 pub(crate) fn emit_service_event(

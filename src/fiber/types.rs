@@ -1988,6 +1988,16 @@ pub enum FiberMessage {
 }
 
 impl FiberMessage {
+    pub fn to_molecule_bytes(self) -> molecule::bytes::Bytes {
+        molecule_fiber::FiberMessage::from(self).as_bytes()
+    }
+
+    pub fn from_molecule_slice(data: &[u8]) -> Result<Self, Error> {
+        molecule_fiber::FiberMessage::from_slice(data)
+            .map_err(Into::into)
+            .and_then(TryInto::try_into)
+    }
+
     pub fn open_channel(open_channel: OpenChannel) -> Self {
         FiberMessage::ChannelInitialization(open_channel)
     }
@@ -2118,6 +2128,89 @@ pub enum GossipMessage {
     BroadcastMessagesFilter(BroadcastMessagesFilter),
     GetBroadcastMessages(GetBroadcastMessages),
     QueryBroadcastMessages(QueryBroadcastMessages),
+}
+
+impl GossipMessage {
+    pub fn to_molecule_bytes(self) -> molecule::bytes::Bytes {
+        molecule_gossip::GossipMessage::from(self).as_bytes()
+    }
+
+    pub fn from_molecule_slice(data: &[u8]) -> Result<Self, Error> {
+        molecule_gossip::GossipMessage::from_slice(data)
+            .map_err(Into::into)
+            .and_then(TryInto::try_into)
+    }
+}
+
+impl From<GossipMessage> for molecule_gossip::GossipMessageUnion {
+    fn from(gossip_message: GossipMessage) -> Self {
+        match gossip_message {
+            GossipMessage::BroadcastMessagesResult(broadcast_messages_result) => {
+                molecule_gossip::GossipMessageUnion::BroadcastMessagesResult(
+                    broadcast_messages_result.into(),
+                )
+            }
+            GossipMessage::BroadcastMessagesFilter(broadcast_messages_filter) => {
+                molecule_gossip::GossipMessageUnion::BroadcastMessagesFilter(
+                    broadcast_messages_filter.into(),
+                )
+            }
+            GossipMessage::GetBroadcastMessages(get_broadcast_messages) => {
+                molecule_gossip::GossipMessageUnion::GetBroadcastMessages(
+                    get_broadcast_messages.into(),
+                )
+            }
+            GossipMessage::QueryBroadcastMessages(query_broadcast_messages) => {
+                molecule_gossip::GossipMessageUnion::QueryBroadcastMessages(
+                    query_broadcast_messages.into(),
+                )
+            }
+        }
+    }
+}
+
+impl From<GossipMessage> for molecule_gossip::GossipMessage {
+    fn from(gossip_message: GossipMessage) -> Self {
+        molecule_gossip::GossipMessage::new_builder()
+            .set(gossip_message)
+            .build()
+    }
+}
+
+impl TryFrom<molecule_gossip::GossipMessageUnion> for GossipMessage {
+    type Error = Error;
+
+    fn try_from(gossip_message: molecule_gossip::GossipMessageUnion) -> Result<Self, Self::Error> {
+        match gossip_message {
+            molecule_gossip::GossipMessageUnion::BroadcastMessagesResult(
+                broadcast_messages_result,
+            ) => Ok(GossipMessage::BroadcastMessagesResult(
+                broadcast_messages_result.try_into()?,
+            )),
+            molecule_gossip::GossipMessageUnion::BroadcastMessagesFilter(
+                broadcast_messages_filter,
+            ) => Ok(GossipMessage::BroadcastMessagesFilter(
+                broadcast_messages_filter.try_into()?,
+            )),
+            molecule_gossip::GossipMessageUnion::GetBroadcastMessages(get_broadcast_messages) => {
+                Ok(GossipMessage::GetBroadcastMessages(
+                    get_broadcast_messages.try_into()?,
+                ))
+            }
+            molecule_gossip::GossipMessageUnion::QueryBroadcastMessages(
+                query_broadcast_messages,
+            ) => Ok(GossipMessage::QueryBroadcastMessages(
+                query_broadcast_messages.try_into()?,
+            )),
+        }
+    }
+}
+
+impl TryFrom<molecule_gossip::GossipMessage> for GossipMessage {
+    type Error = Error;
+    fn try_from(value: molecule_gossip::GossipMessage) -> Result<Self, Self::Error> {
+        value.to_enum().try_into()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2733,26 +2826,6 @@ impl TryFrom<molecule_fiber::FiberMessage> for FiberMessage {
         fiber_message.to_enum().try_into()
     }
 }
-
-macro_rules! impl_traits {
-    ($t:ident) => {
-        impl $t {
-            pub fn to_molecule_bytes(self) -> molecule::bytes::Bytes {
-                molecule_fiber::$t::from(self).as_bytes()
-            }
-        }
-
-        impl $t {
-            pub fn from_molecule_slice(data: &[u8]) -> Result<Self, Error> {
-                molecule_fiber::$t::from_slice(data)
-                    .map_err(Into::into)
-                    .and_then(TryInto::try_into)
-            }
-        }
-    };
-}
-
-impl_traits!(FiberMessage);
 
 pub(crate) fn deterministically_serialize<T: Serialize>(v: &T) -> Vec<u8> {
     serde_json::to_vec_pretty(v).expect("serialize value")
