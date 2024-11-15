@@ -59,12 +59,9 @@ use super::graph_syncer::{GraphSyncer, GraphSyncerMessage};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
     ChannelAnnouncement, ChannelAnnouncementQuery, ChannelUpdate, ChannelUpdateQuery,
-    EcdsaSignature, FiberBroadcastMessage, FiberBroadcastMessageQuery, FiberMessage,
-    FiberQueryInformation, GetBroadcastMessages, GetBroadcastMessagesResult, Hash256,
-    NodeAnnouncement, NodeAnnouncementQuery, OpenChannel, Privkey, Pubkey,
-    QueryBroadcastMessagesWithinTimeRange, QueryBroadcastMessagesWithinTimeRangeResult,
-    QueryChannelsWithinBlockRange, QueryChannelsWithinBlockRangeResult, RemoveTlc, RemoveTlcReason,
-    TlcErr, TlcErrData, TlcErrPacket, TlcErrorCode,
+    EcdsaSignature, FiberBroadcastMessage, FiberBroadcastMessageQuery, FiberMessage, Hash256,
+    NodeAnnouncement, NodeAnnouncementQuery, OpenChannel, Privkey, Pubkey, RemoveTlc,
+    RemoveTlcReason, TlcErr, TlcErrData, TlcErrPacket, TlcErrorCode,
 };
 use super::{FiberConfig, ASSUME_NETWORK_ACTOR_ALIVE};
 
@@ -233,14 +230,6 @@ pub enum NetworkActorCommand {
     ),
     // Get Payment Session for query payment status and errors
     GetPayment(Hash256, RpcReplyPort<Result<SendPaymentResponse, String>>),
-    GetAndProcessChannelsWithinBlockRangeFromPeer(
-        (PeerId, u64, u64),
-        RpcReplyPort<Result<(u64, bool), Error>>,
-    ),
-    GetAndProcessBroadcastMessagesWithinTimeRangeFromPeer(
-        (PeerId, u64, u64),
-        RpcReplyPort<Result<(u64, bool), Error>>,
-    ),
     StartSyncing,
     StopSyncing,
     MarkSyncingDone,
@@ -682,14 +671,6 @@ where
                     }
                 }
             }
-            FiberMessage::BroadcastMessage(m) => {
-                if let Err(e) = self
-                    .process_or_stash_broadcasted_message(state, peer_id, m)
-                    .await
-                {
-                    error!("Failed to process broadcasted message: {:?}", e);
-                }
-            }
             FiberMessage::ChannelNormalOperation(m) => {
                 let channel_id = m.get_channel_id();
                 state
@@ -700,225 +681,6 @@ where
                     )
                     .await;
             }
-            FiberMessage::QueryInformation(q) => match q {
-                FiberQueryInformation::GetBroadcastMessages(GetBroadcastMessages {
-                    id,
-                    queries,
-                }) => {
-                    let mut messages = Vec::with_capacity(queries.len());
-                    for query in queries {
-                        let result = self.query_broadcast_message(query).await;
-                        match result {
-                            Ok(message) => {
-                                messages.push(message);
-                            }
-                            Err(e) => {
-                                error!("Failed to query broadcast message: {:?}", e);
-                                return Ok(());
-                            }
-                        }
-                    }
-                    let reply = GetBroadcastMessagesResult { id, messages };
-                    state
-                        .send_message_to_peer(
-                            &peer_id,
-                            FiberMessage::QueryInformation(
-                                FiberQueryInformation::GetBroadcastMessagesResult(reply),
-                            ),
-                        )
-                        .await?;
-                }
-                FiberQueryInformation::GetBroadcastMessagesResult(GetBroadcastMessagesResult {
-                    id,
-                    messages,
-                }) => {
-                    debug!("Received GetBroadcastMessagesResult from peer {:?} with id {} and result {:?}", &peer_id, id, &messages);
-                    let original_id = match state.get_original_request_id(&peer_id, id) {
-                        Some(id) => id,
-                        None => {
-                            return Err(Error::InvalidPeerMessage(format!(
-                                "No original request for query broadcast messages with id {} from peer {:?}",
-                                id, &peer_id)
-                            ));
-                        }
-                    };
-                    for message in messages {
-                        if let Err(e) = self.process_broadcasted_message(state, message).await {
-                            let fail_message =
-                                format!("Failed to process broadcasted message: {:?}", &e);
-                            error!("{}", &fail_message);
-                            state.mark_request_failed(&peer_id, original_id, e);
-                            return Err(Error::InvalidPeerMessage(fail_message));
-                        }
-                    }
-                    debug!(
-                        "Successfully processed all the messages from peer {:?} with id {}",
-                        &peer_id, id
-                    );
-                    state.mark_request_finished(&peer_id, original_id);
-                }
-                FiberQueryInformation::QueryChannelsWithinBlockRange(
-                    QueryChannelsWithinBlockRange {
-                        id,
-                        chain_hash: _,
-                        start_block,
-                        end_block,
-                    },
-                ) => {
-                    let (channels, next_offset, is_finished) = self
-                        .query_channels_within_block_range(start_block, end_block)
-                        .await;
-                    debug!(
-                        "Query channels within block range: {:?}, {:?}, {:?}",
-                        &channels, next_offset, is_finished
-                    );
-
-                    let channels = channels.into_iter().map(|c| c.out_point()).collect();
-                    let reply = FiberQueryInformation::QueryChannelsWithinBlockRangeResult(
-                        QueryChannelsWithinBlockRangeResult {
-                            id,
-                            channels,
-                            next_block: next_offset,
-                            is_finished,
-                        },
-                    );
-                    state
-                        .send_message_to_peer(&peer_id, FiberMessage::QueryInformation(reply))
-                        .await?;
-                }
-                FiberQueryInformation::QueryChannelsWithinBlockRangeResult(
-                    QueryChannelsWithinBlockRangeResult {
-                        id,
-                        next_block,
-                        is_finished,
-                        channels,
-                    },
-                ) => {
-                    if channels.is_empty() {
-                        // No query to the peer needed, early return.
-                        match state
-                            .broadcast_message_responses
-                            .remove(&(peer_id.clone(), id))
-                        {
-                            Some(reply) => {
-                                let _ = reply.1.send(Ok((next_block, is_finished)));
-                                return Ok(());
-                            }
-                            _ => {
-                                return Err(Error::InvalidPeerMessage(format!(
-                                    "No response for query channels with id {} expected from peer {:?}",
-                                    id, &peer_id
-                                )));
-                            }
-                        }
-                    }
-                    debug!("Received QueryChannelsWithinBlockRangeResult from peer {:?} with id {} and channels {:?}", &peer_id, id, &channels);
-                    if let Some(new_id) =
-                        state.record_request_result(&peer_id, id, next_block, is_finished)
-                    {
-                        let query = GetBroadcastMessages {
-                            id: new_id,
-                            queries: channels
-                                .into_iter()
-                                .map(|channel_outpoint: OutPoint| {
-                                    FiberBroadcastMessageQuery::ChannelAnnouncement(
-                                        ChannelAnnouncementQuery {
-                                            channel_outpoint,
-                                            flags: 0,
-                                        },
-                                    )
-                                })
-                                .collect(),
-                        };
-                        debug!("Trying to query peer {:?} channels {:?}", &peer_id, &query);
-                        state
-                            .send_message_to_peer(
-                                &peer_id,
-                                FiberMessage::QueryInformation(
-                                    FiberQueryInformation::GetBroadcastMessages(query),
-                                ),
-                            )
-                            .await?;
-                    } else {
-                        return Err(Error::InvalidPeerMessage(format!(
-                            "No response for query channels with id {} expected from peer {:?}",
-                            id, &peer_id
-                        )));
-                    }
-                }
-                FiberQueryInformation::QueryBroadcastMessagesWithinTimeRange(
-                    QueryBroadcastMessagesWithinTimeRange {
-                        id,
-                        chain_hash: _,
-                        start_time,
-                        end_time,
-                    },
-                ) => {
-                    let (queries, next_time, is_finished) = self
-                        .query_broadcast_messages_within_time_range(start_time, end_time)
-                        .await?;
-                    let reply = FiberQueryInformation::QueryBroadcastMessagesWithinTimeRangeResult(
-                        QueryBroadcastMessagesWithinTimeRangeResult {
-                            id,
-                            queries,
-                            next_time,
-                            is_finished,
-                        },
-                    );
-                    state
-                        .send_message_to_peer(&peer_id, FiberMessage::QueryInformation(reply))
-                        .await?;
-                }
-                FiberQueryInformation::QueryBroadcastMessagesWithinTimeRangeResult(
-                    QueryBroadcastMessagesWithinTimeRangeResult {
-                        id,
-                        next_time,
-                        is_finished,
-                        queries,
-                    },
-                ) => {
-                    if queries.is_empty() {
-                        // No query to the peer needed, early return.
-                        match state
-                            .broadcast_message_responses
-                            .remove(&(peer_id.clone(), id))
-                        {
-                            Some(reply) => {
-                                let _ = reply.1.send(Ok((next_time, is_finished)));
-                                return Ok(());
-                            }
-                            _ => {
-                                return Err(Error::InvalidPeerMessage(format!(
-                                    "No response for query broadcast messages with id {} expected from peer {:?}",
-                                    id, &peer_id
-                                )));
-                            }
-                        }
-                    }
-
-                    if let Some(new_id) =
-                        state.record_request_result(&peer_id, id, next_time, is_finished)
-                    {
-                        let query = GetBroadcastMessages {
-                            id: new_id,
-                            queries,
-                        };
-                        state
-                            .send_message_to_peer(
-                                &peer_id,
-                                FiberMessage::QueryInformation(
-                                    FiberQueryInformation::GetBroadcastMessages(query),
-                                ),
-                            )
-                            .await?;
-                    } else {
-                        return Err(Error::InvalidPeerMessage(format!(
-                            "No response for query broadcast messages with id {} expected from peer {:?}",
-                            id, &peer_id
-                        )));
-                    }
-                }
-            },
         };
         Ok(())
     }
@@ -1548,37 +1310,7 @@ where
                     .expect("network actor alive");
             }
             NetworkActorCommand::BroadcastMessage(message) => {
-                const MAX_BROADCAST_SESSIONS: usize = 5;
-                // TODO: It is possible that the remote peer of the channel may repeatedly
-                // receive the same message.
-                let peer_ids = state.get_n_peer_peer_ids(MAX_BROADCAST_SESSIONS, HashSet::new());
-                debug!(
-                    "Broadcasting message to randomly selected peers {:?} (from {:?})",
-                    &peer_ids, &state.peer_id
-                );
-                // The order matters here because should_message_be_broadcasted
-                // will change the state, and we don't want to change the state
-                // if there is not peer to broadcast the message.
-                if !peer_ids.is_empty() && state.should_message_be_broadcasted(&message) {
-                    debug!(
-                        "Broadcasting unseen message {:?} to peers {:?}",
-                        &message, &peer_ids
-                    );
-                    for peer_id in peer_ids {
-                        if let Err(e) = state
-                            .send_message_to_peer(
-                                &peer_id,
-                                FiberMessage::BroadcastMessage(message.clone()),
-                            )
-                            .await
-                        {
-                            error!(
-                                "Failed to broadcast message {:?} to peer {:?}: {:?}",
-                                &message, &peer_id, e
-                            );
-                        }
-                    }
-                }
+                // TODO: implement broadcast message
             }
             NetworkActorCommand::SignMessage(message, reply) => {
                 let signature = state.private_key.sign(message);
@@ -1644,43 +1376,6 @@ where
                     ))
                     .expect(ASSUME_NETWORK_MYSELF_ALIVE);
             }
-            NetworkActorCommand::GetAndProcessChannelsWithinBlockRangeFromPeer(request, reply) => {
-                // TODO: We need to send a reply to the caller if enough time passed,
-                // but we still do not get a reply from the peer.
-                let (peer_id, start_block, end_block) = request;
-                let id = state.create_request_id_for_reply_port(&peer_id, reply);
-                let message = FiberMessage::QueryInformation(
-                    FiberQueryInformation::QueryChannelsWithinBlockRange(
-                        QueryChannelsWithinBlockRange {
-                            id,
-                            chain_hash: get_chain_hash(),
-                            start_block,
-                            end_block,
-                        },
-                    ),
-                );
-                state.send_message_to_peer(&peer_id, message).await?;
-            }
-            NetworkActorCommand::GetAndProcessBroadcastMessagesWithinTimeRangeFromPeer(
-                request,
-                reply,
-            ) => {
-                // TODO: We need to send a reply to the caller if enough time passed,
-                // but we still do not get a reply from the peer.
-                let (peer_id, start_time, end_time) = request;
-                let id = state.create_request_id_for_reply_port(&peer_id, reply);
-                let message = FiberMessage::QueryInformation(
-                    FiberQueryInformation::QueryBroadcastMessagesWithinTimeRange(
-                        QueryBroadcastMessagesWithinTimeRange {
-                            id,
-                            chain_hash: get_chain_hash(),
-                            start_time,
-                            end_time,
-                        },
-                    ),
-                );
-                state.send_message_to_peer(&peer_id, message).await?;
-            }
             NetworkActorCommand::StartSyncing => match &mut state.sync_status {
                 NetworkSyncStatus::NotRunning(ref sync_state) => {
                     debug!(
@@ -1737,42 +1432,7 @@ where
                     &peer_id,
                     &channel_announcement
                 );
-                // Adding this owned channel to the network graph.
-                let channel_info = ChannelInfo {
-                    funding_tx_block_number: block_number.into(),
-                    funding_tx_index: tx_index,
-                    announcement_msg: channel_announcement.clone(),
-                    node1_to_node2: None, // wait for channel update message
-                    node2_to_node1: None,
-                    timestamp: std::time::UNIX_EPOCH
-                        .elapsed()
-                        .expect("Duration since unix epoch")
-                        .as_millis() as u64,
-                };
-                let mut graph = self.network_graph.write().await;
-                graph.add_channel(channel_info);
-
-                // Send the channel announcement to other peer first.
-                myself
-                    .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId {
-                            peer_id,
-                            message: FiberMessage::BroadcastMessage(
-                                FiberBroadcastMessage::ChannelAnnouncement(
-                                    channel_announcement.clone(),
-                                ),
-                            ),
-                        }),
-                    ))
-                    .expect(ASSUME_NETWORK_MYSELF_ALIVE);
-                // Also broadcast channel announcement to the network.
-                myself
-                    .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::BroadcastMessage(
-                            FiberBroadcastMessage::ChannelAnnouncement(channel_announcement),
-                        ),
-                    ))
-                    .expect(ASSUME_NETWORK_MYSELF_ALIVE);
+                // TODO: Save the channel announcement to the database.
             }
 
             NetworkActorCommand::ProccessChannelUpdate(peer_id, channel_update) => {
@@ -1780,30 +1440,7 @@ where
                     "Processing our channel update message to peer {:?}: {:?}",
                     &peer_id, &channel_update
                 );
-                let mut graph = self.network_graph.write().await;
-                graph
-                    .process_channel_update(channel_update.clone())
-                    .expect("Valid channel update");
-
-                // Send the channel update to other peer first.
-                myself
-                    .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId {
-                            peer_id,
-                            message: FiberMessage::BroadcastMessage(
-                                FiberBroadcastMessage::ChannelUpdate(channel_update.clone()),
-                            ),
-                        }),
-                    ))
-                    .expect(ASSUME_NETWORK_MYSELF_ALIVE);
-                // Also broadcast channel update to the network.
-                myself
-                    .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::BroadcastMessage(
-                            FiberBroadcastMessage::ChannelUpdate(channel_update),
-                        ),
-                    ))
-                    .expect(ASSUME_NETWORK_MYSELF_ALIVE);
+                // TODO: Save the channel update to the database.
             }
             NetworkActorCommand::NodeInfo(_, rpc) => {
                 let response = NodeInfoResponse {
@@ -3363,20 +3000,20 @@ where
                 "Auto announcing our node to peer {:?} (message: {:?})",
                 remote_peer_id, &message
             );
-            if let Err(e) = self
-                .send_message_to_session(
-                    session.id,
-                    FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
-                        message,
-                    )),
-                )
-                .await
-            {
-                error!(
-                    "Failed to send NodeAnnouncement message to peer {:?}: {:?}",
-                    remote_peer_id, e
-                );
-            }
+            // if let Err(e) = self
+            //     .send_message_to_session(
+            //         session.id,
+            //         FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
+            //             message,
+            //         )),
+            //     )
+            //     .await
+            // {
+            //     error!(
+            //         "Failed to send NodeAnnouncement message to peer {:?}: {:?}",
+            //         remote_peer_id, e
+            //     );
+            // }
         } else {
             debug!(
                 "Auto announcing is disabled, skipping node announcement to peer {:?}",

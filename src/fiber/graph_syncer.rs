@@ -120,79 +120,81 @@ impl Actor for GraphSyncer {
                 if starting_height > self.ending_height {
                     panic!("Starting height to high (starting height {}, ending height {}), should have exited syncing earlier", starting_height, self.ending_height);
                 }
-                let request = |rpc_reply| {
-                    NetworkActorMessage::new_command(
-                        NetworkActorCommand::GetAndProcessChannelsWithinBlockRangeFromPeer(
-                            (self.peer_id.clone(), starting_height, u64::MAX),
-                            rpc_reply,
-                        ),
-                    )
-                };
-                match call!(self.network, request).expect(ASSUME_NETWORK_ACTOR_ALIVE) {
-                    Ok((next_height, _is_finished)) => {
-                        debug!("Get channels from peer successfully.");
-                        if next_height > self.ending_height {
-                            debug!("Starting get broadcast messages from peer after getting channels finished");
-                            let starting_time =
-                                if self.starting_time < ASSUME_MAX_MESSAGE_TIMESTAMP_GAP {
-                                    0
-                                } else {
-                                    self.starting_time - ASSUME_MAX_MESSAGE_TIMESTAMP_GAP
-                                };
-                            myself.send_message(GraphSyncerMessage::GetBroadcastMessages(
-                                starting_time,
-                            ))?;
-                        } else {
-                            myself.send_message(GraphSyncerMessage::GetChannels(next_height))?;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to get channels from peer: {:?}", e);
-                        self.exit_with_status(
-                            myself.get_cell(),
-                            state,
-                            GraphSyncerExitStatus::Failed,
-                        );
-                    }
-                }
+                // TODO: gossip protocol refactor, fix me
+                // let request = |rpc_reply| {
+                //     NetworkActorMessage::new_command(
+                //         NetworkActorCommand::GetAndProcessChannelsWithinBlockRangeFromPeer(
+                //             (self.peer_id.clone(), starting_height, u64::MAX),
+                //             rpc_reply,
+                //         ),
+                //     )
+                // };
+                // match call!(self.network, request).expect(ASSUME_NETWORK_ACTOR_ALIVE) {
+                //     Ok((next_height, _is_finished)) => {
+                //         debug!("Get channels from peer successfully.");
+                //         if next_height > self.ending_height {
+                //             debug!("Starting get broadcast messages from peer after getting channels finished");
+                //             let starting_time =
+                //                 if self.starting_time < ASSUME_MAX_MESSAGE_TIMESTAMP_GAP {
+                //                     0
+                //                 } else {
+                //                     self.starting_time - ASSUME_MAX_MESSAGE_TIMESTAMP_GAP
+                //                 };
+                //             myself.send_message(GraphSyncerMessage::GetBroadcastMessages(
+                //                 starting_time,
+                //             ))?;
+                //         } else {
+                //             myself.send_message(GraphSyncerMessage::GetChannels(next_height))?;
+                //         }
+                //     }
+                //     Err(e) => {
+                //         error!("Failed to get channels from peer: {:?}", e);
+                //         self.exit_with_status(
+                //             myself.get_cell(),
+                //             state,
+                //             GraphSyncerExitStatus::Failed,
+                //         );
+                //     }
+                // }
             }
             GraphSyncerMessage::GetBroadcastMessages(starting_time) => {
                 if starting_time > self.ending_time {
                     panic!("Starting time to high (starting time {}, ending time {}), should have exited syncing earlier", starting_time, self.ending_time);
                 }
-                let request = |rpc_reply| {
-                    NetworkActorMessage::new_command(
-                        NetworkActorCommand::GetAndProcessBroadcastMessagesWithinTimeRangeFromPeer(
-                            (self.peer_id.clone(), starting_time, u64::MAX),
-                            rpc_reply,
-                        ),
-                    )
-                };
-                match call!(self.network, request).expect(ASSUME_NETWORK_ACTOR_ALIVE) {
-                    Ok((next_time, _is_finished)) => {
-                        debug!("Get broadcast messages from peer successfully.");
-                        if next_time > self.ending_time {
-                            debug!("Graph syncer finished syncing with peer.");
-                            self.exit_with_status(
-                                myself.get_cell(),
-                                state,
-                                GraphSyncerExitStatus::Succeeded,
-                            );
-                        } else {
-                            myself.send_message(GraphSyncerMessage::GetBroadcastMessages(
-                                next_time,
-                            ))?;
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to get broadcast messages from peer: {:?}", e);
-                        self.exit_with_status(
-                            myself.get_cell(),
-                            state,
-                            GraphSyncerExitStatus::Failed,
-                        );
-                    }
-                }
+                // TODO: gossip protocol refactor, fix me
+                // let request = |rpc_reply| {
+                //     NetworkActorMessage::new_command(
+                //         NetworkActorCommand::GetAndProcessBroadcastMessagesWithinTimeRangeFromPeer(
+                //             (self.peer_id.clone(), starting_time, u64::MAX),
+                //             rpc_reply,
+                //         ),
+                //     )
+                // };
+                // match call!(self.network, request).expect(ASSUME_NETWORK_ACTOR_ALIVE) {
+                //     Ok((next_time, _is_finished)) => {
+                //         debug!("Get broadcast messages from peer successfully.");
+                //         if next_time > self.ending_time {
+                //             debug!("Graph syncer finished syncing with peer.");
+                //             self.exit_with_status(
+                //                 myself.get_cell(),
+                //                 state,
+                //                 GraphSyncerExitStatus::Succeeded,
+                //             );
+                //         } else {
+                //             myself.send_message(GraphSyncerMessage::GetBroadcastMessages(
+                //                 next_time,
+                //             ))?;
+                //         }
+                //     }
+                //     Err(e) => {
+                //         error!("Failed to get broadcast messages from peer: {:?}", e);
+                //         self.exit_with_status(
+                //             myself.get_cell(),
+                //             state,
+                //             GraphSyncerExitStatus::Failed,
+                //         );
+                //     }
+                // }
             }
         }
         Ok(())
