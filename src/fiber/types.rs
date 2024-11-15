@@ -3,9 +3,8 @@ use crate::ckb::contracts::get_udt_whitelist;
 
 use super::channel::ChannelFlags;
 use super::config::AnnouncedNodeName;
-use super::gen::fiber::{
-    self as molecule_fiber, BroadcastMessageQueries, PubNonce as Byte66, UdtCellDeps, Uint128Opt,
-};
+use super::gen::fiber::{self as molecule_fiber, PubNonce as Byte66, UdtCellDeps, Uint128Opt};
+use super::gen::gossip::{self as molecule_gossip};
 use super::hash_algorithm::{HashAlgorithm, UnknownHashAlgorithmError};
 use super::network::get_chain_hash;
 use super::r#gen::fiber::PubNonceOpt;
@@ -1688,9 +1687,9 @@ impl From<molecule_fiber::UdtCfgInfos> for UdtCfgInfos {
     }
 }
 
-impl From<NodeAnnouncement> for molecule_fiber::NodeAnnouncement {
+impl From<NodeAnnouncement> for molecule_gossip::NodeAnnouncement {
     fn from(node_announcement: NodeAnnouncement) -> Self {
-        molecule_fiber::NodeAnnouncement::new_builder()
+        molecule_gossip::NodeAnnouncement::new_builder()
             .signature(
                 node_announcement
                     .signature
@@ -1721,10 +1720,10 @@ impl From<NodeAnnouncement> for molecule_fiber::NodeAnnouncement {
     }
 }
 
-impl TryFrom<molecule_fiber::NodeAnnouncement> for NodeAnnouncement {
+impl TryFrom<molecule_gossip::NodeAnnouncement> for NodeAnnouncement {
     type Error = Error;
 
-    fn try_from(node_announcement: molecule_fiber::NodeAnnouncement) -> Result<Self, Self::Error> {
+    fn try_from(node_announcement: molecule_gossip::NodeAnnouncement) -> Result<Self, Self::Error> {
         Ok(NodeAnnouncement {
             signature: Some(node_announcement.signature().try_into()?),
             features: node_announcement.features().unpack(),
@@ -1819,9 +1818,9 @@ impl ChannelAnnouncement {
     }
 }
 
-impl From<ChannelAnnouncement> for molecule_fiber::ChannelAnnouncement {
+impl From<ChannelAnnouncement> for molecule_gossip::ChannelAnnouncement {
     fn from(channel_announcement: ChannelAnnouncement) -> Self {
-        molecule_fiber::ChannelAnnouncement::new_builder()
+        molecule_gossip::ChannelAnnouncement::new_builder()
             .node1_signature(
                 channel_announcement
                     .node1_signature
@@ -1852,11 +1851,11 @@ impl From<ChannelAnnouncement> for molecule_fiber::ChannelAnnouncement {
     }
 }
 
-impl TryFrom<molecule_fiber::ChannelAnnouncement> for ChannelAnnouncement {
+impl TryFrom<molecule_gossip::ChannelAnnouncement> for ChannelAnnouncement {
     type Error = Error;
 
     fn try_from(
-        channel_announcement: molecule_fiber::ChannelAnnouncement,
+        channel_announcement: molecule_gossip::ChannelAnnouncement,
     ) -> Result<Self, Self::Error> {
         Ok(ChannelAnnouncement {
             node1_signature: Some(channel_announcement.node1_signature().try_into()?),
@@ -1939,9 +1938,9 @@ impl ChannelUpdate {
     }
 }
 
-impl From<ChannelUpdate> for molecule_fiber::ChannelUpdate {
+impl From<ChannelUpdate> for molecule_gossip::ChannelUpdate {
     fn from(channel_update: ChannelUpdate) -> Self {
-        molecule_fiber::ChannelUpdate::new_builder()
+        molecule_gossip::ChannelUpdate::new_builder()
             .signature(
                 channel_update
                     .signature
@@ -1961,10 +1960,10 @@ impl From<ChannelUpdate> for molecule_fiber::ChannelUpdate {
     }
 }
 
-impl TryFrom<molecule_fiber::ChannelUpdate> for ChannelUpdate {
+impl TryFrom<molecule_gossip::ChannelUpdate> for ChannelUpdate {
     type Error = Error;
 
-    fn try_from(channel_update: molecule_fiber::ChannelUpdate) -> Result<Self, Self::Error> {
+    fn try_from(channel_update: molecule_gossip::ChannelUpdate) -> Result<Self, Self::Error> {
         Ok(ChannelUpdate {
             signature: Some(channel_update.signature().try_into()?),
             chain_hash: channel_update.chain_hash().into(),
@@ -1983,21 +1982,9 @@ impl TryFrom<molecule_fiber::ChannelUpdate> for ChannelUpdate {
 }
 
 #[derive(Debug, Clone)]
-pub enum FiberQueryInformation {
-    GetBroadcastMessages(GetBroadcastMessages),
-    GetBroadcastMessagesResult(GetBroadcastMessagesResult),
-    QueryChannelsWithinBlockRange(QueryChannelsWithinBlockRange),
-    QueryChannelsWithinBlockRangeResult(QueryChannelsWithinBlockRangeResult),
-    QueryBroadcastMessagesWithinTimeRange(QueryBroadcastMessagesWithinTimeRange),
-    QueryBroadcastMessagesWithinTimeRangeResult(QueryBroadcastMessagesWithinTimeRangeResult),
-}
-
-#[derive(Debug, Clone)]
 pub enum FiberMessage {
     ChannelInitialization(OpenChannel),
     ChannelNormalOperation(FiberChannelMessage),
-    BroadcastMessage(FiberBroadcastMessage),
-    QueryInformation(FiberQueryInformation),
 }
 
 impl FiberMessage {
@@ -2074,20 +2061,6 @@ impl FiberMessage {
             announcement_signatures,
         ))
     }
-
-    pub fn node_announcement(node_announcement: NodeAnnouncement) -> Self {
-        FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(node_announcement))
-    }
-
-    pub fn channel_announcement(channel_announcement: ChannelAnnouncement) -> Self {
-        FiberMessage::BroadcastMessage(FiberBroadcastMessage::ChannelAnnouncement(
-            channel_announcement,
-        ))
-    }
-
-    pub fn channel_update(channel_update: ChannelUpdate) -> Self {
-        FiberMessage::BroadcastMessage(FiberBroadcastMessage::ChannelUpdate(channel_update))
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -2140,63 +2113,73 @@ impl FiberChannelMessage {
 }
 
 #[derive(Debug, Clone)]
+pub enum GossipMessage {
+    BroadcastMessagesResult(BroadcastMessagesResult),
+    BroadcastMessagesFilter(BroadcastMessagesFilter),
+    GetBroadcastMessages(GetBroadcastMessages),
+    QueryBroadcastMessages(QueryBroadcastMessages),
+}
+
+#[derive(Debug, Clone)]
 pub enum FiberBroadcastMessage {
     NodeAnnouncement(NodeAnnouncement),
     ChannelAnnouncement(ChannelAnnouncement),
     ChannelUpdate(ChannelUpdate),
 }
 
-impl From<FiberBroadcastMessage> for molecule_fiber::BroadcastMessageUnion {
+impl From<FiberBroadcastMessage> for molecule_gossip::BroadcastMessageUnion {
     fn from(fiber_broadcast_message: FiberBroadcastMessage) -> Self {
         match fiber_broadcast_message {
             FiberBroadcastMessage::NodeAnnouncement(node_announcement) => {
-                molecule_fiber::BroadcastMessageUnion::NodeAnnouncement(node_announcement.into())
+                molecule_gossip::BroadcastMessageUnion::NodeAnnouncement(node_announcement.into())
             }
             FiberBroadcastMessage::ChannelAnnouncement(channel_announcement) => {
-                molecule_fiber::BroadcastMessageUnion::ChannelAnnouncement(
+                molecule_gossip::BroadcastMessageUnion::ChannelAnnouncement(
                     channel_announcement.into(),
                 )
             }
             FiberBroadcastMessage::ChannelUpdate(channel_update) => {
-                molecule_fiber::BroadcastMessageUnion::ChannelUpdate(channel_update.into())
+                molecule_gossip::BroadcastMessageUnion::ChannelUpdate(channel_update.into())
             }
         }
     }
 }
 
-impl TryFrom<molecule_fiber::BroadcastMessageUnion> for FiberBroadcastMessage {
+impl TryFrom<molecule_gossip::BroadcastMessageUnion> for FiberBroadcastMessage {
     type Error = Error;
 
     fn try_from(
-        fiber_broadcast_message: molecule_fiber::BroadcastMessageUnion,
+        fiber_broadcast_message: molecule_gossip::BroadcastMessageUnion,
     ) -> Result<Self, Self::Error> {
         match fiber_broadcast_message {
-            molecule_fiber::BroadcastMessageUnion::NodeAnnouncement(node_announcement) => Ok(
+            molecule_gossip::BroadcastMessageUnion::NodeAnnouncement(node_announcement) => Ok(
                 FiberBroadcastMessage::NodeAnnouncement(node_announcement.try_into()?),
             ),
-            molecule_fiber::BroadcastMessageUnion::ChannelAnnouncement(channel_announcement) => Ok(
-                FiberBroadcastMessage::ChannelAnnouncement(channel_announcement.try_into()?),
-            ),
-            molecule_fiber::BroadcastMessageUnion::ChannelUpdate(channel_update) => Ok(
+            molecule_gossip::BroadcastMessageUnion::ChannelAnnouncement(channel_announcement) => {
+                Ok(FiberBroadcastMessage::ChannelAnnouncement(
+                    channel_announcement.try_into()?,
+                ))
+            }
+            molecule_gossip::BroadcastMessageUnion::ChannelUpdate(channel_update) => Ok(
                 FiberBroadcastMessage::ChannelUpdate(channel_update.try_into()?),
             ),
         }
     }
 }
 
-impl From<FiberBroadcastMessage> for molecule_fiber::BroadcastMessage {
+impl From<FiberBroadcastMessage> for molecule_gossip::BroadcastMessage {
     fn from(fiber_broadcast_message: FiberBroadcastMessage) -> Self {
-        molecule_fiber::BroadcastMessage::new_builder()
+        molecule_gossip::BroadcastMessage::new_builder()
             .set(fiber_broadcast_message)
             .build()
     }
 }
 
-impl TryFrom<molecule_fiber::BroadcastMessage> for FiberBroadcastMessage {
+impl TryFrom<molecule_gossip::BroadcastMessage> for FiberBroadcastMessage {
     type Error = Error;
 
     fn try_from(
-        fiber_broadcast_message: molecule_fiber::BroadcastMessage,
+        fiber_broadcast_message: molecule_gossip::BroadcastMessage,
     ) -> Result<Self, Self::Error> {
         fiber_broadcast_message.to_enum().try_into()
     }
@@ -2224,20 +2207,20 @@ pub struct NodeAnnouncementQuery {
     pub flags: u8,
 }
 
-impl From<NodeAnnouncementQuery> for molecule_fiber::NodeAnnouncementQuery {
+impl From<NodeAnnouncementQuery> for molecule_gossip::NodeAnnouncementQuery {
     fn from(node_announcement_query: NodeAnnouncementQuery) -> Self {
-        molecule_fiber::NodeAnnouncementQuery::new_builder()
+        molecule_gossip::NodeAnnouncementQuery::new_builder()
             .node_id(node_announcement_query.node_id.into())
             .flags(node_announcement_query.flags.into())
             .build()
     }
 }
 
-impl TryFrom<molecule_fiber::NodeAnnouncementQuery> for NodeAnnouncementQuery {
+impl TryFrom<molecule_gossip::NodeAnnouncementQuery> for NodeAnnouncementQuery {
     type Error = Error;
 
     fn try_from(
-        node_announcement_query: molecule_fiber::NodeAnnouncementQuery,
+        node_announcement_query: molecule_gossip::NodeAnnouncementQuery,
     ) -> Result<Self, Self::Error> {
         Ok(NodeAnnouncementQuery {
             node_id: node_announcement_query.node_id().try_into()?,
@@ -2252,20 +2235,20 @@ pub struct ChannelAnnouncementQuery {
     pub flags: u8,
 }
 
-impl From<ChannelAnnouncementQuery> for molecule_fiber::ChannelAnnouncementQuery {
+impl From<ChannelAnnouncementQuery> for molecule_gossip::ChannelAnnouncementQuery {
     fn from(channel_announcement_query: ChannelAnnouncementQuery) -> Self {
-        molecule_fiber::ChannelAnnouncementQuery::new_builder()
+        molecule_gossip::ChannelAnnouncementQuery::new_builder()
             .channel_outpoint(channel_announcement_query.channel_outpoint)
             .flags(channel_announcement_query.flags.into())
             .build()
     }
 }
 
-impl TryFrom<molecule_fiber::ChannelAnnouncementQuery> for ChannelAnnouncementQuery {
+impl TryFrom<molecule_gossip::ChannelAnnouncementQuery> for ChannelAnnouncementQuery {
     type Error = Error;
 
     fn try_from(
-        channel_announcement_query: molecule_fiber::ChannelAnnouncementQuery,
+        channel_announcement_query: molecule_gossip::ChannelAnnouncementQuery,
     ) -> Result<Self, Self::Error> {
         Ok(ChannelAnnouncementQuery {
             channel_outpoint: channel_announcement_query.channel_outpoint(),
@@ -2280,20 +2263,20 @@ pub struct ChannelUpdateQuery {
     pub flags: u8,
 }
 
-impl From<ChannelUpdateQuery> for molecule_fiber::ChannelUpdateQuery {
+impl From<ChannelUpdateQuery> for molecule_gossip::ChannelUpdateQuery {
     fn from(channel_update_query: ChannelUpdateQuery) -> Self {
-        molecule_fiber::ChannelUpdateQuery::new_builder()
+        molecule_gossip::ChannelUpdateQuery::new_builder()
             .channel_outpoint(channel_update_query.channel_outpoint)
             .flags(channel_update_query.flags.into())
             .build()
     }
 }
 
-impl TryFrom<molecule_fiber::ChannelUpdateQuery> for ChannelUpdateQuery {
+impl TryFrom<molecule_gossip::ChannelUpdateQuery> for ChannelUpdateQuery {
     type Error = Error;
 
     fn try_from(
-        channel_update_query: molecule_fiber::ChannelUpdateQuery,
+        channel_update_query: molecule_gossip::ChannelUpdateQuery,
     ) -> Result<Self, Self::Error> {
         Ok(ChannelUpdateQuery {
             channel_outpoint: channel_update_query.channel_outpoint(),
@@ -2309,39 +2292,39 @@ pub enum FiberBroadcastMessageQuery {
     ChannelUpdate(ChannelUpdateQuery),
 }
 
-impl From<FiberBroadcastMessageQuery> for molecule_fiber::BroadcastMessageQuery {
+impl From<FiberBroadcastMessageQuery> for molecule_gossip::BroadcastMessageQuery {
     fn from(fiber_broadcast_message_query: FiberBroadcastMessageQuery) -> Self {
-        molecule_fiber::BroadcastMessageQuery::new_builder()
+        molecule_gossip::BroadcastMessageQuery::new_builder()
             .set(fiber_broadcast_message_query)
             .build()
     }
 }
 
-impl TryFrom<molecule_fiber::BroadcastMessageQuery> for FiberBroadcastMessageQuery {
+impl TryFrom<molecule_gossip::BroadcastMessageQuery> for FiberBroadcastMessageQuery {
     type Error = Error;
 
     fn try_from(
-        fiber_broadcast_message_query: molecule_fiber::BroadcastMessageQuery,
+        fiber_broadcast_message_query: molecule_gossip::BroadcastMessageQuery,
     ) -> Result<Self, Self::Error> {
         fiber_broadcast_message_query.to_enum().try_into()
     }
 }
 
-impl From<FiberBroadcastMessageQuery> for molecule_fiber::BroadcastMessageQueryUnion {
+impl From<FiberBroadcastMessageQuery> for molecule_gossip::BroadcastMessageQueryUnion {
     fn from(fiber_broadcast_message_query: FiberBroadcastMessageQuery) -> Self {
         match fiber_broadcast_message_query {
             FiberBroadcastMessageQuery::NodeAnnouncement(node_announcement_query) => {
-                molecule_fiber::BroadcastMessageQueryUnion::NodeAnnouncementQuery(
+                molecule_gossip::BroadcastMessageQueryUnion::NodeAnnouncementQuery(
                     node_announcement_query.into(),
                 )
             }
             FiberBroadcastMessageQuery::ChannelAnnouncement(channel_announcement_query) => {
-                molecule_fiber::BroadcastMessageQueryUnion::ChannelAnnouncementQuery(
+                molecule_gossip::BroadcastMessageQueryUnion::ChannelAnnouncementQuery(
                     channel_announcement_query.into(),
                 )
             }
             FiberBroadcastMessageQuery::ChannelUpdate(channel_update_query) => {
-                molecule_fiber::BroadcastMessageQueryUnion::ChannelUpdateQuery(
+                molecule_gossip::BroadcastMessageQueryUnion::ChannelUpdateQuery(
                     channel_update_query.into(),
                 )
             }
@@ -2349,24 +2332,24 @@ impl From<FiberBroadcastMessageQuery> for molecule_fiber::BroadcastMessageQueryU
     }
 }
 
-impl TryFrom<molecule_fiber::BroadcastMessageQueryUnion> for FiberBroadcastMessageQuery {
+impl TryFrom<molecule_gossip::BroadcastMessageQueryUnion> for FiberBroadcastMessageQuery {
     type Error = Error;
 
     fn try_from(
-        fiber_broadcast_message_query: molecule_fiber::BroadcastMessageQueryUnion,
+        fiber_broadcast_message_query: molecule_gossip::BroadcastMessageQueryUnion,
     ) -> Result<Self, Self::Error> {
         match fiber_broadcast_message_query {
-            molecule_fiber::BroadcastMessageQueryUnion::NodeAnnouncementQuery(
+            molecule_gossip::BroadcastMessageQueryUnion::NodeAnnouncementQuery(
                 node_announcement_query,
             ) => Ok(FiberBroadcastMessageQuery::NodeAnnouncement(
                 node_announcement_query.try_into()?,
             )),
-            molecule_fiber::BroadcastMessageQueryUnion::ChannelAnnouncementQuery(
+            molecule_gossip::BroadcastMessageQueryUnion::ChannelAnnouncementQuery(
                 channel_announcement_query,
             ) => Ok(FiberBroadcastMessageQuery::ChannelAnnouncement(
                 channel_announcement_query.try_into()?,
             )),
-            molecule_fiber::BroadcastMessageQueryUnion::ChannelUpdateQuery(
+            molecule_gossip::BroadcastMessageQueryUnion::ChannelUpdateQuery(
                 channel_update_query,
             ) => Ok(FiberBroadcastMessageQuery::ChannelUpdate(
                 channel_update_query.try_into()?,
@@ -2376,59 +2359,75 @@ impl TryFrom<molecule_fiber::BroadcastMessageQueryUnion> for FiberBroadcastMessa
 }
 
 #[derive(Debug, Clone)]
-pub struct GetBroadcastMessages {
-    pub id: u64,
-    pub queries: Vec<FiberBroadcastMessageQuery>,
+pub struct Cursor([u8; 45]);
+
+impl Cursor {
+    pub fn new(cursor: [u8; 45]) -> Self {
+        Cursor(cursor)
+    }
 }
 
-impl From<GetBroadcastMessages> for molecule_fiber::GetBroadcastMessages {
-    fn from(get_broadcast_messages: GetBroadcastMessages) -> Self {
-        molecule_fiber::GetBroadcastMessages::new_builder()
-            .id(get_broadcast_messages.id.pack())
-            .queries(
-                BroadcastMessageQueries::new_builder()
-                    .set(
-                        get_broadcast_messages
-                            .queries
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                    )
-                    .build(),
+impl From<Cursor> for molecule_gossip::Cursor {
+    fn from(cursor: Cursor) -> Self {
+        molecule_gossip::Cursor::new_builder()
+            .set(
+                cursor
+                    .0
+                    .into_iter()
+                    .map(Byte::new)
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .expect("Cursor from [u8; 45]"),
             )
             .build()
     }
 }
 
-impl TryFrom<molecule_fiber::GetBroadcastMessages> for GetBroadcastMessages {
+impl TryFrom<molecule_gossip::Cursor> for Cursor {
     type Error = Error;
 
-    fn try_from(
-        get_broadcast_messages: molecule_fiber::GetBroadcastMessages,
-    ) -> Result<Self, Self::Error> {
-        Ok(GetBroadcastMessages {
-            id: get_broadcast_messages.id().unpack(),
-            queries: get_broadcast_messages
-                .queries()
-                .into_iter()
-                .map(|query| query.try_into())
-                .collect::<Result<Vec<FiberBroadcastMessageQuery>, Error>>()?,
-        })
+    fn try_from(cursor: molecule_gossip::Cursor) -> Result<Self, Self::Error> {
+        Ok(Cursor(
+            cursor.as_slice().try_into().expect("Cursor to [u8; 45]"),
+        ))
+    }
+}
+
+impl From<u16> for molecule_gossip::Uint16 {
+    fn from(count: u16) -> Self {
+        let le_bytes = count.to_le_bytes();
+        Self::new_builder()
+            .set(
+                le_bytes
+                    .into_iter()
+                    .map(Byte::new)
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .expect("Uint16 from u16"),
+            )
+            .build()
+    }
+}
+
+impl From<molecule_gossip::Uint16> for u16 {
+    fn from(count: molecule_gossip::Uint16) -> Self {
+        let le_bytes = count.as_slice().try_into().expect("Uint16 to u16");
+        u16::from_le_bytes(le_bytes)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct GetBroadcastMessagesResult {
+pub struct BroadcastMessagesResult {
     pub id: u64,
     pub messages: Vec<FiberBroadcastMessage>,
 }
 
-impl From<GetBroadcastMessagesResult> for molecule_fiber::GetBroadcastMessagesResult {
-    fn from(get_broadcast_messages_result: GetBroadcastMessagesResult) -> Self {
-        molecule_fiber::GetBroadcastMessagesResult::new_builder()
+impl From<BroadcastMessagesResult> for molecule_gossip::BroadcastMessagesResult {
+    fn from(get_broadcast_messages_result: BroadcastMessagesResult) -> Self {
+        molecule_gossip::BroadcastMessagesResult::new_builder()
             .id(get_broadcast_messages_result.id.pack())
             .messages(
-                molecule_fiber::BroadcastMessages::new_builder()
+                molecule_gossip::BroadcastMessages::new_builder()
                     .set(
                         get_broadcast_messages_result
                             .messages
@@ -2442,13 +2441,13 @@ impl From<GetBroadcastMessagesResult> for molecule_fiber::GetBroadcastMessagesRe
     }
 }
 
-impl TryFrom<molecule_fiber::GetBroadcastMessagesResult> for GetBroadcastMessagesResult {
+impl TryFrom<molecule_gossip::BroadcastMessagesResult> for BroadcastMessagesResult {
     type Error = Error;
 
     fn try_from(
-        get_broadcast_messages_result: molecule_fiber::GetBroadcastMessagesResult,
+        get_broadcast_messages_result: molecule_gossip::BroadcastMessagesResult,
     ) -> Result<Self, Self::Error> {
-        Ok(GetBroadcastMessagesResult {
+        Ok(BroadcastMessagesResult {
             id: get_broadcast_messages_result.id().unpack(),
             messages: get_broadcast_messages_result
                 .messages()
@@ -2460,178 +2459,81 @@ impl TryFrom<molecule_fiber::GetBroadcastMessagesResult> for GetBroadcastMessage
 }
 
 #[derive(Debug, Clone)]
-pub struct QueryChannelsWithinBlockRange {
+pub struct BroadcastMessagesFilter {
+    pub chain_hash: Hash256,
+    pub after_cursor: Cursor,
+}
+
+impl From<BroadcastMessagesFilter> for molecule_gossip::BroadcastMessagesFilter {
+    fn from(broadcast_messages_filter: BroadcastMessagesFilter) -> Self {
+        molecule_gossip::BroadcastMessagesFilter::new_builder()
+            .chain_hash(broadcast_messages_filter.chain_hash.into())
+            .after_cursor(broadcast_messages_filter.after_cursor.into())
+            .build()
+    }
+}
+
+impl TryFrom<molecule_gossip::BroadcastMessagesFilter> for BroadcastMessagesFilter {
+    type Error = Error;
+
+    fn try_from(
+        broadcast_messages_filter: molecule_gossip::BroadcastMessagesFilter,
+    ) -> Result<Self, Self::Error> {
+        Ok(BroadcastMessagesFilter {
+            chain_hash: broadcast_messages_filter.chain_hash().into(),
+            after_cursor: broadcast_messages_filter.after_cursor().try_into()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GetBroadcastMessages {
     pub id: u64,
     pub chain_hash: Hash256,
-    pub start_block: u64,
-    pub end_block: u64,
+    pub after_cursor: Cursor,
+    pub count: u16,
 }
 
-impl From<QueryChannelsWithinBlockRange> for molecule_fiber::QueryChannelsWithinBlockRange {
-    fn from(query_channels_within_block_range: QueryChannelsWithinBlockRange) -> Self {
-        molecule_fiber::QueryChannelsWithinBlockRange::new_builder()
-            .id(query_channels_within_block_range.id.pack())
-            .chain_hash(query_channels_within_block_range.chain_hash.into())
-            .start_block(query_channels_within_block_range.start_block.pack())
-            .end_block(query_channels_within_block_range.end_block.pack())
+impl From<GetBroadcastMessages> for molecule_gossip::GetBroadcastMessages {
+    fn from(get_broadcast_messages: GetBroadcastMessages) -> Self {
+        molecule_gossip::GetBroadcastMessages::new_builder()
+            .id(get_broadcast_messages.id.pack())
+            .chain_hash(get_broadcast_messages.chain_hash.into())
+            .after_cursor(get_broadcast_messages.after_cursor.into())
+            .count(get_broadcast_messages.count.into())
             .build()
     }
 }
 
-impl TryFrom<molecule_fiber::QueryChannelsWithinBlockRange> for QueryChannelsWithinBlockRange {
+impl TryFrom<molecule_gossip::GetBroadcastMessages> for GetBroadcastMessages {
     type Error = Error;
 
     fn try_from(
-        query_channels_within_block_range: molecule_fiber::QueryChannelsWithinBlockRange,
+        get_broadcast_messages: molecule_gossip::GetBroadcastMessages,
     ) -> Result<Self, Self::Error> {
-        Ok(QueryChannelsWithinBlockRange {
-            id: query_channels_within_block_range.id().unpack(),
-            chain_hash: query_channels_within_block_range.chain_hash().into(),
-            start_block: query_channels_within_block_range.start_block().unpack(),
-            end_block: query_channels_within_block_range.end_block().unpack(),
+        Ok(GetBroadcastMessages {
+            id: get_broadcast_messages.id().unpack(),
+            chain_hash: get_broadcast_messages.chain_hash().into(),
+            after_cursor: get_broadcast_messages.after_cursor().try_into()?,
+            count: get_broadcast_messages.count().into(),
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct QueryChannelsWithinBlockRangeResult {
+pub struct QueryBroadcastMessages {
     pub id: u64,
-    pub next_block: u64,
-    pub is_finished: bool,
-    pub channels: Vec<OutPoint>,
-}
-
-impl From<QueryChannelsWithinBlockRangeResult>
-    for molecule_fiber::QueryChannelsWithinBlockRangeResult
-{
-    fn from(query_channels_within_block_range_result: QueryChannelsWithinBlockRangeResult) -> Self {
-        molecule_fiber::QueryChannelsWithinBlockRangeResult::new_builder()
-            .id(query_channels_within_block_range_result.id.pack())
-            .next_block(query_channels_within_block_range_result.next_block.pack())
-            .is_finished(
-                (if query_channels_within_block_range_result.is_finished {
-                    1u8
-                } else {
-                    0
-                })
-                .into(),
-            )
-            .channels(
-                molecule_fiber::OutPoints::new_builder()
-                    .set(
-                        query_channels_within_block_range_result
-                            .channels
-                            .into_iter()
-                            .collect(),
-                    )
-                    .build(),
-            )
-            .build()
-    }
-}
-
-impl TryFrom<molecule_fiber::QueryChannelsWithinBlockRangeResult>
-    for QueryChannelsWithinBlockRangeResult
-{
-    type Error = Error;
-
-    fn try_from(
-        query_channels_within_block_range_result: molecule_fiber::QueryChannelsWithinBlockRangeResult,
-    ) -> Result<Self, Self::Error> {
-        Ok(QueryChannelsWithinBlockRangeResult {
-            id: query_channels_within_block_range_result.id().unpack(),
-            next_block: query_channels_within_block_range_result
-                .next_block()
-                .unpack(),
-            is_finished: u8::from(query_channels_within_block_range_result.is_finished()) != 0u8,
-            channels: query_channels_within_block_range_result
-                .channels()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct QueryBroadcastMessagesWithinTimeRange {
-    pub id: u64,
-    pub chain_hash: Hash256,
-    pub start_time: u64,
-    pub end_time: u64,
-}
-
-impl From<QueryBroadcastMessagesWithinTimeRange>
-    for molecule_fiber::QueryBroadcastMessagesWithinTimeRange
-{
-    fn from(
-        query_broadcast_messages_within_time_range: QueryBroadcastMessagesWithinTimeRange,
-    ) -> Self {
-        molecule_fiber::QueryBroadcastMessagesWithinTimeRange::new_builder()
-            .id(query_broadcast_messages_within_time_range.id.pack())
-            .chain_hash(query_broadcast_messages_within_time_range.chain_hash.into())
-            .start_time(query_broadcast_messages_within_time_range.start_time.pack())
-            .end_time(query_broadcast_messages_within_time_range.end_time.pack())
-            .build()
-    }
-}
-
-impl TryFrom<molecule_fiber::QueryBroadcastMessagesWithinTimeRange>
-    for QueryBroadcastMessagesWithinTimeRange
-{
-    type Error = Error;
-
-    fn try_from(
-        query_broadcast_messages_within_time_range: molecule_fiber::QueryBroadcastMessagesWithinTimeRange,
-    ) -> Result<Self, Self::Error> {
-        Ok(QueryBroadcastMessagesWithinTimeRange {
-            id: query_broadcast_messages_within_time_range.id().unpack(),
-            chain_hash: query_broadcast_messages_within_time_range
-                .chain_hash()
-                .into(),
-            start_time: query_broadcast_messages_within_time_range
-                .start_time()
-                .unpack(),
-            end_time: query_broadcast_messages_within_time_range
-                .end_time()
-                .unpack(),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct QueryBroadcastMessagesWithinTimeRangeResult {
-    pub id: u64,
-    pub next_time: u64,
-    pub is_finished: bool,
     pub queries: Vec<FiberBroadcastMessageQuery>,
 }
 
-impl From<QueryBroadcastMessagesWithinTimeRangeResult>
-    for molecule_fiber::QueryBroadcastMessagesWithinTimeRangeResult
-{
-    fn from(
-        query_broadcast_messages_within_time_range_result: QueryBroadcastMessagesWithinTimeRangeResult,
-    ) -> Self {
-        molecule_fiber::QueryBroadcastMessagesWithinTimeRangeResult::new_builder()
-            .id(query_broadcast_messages_within_time_range_result.id.pack())
-            .next_time(
-                query_broadcast_messages_within_time_range_result
-                    .next_time
-                    .pack(),
-            )
-            .is_finished(
-                (if query_broadcast_messages_within_time_range_result.is_finished {
-                    1u8
-                } else {
-                    0
-                })
-                .into(),
-            )
+impl From<QueryBroadcastMessages> for molecule_gossip::QueryBroadcastMessages {
+    fn from(query_broadcast_messages: QueryBroadcastMessages) -> Self {
+        molecule_gossip::QueryBroadcastMessages::new_builder()
+            .id(query_broadcast_messages.id.pack())
             .queries(
-                molecule_fiber::BroadcastMessageQueries::new_builder()
+                molecule_gossip::BroadcastMessageQueries::new_builder()
                     .set(
-                        query_broadcast_messages_within_time_range_result
+                        query_broadcast_messages
                             .queries
                             .into_iter()
                             .map(|query| query.into())
@@ -2643,28 +2545,19 @@ impl From<QueryBroadcastMessagesWithinTimeRangeResult>
     }
 }
 
-impl TryFrom<molecule_fiber::QueryBroadcastMessagesWithinTimeRangeResult>
-    for QueryBroadcastMessagesWithinTimeRangeResult
-{
+impl TryFrom<molecule_gossip::QueryBroadcastMessages> for QueryBroadcastMessages {
     type Error = Error;
 
     fn try_from(
-        query_broadcast_messages_within_time_range_result: molecule_fiber::QueryBroadcastMessagesWithinTimeRangeResult,
+        query_broadcast_messages: molecule_gossip::QueryBroadcastMessages,
     ) -> Result<Self, Self::Error> {
-        Ok(QueryBroadcastMessagesWithinTimeRangeResult {
-            id: query_broadcast_messages_within_time_range_result
-                .id()
-                .unpack(),
-            next_time: query_broadcast_messages_within_time_range_result
-                .next_time()
-                .unpack(),
-            is_finished: u8::from(query_broadcast_messages_within_time_range_result.is_finished())
-                != 0,
-            queries: query_broadcast_messages_within_time_range_result
+        Ok(QueryBroadcastMessages {
+            id: query_broadcast_messages.id().unpack(),
+            queries: query_broadcast_messages
                 .queries()
                 .into_iter()
-                .map(|message| message.try_into())
-                .collect::<Result<Vec<_>, Error>>()?,
+                .map(|query| query.try_into())
+                .collect::<Result<Vec<FiberBroadcastMessageQuery>, Error>>()?,
         })
     }
 }
@@ -2726,53 +2619,6 @@ impl From<FiberMessage> for molecule_fiber::FiberMessageUnion {
                 FiberChannelMessage::AnnouncementSignatures(announcement_signatures) => {
                     molecule_fiber::FiberMessageUnion::AnnouncementSignatures(
                         announcement_signatures.into(),
-                    )
-                }
-            },
-            FiberMessage::BroadcastMessage(m) => match m {
-                FiberBroadcastMessage::NodeAnnouncement(node_annoucement) => {
-                    molecule_fiber::FiberMessageUnion::NodeAnnouncement(node_annoucement.into())
-                }
-                FiberBroadcastMessage::ChannelAnnouncement(channel_announcement) => {
-                    molecule_fiber::FiberMessageUnion::ChannelAnnouncement(
-                        channel_announcement.into(),
-                    )
-                }
-                FiberBroadcastMessage::ChannelUpdate(channel_update) => {
-                    molecule_fiber::FiberMessageUnion::ChannelUpdate(channel_update.into())
-                }
-            },
-            FiberMessage::QueryInformation(query) => match query {
-                FiberQueryInformation::GetBroadcastMessages(get_broadcast_messages) => {
-                    molecule_fiber::FiberMessageUnion::GetBroadcastMessages(
-                        get_broadcast_messages.into(),
-                    )
-                }
-                FiberQueryInformation::GetBroadcastMessagesResult(
-                    get_broadcast_messages_result,
-                ) => molecule_fiber::FiberMessageUnion::GetBroadcastMessagesResult(
-                    get_broadcast_messages_result.into(),
-                ),
-                FiberQueryInformation::QueryChannelsWithinBlockRange(
-                    query_channels_within_block_range,
-                ) => molecule_fiber::FiberMessageUnion::QueryChannelsWithinBlockRange(
-                    query_channels_within_block_range.into(),
-                ),
-                FiberQueryInformation::QueryChannelsWithinBlockRangeResult(
-                    query_channels_within_block_range_result,
-                ) => molecule_fiber::FiberMessageUnion::QueryChannelsWithinBlockRangeResult(
-                    query_channels_within_block_range_result.into(),
-                ),
-                FiberQueryInformation::QueryBroadcastMessagesWithinTimeRange(
-                    query_broadcast_messages_within_time_range,
-                ) => molecule_fiber::FiberMessageUnion::QueryBroadcastMessagesWithinTimeRange(
-                    query_broadcast_messages_within_time_range.into(),
-                ),
-                FiberQueryInformation::QueryBroadcastMessagesWithinTimeRangeResult(
-                    query_broadcast_messages_within_time_range_result,
-                ) => {
-                    molecule_fiber::FiberMessageUnion::QueryBroadcastMessagesWithinTimeRangeResult(
-                        query_broadcast_messages_within_time_range_result.into(),
                     )
                 }
             },
@@ -2868,59 +2714,6 @@ impl TryFrom<molecule_fiber::FiberMessageUnion> for FiberMessage {
                     announcement_signatures.try_into()?,
                 ))
             }
-            molecule_fiber::FiberMessageUnion::NodeAnnouncement(node_announcement) => {
-                FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
-                    node_announcement.try_into()?,
-                ))
-            }
-            molecule_fiber::FiberMessageUnion::ChannelAnnouncement(channel_announcement) => {
-                FiberMessage::BroadcastMessage(FiberBroadcastMessage::ChannelAnnouncement(
-                    channel_announcement.try_into()?,
-                ))
-            }
-            molecule_fiber::FiberMessageUnion::ChannelUpdate(channel_update) => {
-                FiberMessage::BroadcastMessage(FiberBroadcastMessage::ChannelUpdate(
-                    channel_update.try_into()?,
-                ))
-            }
-            molecule_fiber::FiberMessageUnion::GetBroadcastMessages(get_broadcast_messages) => {
-                FiberMessage::QueryInformation(FiberQueryInformation::GetBroadcastMessages(
-                    get_broadcast_messages.try_into()?,
-                ))
-            }
-            molecule_fiber::FiberMessageUnion::GetBroadcastMessagesResult(
-                get_broadcast_messages_result,
-            ) => FiberMessage::QueryInformation(FiberQueryInformation::GetBroadcastMessagesResult(
-                get_broadcast_messages_result.try_into()?,
-            )),
-            molecule_fiber::FiberMessageUnion::QueryChannelsWithinBlockRange(
-                query_channels_within_block_range,
-            ) => FiberMessage::QueryInformation(
-                FiberQueryInformation::QueryChannelsWithinBlockRange(
-                    query_channels_within_block_range.try_into()?,
-                ),
-            ),
-            molecule_fiber::FiberMessageUnion::QueryChannelsWithinBlockRangeResult(
-                query_channels_within_block_range_result,
-            ) => FiberMessage::QueryInformation(
-                FiberQueryInformation::QueryChannelsWithinBlockRangeResult(
-                    query_channels_within_block_range_result.try_into()?,
-                ),
-            ),
-            molecule_fiber::FiberMessageUnion::QueryBroadcastMessagesWithinTimeRange(
-                query_broadcast_messages_within_time_range,
-            ) => FiberMessage::QueryInformation(
-                FiberQueryInformation::QueryBroadcastMessagesWithinTimeRange(
-                    query_broadcast_messages_within_time_range.try_into()?,
-                ),
-            ),
-            molecule_fiber::FiberMessageUnion::QueryBroadcastMessagesWithinTimeRangeResult(
-                query_broadcast_messages_within_time_range_result,
-            ) => FiberMessage::QueryInformation(
-                FiberQueryInformation::QueryBroadcastMessagesWithinTimeRangeResult(
-                    query_broadcast_messages_within_time_range_result.try_into()?,
-                ),
-            ),
         })
     }
 }
