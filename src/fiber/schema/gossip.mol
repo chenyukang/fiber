@@ -152,3 +152,10 @@ table BroadcastMessagesResult {
     id: Uint64,
     messages: BroadcastMessages,
 }
+
+union GossipMessage {
+    BroadcastMessagesResult,
+    BroadcastMessagesFilter,
+    GetBroadcastMessages,
+    QueryBroadcastMessages,
+}

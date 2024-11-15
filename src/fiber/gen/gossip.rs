@@ -5528,3 +5528,430 @@ impl molecule::prelude::Builder for BroadcastMessagesResultBuilder {
         BroadcastMessagesResult::new_unchecked(inner.into())
     }
 }
+#[derive(Clone)]
+pub struct GossipMessage(molecule::bytes::Bytes);
+impl ::core::fmt::LowerHex for GossipMessage {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl ::core::fmt::Debug for GossipMessage {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl ::core::fmt::Display for GossipMessage {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}(", Self::NAME)?;
+        self.to_enum().display_inner(f)?;
+        write!(f, ")")
+    }
+}
+impl ::core::default::Default for GossipMessage {
+    fn default() -> Self {
+        let v = molecule::bytes::Bytes::from_static(&Self::DEFAULT_VALUE);
+        GossipMessage::new_unchecked(v)
+    }
+}
+impl GossipMessage {
+    const DEFAULT_VALUE: [u8; 28] = [
+        0, 0, 0, 0, 24, 0, 0, 0, 12, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+    ];
+    pub const ITEMS_COUNT: usize = 4;
+    pub fn item_id(&self) -> molecule::Number {
+        molecule::unpack_number(self.as_slice())
+    }
+    pub fn to_enum(&self) -> GossipMessageUnion {
+        let inner = self.0.slice(molecule::NUMBER_SIZE..);
+        match self.item_id() {
+            0 => BroadcastMessagesResult::new_unchecked(inner).into(),
+            1 => BroadcastMessagesFilter::new_unchecked(inner).into(),
+            2 => GetBroadcastMessages::new_unchecked(inner).into(),
+            3 => QueryBroadcastMessages::new_unchecked(inner).into(),
+            _ => panic!("{}: invalid data", Self::NAME),
+        }
+    }
+    pub fn as_reader<'r>(&'r self) -> GossipMessageReader<'r> {
+        GossipMessageReader::new_unchecked(self.as_slice())
+    }
+}
+impl molecule::prelude::Entity for GossipMessage {
+    type Builder = GossipMessageBuilder;
+    const NAME: &'static str = "GossipMessage";
+    fn new_unchecked(data: molecule::bytes::Bytes) -> Self {
+        GossipMessage(data)
+    }
+    fn as_bytes(&self) -> molecule::bytes::Bytes {
+        self.0.clone()
+    }
+    fn as_slice(&self) -> &[u8] {
+        &self.0[..]
+    }
+    fn from_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        GossipMessageReader::from_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn from_compatible_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        GossipMessageReader::from_compatible_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn new_builder() -> Self::Builder {
+        ::core::default::Default::default()
+    }
+    fn as_builder(self) -> Self::Builder {
+        Self::new_builder().set(self.to_enum())
+    }
+}
+#[derive(Clone, Copy)]
+pub struct GossipMessageReader<'r>(&'r [u8]);
+impl<'r> ::core::fmt::LowerHex for GossipMessageReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl<'r> ::core::fmt::Debug for GossipMessageReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl<'r> ::core::fmt::Display for GossipMessageReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}(", Self::NAME)?;
+        self.to_enum().display_inner(f)?;
+        write!(f, ")")
+    }
+}
+impl<'r> GossipMessageReader<'r> {
+    pub const ITEMS_COUNT: usize = 4;
+    pub fn item_id(&self) -> molecule::Number {
+        molecule::unpack_number(self.as_slice())
+    }
+    pub fn to_enum(&self) -> GossipMessageUnionReader<'r> {
+        let inner = &self.as_slice()[molecule::NUMBER_SIZE..];
+        match self.item_id() {
+            0 => BroadcastMessagesResultReader::new_unchecked(inner).into(),
+            1 => BroadcastMessagesFilterReader::new_unchecked(inner).into(),
+            2 => GetBroadcastMessagesReader::new_unchecked(inner).into(),
+            3 => QueryBroadcastMessagesReader::new_unchecked(inner).into(),
+            _ => panic!("{}: invalid data", Self::NAME),
+        }
+    }
+}
+impl<'r> molecule::prelude::Reader<'r> for GossipMessageReader<'r> {
+    type Entity = GossipMessage;
+    const NAME: &'static str = "GossipMessageReader";
+    fn to_entity(&self) -> Self::Entity {
+        Self::Entity::new_unchecked(self.as_slice().to_owned().into())
+    }
+    fn new_unchecked(slice: &'r [u8]) -> Self {
+        GossipMessageReader(slice)
+    }
+    fn as_slice(&self) -> &'r [u8] {
+        self.0
+    }
+    fn verify(slice: &[u8], compatible: bool) -> molecule::error::VerificationResult<()> {
+        use molecule::verification_error as ve;
+        let slice_len = slice.len();
+        if slice_len < molecule::NUMBER_SIZE {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE, slice_len);
+        }
+        let item_id = molecule::unpack_number(slice);
+        let inner_slice = &slice[molecule::NUMBER_SIZE..];
+        match item_id {
+            0 => BroadcastMessagesResultReader::verify(inner_slice, compatible),
+            1 => BroadcastMessagesFilterReader::verify(inner_slice, compatible),
+            2 => GetBroadcastMessagesReader::verify(inner_slice, compatible),
+            3 => QueryBroadcastMessagesReader::verify(inner_slice, compatible),
+            _ => ve!(Self, UnknownItem, Self::ITEMS_COUNT, item_id),
+        }?;
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct GossipMessageBuilder(pub(crate) GossipMessageUnion);
+impl GossipMessageBuilder {
+    pub const ITEMS_COUNT: usize = 4;
+    pub fn set<I>(mut self, v: I) -> Self
+    where
+        I: ::core::convert::Into<GossipMessageUnion>,
+    {
+        self.0 = v.into();
+        self
+    }
+}
+impl molecule::prelude::Builder for GossipMessageBuilder {
+    type Entity = GossipMessage;
+    const NAME: &'static str = "GossipMessageBuilder";
+    fn expected_length(&self) -> usize {
+        molecule::NUMBER_SIZE + self.0.as_slice().len()
+    }
+    fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
+        writer.write_all(&molecule::pack_number(self.0.item_id()))?;
+        writer.write_all(self.0.as_slice())
+    }
+    fn build(&self) -> Self::Entity {
+        let mut inner = Vec::with_capacity(self.expected_length());
+        self.write(&mut inner)
+            .unwrap_or_else(|_| panic!("{} build should be ok", Self::NAME));
+        GossipMessage::new_unchecked(inner.into())
+    }
+}
+#[derive(Debug, Clone)]
+pub enum GossipMessageUnion {
+    BroadcastMessagesResult(BroadcastMessagesResult),
+    BroadcastMessagesFilter(BroadcastMessagesFilter),
+    GetBroadcastMessages(GetBroadcastMessages),
+    QueryBroadcastMessages(QueryBroadcastMessages),
+}
+#[derive(Debug, Clone, Copy)]
+pub enum GossipMessageUnionReader<'r> {
+    BroadcastMessagesResult(BroadcastMessagesResultReader<'r>),
+    BroadcastMessagesFilter(BroadcastMessagesFilterReader<'r>),
+    GetBroadcastMessages(GetBroadcastMessagesReader<'r>),
+    QueryBroadcastMessages(QueryBroadcastMessagesReader<'r>),
+}
+impl ::core::default::Default for GossipMessageUnion {
+    fn default() -> Self {
+        GossipMessageUnion::BroadcastMessagesResult(::core::default::Default::default())
+    }
+}
+impl ::core::fmt::Display for GossipMessageUnion {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        match self {
+            GossipMessageUnion::BroadcastMessagesResult(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    BroadcastMessagesResult::NAME,
+                    item
+                )
+            }
+            GossipMessageUnion::BroadcastMessagesFilter(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    BroadcastMessagesFilter::NAME,
+                    item
+                )
+            }
+            GossipMessageUnion::GetBroadcastMessages(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    GetBroadcastMessages::NAME,
+                    item
+                )
+            }
+            GossipMessageUnion::QueryBroadcastMessages(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    QueryBroadcastMessages::NAME,
+                    item
+                )
+            }
+        }
+    }
+}
+impl<'r> ::core::fmt::Display for GossipMessageUnionReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        match self {
+            GossipMessageUnionReader::BroadcastMessagesResult(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    BroadcastMessagesResult::NAME,
+                    item
+                )
+            }
+            GossipMessageUnionReader::BroadcastMessagesFilter(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    BroadcastMessagesFilter::NAME,
+                    item
+                )
+            }
+            GossipMessageUnionReader::GetBroadcastMessages(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    GetBroadcastMessages::NAME,
+                    item
+                )
+            }
+            GossipMessageUnionReader::QueryBroadcastMessages(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    QueryBroadcastMessages::NAME,
+                    item
+                )
+            }
+        }
+    }
+}
+impl GossipMessageUnion {
+    pub(crate) fn display_inner(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        match self {
+            GossipMessageUnion::BroadcastMessagesResult(ref item) => write!(f, "{}", item),
+            GossipMessageUnion::BroadcastMessagesFilter(ref item) => write!(f, "{}", item),
+            GossipMessageUnion::GetBroadcastMessages(ref item) => write!(f, "{}", item),
+            GossipMessageUnion::QueryBroadcastMessages(ref item) => write!(f, "{}", item),
+        }
+    }
+}
+impl<'r> GossipMessageUnionReader<'r> {
+    pub(crate) fn display_inner(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        match self {
+            GossipMessageUnionReader::BroadcastMessagesResult(ref item) => write!(f, "{}", item),
+            GossipMessageUnionReader::BroadcastMessagesFilter(ref item) => write!(f, "{}", item),
+            GossipMessageUnionReader::GetBroadcastMessages(ref item) => write!(f, "{}", item),
+            GossipMessageUnionReader::QueryBroadcastMessages(ref item) => write!(f, "{}", item),
+        }
+    }
+}
+impl ::core::convert::From<BroadcastMessagesResult> for GossipMessageUnion {
+    fn from(item: BroadcastMessagesResult) -> Self {
+        GossipMessageUnion::BroadcastMessagesResult(item)
+    }
+}
+impl ::core::convert::From<BroadcastMessagesFilter> for GossipMessageUnion {
+    fn from(item: BroadcastMessagesFilter) -> Self {
+        GossipMessageUnion::BroadcastMessagesFilter(item)
+    }
+}
+impl ::core::convert::From<GetBroadcastMessages> for GossipMessageUnion {
+    fn from(item: GetBroadcastMessages) -> Self {
+        GossipMessageUnion::GetBroadcastMessages(item)
+    }
+}
+impl ::core::convert::From<QueryBroadcastMessages> for GossipMessageUnion {
+    fn from(item: QueryBroadcastMessages) -> Self {
+        GossipMessageUnion::QueryBroadcastMessages(item)
+    }
+}
+impl<'r> ::core::convert::From<BroadcastMessagesResultReader<'r>> for GossipMessageUnionReader<'r> {
+    fn from(item: BroadcastMessagesResultReader<'r>) -> Self {
+        GossipMessageUnionReader::BroadcastMessagesResult(item)
+    }
+}
+impl<'r> ::core::convert::From<BroadcastMessagesFilterReader<'r>> for GossipMessageUnionReader<'r> {
+    fn from(item: BroadcastMessagesFilterReader<'r>) -> Self {
+        GossipMessageUnionReader::BroadcastMessagesFilter(item)
+    }
+}
+impl<'r> ::core::convert::From<GetBroadcastMessagesReader<'r>> for GossipMessageUnionReader<'r> {
+    fn from(item: GetBroadcastMessagesReader<'r>) -> Self {
+        GossipMessageUnionReader::GetBroadcastMessages(item)
+    }
+}
+impl<'r> ::core::convert::From<QueryBroadcastMessagesReader<'r>> for GossipMessageUnionReader<'r> {
+    fn from(item: QueryBroadcastMessagesReader<'r>) -> Self {
+        GossipMessageUnionReader::QueryBroadcastMessages(item)
+    }
+}
+impl GossipMessageUnion {
+    pub const NAME: &'static str = "GossipMessageUnion";
+    pub fn as_bytes(&self) -> molecule::bytes::Bytes {
+        match self {
+            GossipMessageUnion::BroadcastMessagesResult(item) => item.as_bytes(),
+            GossipMessageUnion::BroadcastMessagesFilter(item) => item.as_bytes(),
+            GossipMessageUnion::GetBroadcastMessages(item) => item.as_bytes(),
+            GossipMessageUnion::QueryBroadcastMessages(item) => item.as_bytes(),
+        }
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            GossipMessageUnion::BroadcastMessagesResult(item) => item.as_slice(),
+            GossipMessageUnion::BroadcastMessagesFilter(item) => item.as_slice(),
+            GossipMessageUnion::GetBroadcastMessages(item) => item.as_slice(),
+            GossipMessageUnion::QueryBroadcastMessages(item) => item.as_slice(),
+        }
+    }
+    pub fn item_id(&self) -> molecule::Number {
+        match self {
+            GossipMessageUnion::BroadcastMessagesResult(_) => 0,
+            GossipMessageUnion::BroadcastMessagesFilter(_) => 1,
+            GossipMessageUnion::GetBroadcastMessages(_) => 2,
+            GossipMessageUnion::QueryBroadcastMessages(_) => 3,
+        }
+    }
+    pub fn item_name(&self) -> &str {
+        match self {
+            GossipMessageUnion::BroadcastMessagesResult(_) => "BroadcastMessagesResult",
+            GossipMessageUnion::BroadcastMessagesFilter(_) => "BroadcastMessagesFilter",
+            GossipMessageUnion::GetBroadcastMessages(_) => "GetBroadcastMessages",
+            GossipMessageUnion::QueryBroadcastMessages(_) => "QueryBroadcastMessages",
+        }
+    }
+    pub fn as_reader<'r>(&'r self) -> GossipMessageUnionReader<'r> {
+        match self {
+            GossipMessageUnion::BroadcastMessagesResult(item) => item.as_reader().into(),
+            GossipMessageUnion::BroadcastMessagesFilter(item) => item.as_reader().into(),
+            GossipMessageUnion::GetBroadcastMessages(item) => item.as_reader().into(),
+            GossipMessageUnion::QueryBroadcastMessages(item) => item.as_reader().into(),
+        }
+    }
+}
+impl<'r> GossipMessageUnionReader<'r> {
+    pub const NAME: &'r str = "GossipMessageUnionReader";
+    pub fn as_slice(&self) -> &'r [u8] {
+        match self {
+            GossipMessageUnionReader::BroadcastMessagesResult(item) => item.as_slice(),
+            GossipMessageUnionReader::BroadcastMessagesFilter(item) => item.as_slice(),
+            GossipMessageUnionReader::GetBroadcastMessages(item) => item.as_slice(),
+            GossipMessageUnionReader::QueryBroadcastMessages(item) => item.as_slice(),
+        }
+    }
+    pub fn item_id(&self) -> molecule::Number {
+        match self {
+            GossipMessageUnionReader::BroadcastMessagesResult(_) => 0,
+            GossipMessageUnionReader::BroadcastMessagesFilter(_) => 1,
+            GossipMessageUnionReader::GetBroadcastMessages(_) => 2,
+            GossipMessageUnionReader::QueryBroadcastMessages(_) => 3,
+        }
+    }
+    pub fn item_name(&self) -> &str {
+        match self {
+            GossipMessageUnionReader::BroadcastMessagesResult(_) => "BroadcastMessagesResult",
+            GossipMessageUnionReader::BroadcastMessagesFilter(_) => "BroadcastMessagesFilter",
+            GossipMessageUnionReader::GetBroadcastMessages(_) => "GetBroadcastMessages",
+            GossipMessageUnionReader::QueryBroadcastMessages(_) => "QueryBroadcastMessages",
+        }
+    }
+}
+impl From<BroadcastMessagesResult> for GossipMessage {
+    fn from(value: BroadcastMessagesResult) -> Self {
+        Self::new_builder().set(value).build()
+    }
+}
+impl From<BroadcastMessagesFilter> for GossipMessage {
+    fn from(value: BroadcastMessagesFilter) -> Self {
+        Self::new_builder().set(value).build()
+    }
+}
+impl From<GetBroadcastMessages> for GossipMessage {
+    fn from(value: GetBroadcastMessages) -> Self {
+        Self::new_builder().set(value).build()
+    }
+}
+impl From<QueryBroadcastMessages> for GossipMessage {
+    fn from(value: QueryBroadcastMessages) -> Self {
+        Self::new_builder().set(value).build()
+    }
+}
