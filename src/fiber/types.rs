@@ -2124,10 +2124,12 @@ impl FiberChannelMessage {
 
 #[derive(Debug, Clone)]
 pub enum GossipMessage {
-    BroadcastMessagesResult(BroadcastMessagesResult),
     BroadcastMessagesFilter(BroadcastMessagesFilter),
+    BroadcastMessagesFilterResult(BroadcastMessagesFilterResult),
     GetBroadcastMessages(GetBroadcastMessages),
+    GetBroadcastMessagesResult(GetBroadcastMessagesResult),
     QueryBroadcastMessages(QueryBroadcastMessages),
+    QueryBroadcastMessagesResult(QueryBroadcastMessagesResult),
 }
 
 impl GossipMessage {
@@ -2145,14 +2147,14 @@ impl GossipMessage {
 impl From<GossipMessage> for molecule_gossip::GossipMessageUnion {
     fn from(gossip_message: GossipMessage) -> Self {
         match gossip_message {
-            GossipMessage::BroadcastMessagesResult(broadcast_messages_result) => {
-                molecule_gossip::GossipMessageUnion::BroadcastMessagesResult(
-                    broadcast_messages_result.into(),
-                )
-            }
             GossipMessage::BroadcastMessagesFilter(broadcast_messages_filter) => {
                 molecule_gossip::GossipMessageUnion::BroadcastMessagesFilter(
                     broadcast_messages_filter.into(),
+                )
+            }
+            GossipMessage::BroadcastMessagesFilterResult(broadcast_messages_filter_result) => {
+                molecule_gossip::GossipMessageUnion::BroadcastMessagesFilterResult(
+                    broadcast_messages_filter_result.into(),
                 )
             }
             GossipMessage::GetBroadcastMessages(get_broadcast_messages) => {
@@ -2160,9 +2162,19 @@ impl From<GossipMessage> for molecule_gossip::GossipMessageUnion {
                     get_broadcast_messages.into(),
                 )
             }
+            GossipMessage::GetBroadcastMessagesResult(get_broadcast_messages_result) => {
+                molecule_gossip::GossipMessageUnion::GetBroadcastMessagesResult(
+                    get_broadcast_messages_result.into(),
+                )
+            }
             GossipMessage::QueryBroadcastMessages(query_broadcast_messages) => {
                 molecule_gossip::GossipMessageUnion::QueryBroadcastMessages(
                     query_broadcast_messages.into(),
+                )
+            }
+            GossipMessage::QueryBroadcastMessagesResult(query_broadcast_messages_result) => {
+                molecule_gossip::GossipMessageUnion::QueryBroadcastMessagesResult(
+                    query_broadcast_messages_result.into(),
                 )
             }
         }
@@ -2182,25 +2194,35 @@ impl TryFrom<molecule_gossip::GossipMessageUnion> for GossipMessage {
 
     fn try_from(gossip_message: molecule_gossip::GossipMessageUnion) -> Result<Self, Self::Error> {
         match gossip_message {
-            molecule_gossip::GossipMessageUnion::BroadcastMessagesResult(
-                broadcast_messages_result,
-            ) => Ok(GossipMessage::BroadcastMessagesResult(
-                broadcast_messages_result.try_into()?,
-            )),
             molecule_gossip::GossipMessageUnion::BroadcastMessagesFilter(
                 broadcast_messages_filter,
             ) => Ok(GossipMessage::BroadcastMessagesFilter(
                 broadcast_messages_filter.try_into()?,
+            )),
+            molecule_gossip::GossipMessageUnion::BroadcastMessagesFilterResult(
+                broadcast_messages_result,
+            ) => Ok(GossipMessage::BroadcastMessagesFilterResult(
+                broadcast_messages_result.try_into()?,
             )),
             molecule_gossip::GossipMessageUnion::GetBroadcastMessages(get_broadcast_messages) => {
                 Ok(GossipMessage::GetBroadcastMessages(
                     get_broadcast_messages.try_into()?,
                 ))
             }
+            molecule_gossip::GossipMessageUnion::GetBroadcastMessagesResult(
+                broadcast_messages_result,
+            ) => Ok(GossipMessage::GetBroadcastMessagesResult(
+                broadcast_messages_result.try_into()?,
+            )),
             molecule_gossip::GossipMessageUnion::QueryBroadcastMessages(
                 query_broadcast_messages,
             ) => Ok(GossipMessage::QueryBroadcastMessages(
                 query_broadcast_messages.try_into()?,
+            )),
+            molecule_gossip::GossipMessageUnion::QueryBroadcastMessagesResult(
+                broadcast_messages_result,
+            ) => Ok(GossipMessage::QueryBroadcastMessagesResult(
+                broadcast_messages_result.try_into()?,
             )),
         }
     }
@@ -2295,159 +2317,30 @@ impl BroadcastMessage {
 }
 
 #[derive(Debug, Clone)]
-pub struct NodeAnnouncementQuery {
-    pub node_id: Pubkey,
-    pub flags: u8,
-}
-
-impl From<NodeAnnouncementQuery> for molecule_gossip::NodeAnnouncementQuery {
-    fn from(node_announcement_query: NodeAnnouncementQuery) -> Self {
-        molecule_gossip::NodeAnnouncementQuery::new_builder()
-            .node_id(node_announcement_query.node_id.into())
-            .flags(node_announcement_query.flags.into())
-            .build()
-    }
-}
-
-impl TryFrom<molecule_gossip::NodeAnnouncementQuery> for NodeAnnouncementQuery {
-    type Error = Error;
-
-    fn try_from(
-        node_announcement_query: molecule_gossip::NodeAnnouncementQuery,
-    ) -> Result<Self, Self::Error> {
-        Ok(NodeAnnouncementQuery {
-            node_id: node_announcement_query.node_id().try_into()?,
-            flags: node_announcement_query.flags().into(),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ChannelAnnouncementQuery {
+pub struct BroadcastMessageQuery {
     pub channel_outpoint: OutPoint,
     pub flags: u8,
 }
 
-impl From<ChannelAnnouncementQuery> for molecule_gossip::ChannelAnnouncementQuery {
-    fn from(channel_announcement_query: ChannelAnnouncementQuery) -> Self {
-        molecule_gossip::ChannelAnnouncementQuery::new_builder()
-            .channel_outpoint(channel_announcement_query.channel_outpoint)
-            .flags(channel_announcement_query.flags.into())
-            .build()
-    }
-}
-
-impl TryFrom<molecule_gossip::ChannelAnnouncementQuery> for ChannelAnnouncementQuery {
-    type Error = Error;
-
-    fn try_from(
-        channel_announcement_query: molecule_gossip::ChannelAnnouncementQuery,
-    ) -> Result<Self, Self::Error> {
-        Ok(ChannelAnnouncementQuery {
-            channel_outpoint: channel_announcement_query.channel_outpoint(),
-            flags: channel_announcement_query.flags().into(),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ChannelUpdateQuery {
-    pub channel_outpoint: OutPoint,
-    pub flags: u8,
-}
-
-impl From<ChannelUpdateQuery> for molecule_gossip::ChannelUpdateQuery {
-    fn from(channel_update_query: ChannelUpdateQuery) -> Self {
-        molecule_gossip::ChannelUpdateQuery::new_builder()
-            .channel_outpoint(channel_update_query.channel_outpoint)
-            .flags(channel_update_query.flags.into())
-            .build()
-    }
-}
-
-impl TryFrom<molecule_gossip::ChannelUpdateQuery> for ChannelUpdateQuery {
-    type Error = Error;
-
-    fn try_from(
-        channel_update_query: molecule_gossip::ChannelUpdateQuery,
-    ) -> Result<Self, Self::Error> {
-        Ok(ChannelUpdateQuery {
-            channel_outpoint: channel_update_query.channel_outpoint(),
-            flags: channel_update_query.flags().into(),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum FiberBroadcastMessageQuery {
-    NodeAnnouncement(NodeAnnouncementQuery),
-    ChannelAnnouncement(ChannelAnnouncementQuery),
-    ChannelUpdate(ChannelUpdateQuery),
-}
-
-impl From<FiberBroadcastMessageQuery> for molecule_gossip::BroadcastMessageQuery {
-    fn from(fiber_broadcast_message_query: FiberBroadcastMessageQuery) -> Self {
+impl From<BroadcastMessageQuery> for molecule_gossip::BroadcastMessageQuery {
+    fn from(broadcast_message_query: BroadcastMessageQuery) -> Self {
         molecule_gossip::BroadcastMessageQuery::new_builder()
-            .set(fiber_broadcast_message_query)
+            .channel_outpoint(broadcast_message_query.channel_outpoint)
+            .flags(broadcast_message_query.flags.into())
             .build()
     }
 }
 
-impl TryFrom<molecule_gossip::BroadcastMessageQuery> for FiberBroadcastMessageQuery {
+impl TryFrom<molecule_gossip::BroadcastMessageQuery> for BroadcastMessageQuery {
     type Error = Error;
 
     fn try_from(
-        fiber_broadcast_message_query: molecule_gossip::BroadcastMessageQuery,
+        broadcast_message_query: molecule_gossip::BroadcastMessageQuery,
     ) -> Result<Self, Self::Error> {
-        fiber_broadcast_message_query.to_enum().try_into()
-    }
-}
-
-impl From<FiberBroadcastMessageQuery> for molecule_gossip::BroadcastMessageQueryUnion {
-    fn from(fiber_broadcast_message_query: FiberBroadcastMessageQuery) -> Self {
-        match fiber_broadcast_message_query {
-            FiberBroadcastMessageQuery::NodeAnnouncement(node_announcement_query) => {
-                molecule_gossip::BroadcastMessageQueryUnion::NodeAnnouncementQuery(
-                    node_announcement_query.into(),
-                )
-            }
-            FiberBroadcastMessageQuery::ChannelAnnouncement(channel_announcement_query) => {
-                molecule_gossip::BroadcastMessageQueryUnion::ChannelAnnouncementQuery(
-                    channel_announcement_query.into(),
-                )
-            }
-            FiberBroadcastMessageQuery::ChannelUpdate(channel_update_query) => {
-                molecule_gossip::BroadcastMessageQueryUnion::ChannelUpdateQuery(
-                    channel_update_query.into(),
-                )
-            }
-        }
-    }
-}
-
-impl TryFrom<molecule_gossip::BroadcastMessageQueryUnion> for FiberBroadcastMessageQuery {
-    type Error = Error;
-
-    fn try_from(
-        fiber_broadcast_message_query: molecule_gossip::BroadcastMessageQueryUnion,
-    ) -> Result<Self, Self::Error> {
-        match fiber_broadcast_message_query {
-            molecule_gossip::BroadcastMessageQueryUnion::NodeAnnouncementQuery(
-                node_announcement_query,
-            ) => Ok(FiberBroadcastMessageQuery::NodeAnnouncement(
-                node_announcement_query.try_into()?,
-            )),
-            molecule_gossip::BroadcastMessageQueryUnion::ChannelAnnouncementQuery(
-                channel_announcement_query,
-            ) => Ok(FiberBroadcastMessageQuery::ChannelAnnouncement(
-                channel_announcement_query.try_into()?,
-            )),
-            molecule_gossip::BroadcastMessageQueryUnion::ChannelUpdateQuery(
-                channel_update_query,
-            ) => Ok(FiberBroadcastMessageQuery::ChannelUpdate(
-                channel_update_query.try_into()?,
-            )),
-        }
+        Ok(BroadcastMessageQuery {
+            channel_outpoint: broadcast_message_query.channel_outpoint(),
+            flags: broadcast_message_query.flags().into(),
+        })
     }
 }
 
@@ -2510,48 +2403,6 @@ impl From<molecule_gossip::Uint16> for u16 {
 }
 
 #[derive(Debug, Clone)]
-pub struct BroadcastMessagesResult {
-    pub id: u64,
-    pub messages: Vec<BroadcastMessage>,
-}
-
-impl From<BroadcastMessagesResult> for molecule_gossip::BroadcastMessagesResult {
-    fn from(get_broadcast_messages_result: BroadcastMessagesResult) -> Self {
-        molecule_gossip::BroadcastMessagesResult::new_builder()
-            .id(get_broadcast_messages_result.id.pack())
-            .messages(
-                molecule_gossip::BroadcastMessages::new_builder()
-                    .set(
-                        get_broadcast_messages_result
-                            .messages
-                            .into_iter()
-                            .map(|message| message.into())
-                            .collect(),
-                    )
-                    .build(),
-            )
-            .build()
-    }
-}
-
-impl TryFrom<molecule_gossip::BroadcastMessagesResult> for BroadcastMessagesResult {
-    type Error = Error;
-
-    fn try_from(
-        get_broadcast_messages_result: molecule_gossip::BroadcastMessagesResult,
-    ) -> Result<Self, Self::Error> {
-        Ok(BroadcastMessagesResult {
-            id: get_broadcast_messages_result.id().unpack(),
-            messages: get_broadcast_messages_result
-                .messages()
-                .into_iter()
-                .map(|message| message.try_into())
-                .collect::<Result<Vec<BroadcastMessage>, Error>>()?,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct BroadcastMessagesFilter {
     pub chain_hash: Hash256,
     pub after_cursor: Cursor,
@@ -2575,6 +2426,45 @@ impl TryFrom<molecule_gossip::BroadcastMessagesFilter> for BroadcastMessagesFilt
         Ok(BroadcastMessagesFilter {
             chain_hash: broadcast_messages_filter.chain_hash().into(),
             after_cursor: broadcast_messages_filter.after_cursor().try_into()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BroadcastMessagesFilterResult {
+    pub messages: Vec<BroadcastMessage>,
+}
+
+impl From<BroadcastMessagesFilterResult> for molecule_gossip::BroadcastMessagesFilterResult {
+    fn from(broadcast_messages_filter_result: BroadcastMessagesFilterResult) -> Self {
+        molecule_gossip::BroadcastMessagesFilterResult::new_builder()
+            .messages(
+                molecule_gossip::BroadcastMessages::new_builder()
+                    .set(
+                        broadcast_messages_filter_result
+                            .messages
+                            .into_iter()
+                            .map(|message| message.into())
+                            .collect(),
+                    )
+                    .build(),
+            )
+            .build()
+    }
+}
+
+impl TryFrom<molecule_gossip::BroadcastMessagesFilterResult> for BroadcastMessagesFilterResult {
+    type Error = Error;
+
+    fn try_from(
+        broadcast_messages_filter_result: molecule_gossip::BroadcastMessagesFilterResult,
+    ) -> Result<Self, Self::Error> {
+        Ok(BroadcastMessagesFilterResult {
+            messages: broadcast_messages_filter_result
+                .messages()
+                .into_iter()
+                .map(|message| message.try_into())
+                .collect::<Result<Vec<BroadcastMessage>, Error>>()?,
         })
     }
 }
@@ -2614,9 +2504,51 @@ impl TryFrom<molecule_gossip::GetBroadcastMessages> for GetBroadcastMessages {
 }
 
 #[derive(Debug, Clone)]
+pub struct GetBroadcastMessagesResult {
+    pub id: u64,
+    pub messages: Vec<BroadcastMessage>,
+}
+
+impl From<GetBroadcastMessagesResult> for molecule_gossip::GetBroadcastMessagesResult {
+    fn from(get_broadcast_messages_result: GetBroadcastMessagesResult) -> Self {
+        molecule_gossip::GetBroadcastMessagesResult::new_builder()
+            .id(get_broadcast_messages_result.id.pack())
+            .messages(
+                molecule_gossip::BroadcastMessages::new_builder()
+                    .set(
+                        get_broadcast_messages_result
+                            .messages
+                            .into_iter()
+                            .map(|message| message.into())
+                            .collect(),
+                    )
+                    .build(),
+            )
+            .build()
+    }
+}
+
+impl TryFrom<molecule_gossip::GetBroadcastMessagesResult> for GetBroadcastMessagesResult {
+    type Error = Error;
+
+    fn try_from(
+        get_broadcast_messages_result: molecule_gossip::GetBroadcastMessagesResult,
+    ) -> Result<Self, Self::Error> {
+        Ok(GetBroadcastMessagesResult {
+            id: get_broadcast_messages_result.id().unpack(),
+            messages: get_broadcast_messages_result
+                .messages()
+                .into_iter()
+                .map(|message| message.try_into())
+                .collect::<Result<Vec<BroadcastMessage>, Error>>()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct QueryBroadcastMessages {
     pub id: u64,
-    pub queries: Vec<FiberBroadcastMessageQuery>,
+    pub queries: Vec<BroadcastMessageQuery>,
 }
 
 impl From<QueryBroadcastMessages> for molecule_gossip::QueryBroadcastMessages {
@@ -2650,7 +2582,62 @@ impl TryFrom<molecule_gossip::QueryBroadcastMessages> for QueryBroadcastMessages
                 .queries()
                 .into_iter()
                 .map(|query| query.try_into())
-                .collect::<Result<Vec<FiberBroadcastMessageQuery>, Error>>()?,
+                .collect::<Result<Vec<_>, Error>>()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct QueryBroadcastMessagesResult {
+    pub id: u64,
+    pub messages: Vec<BroadcastMessage>,
+    pub missing_queries: Vec<u16>,
+}
+
+impl From<QueryBroadcastMessagesResult> for molecule_gossip::QueryBroadcastMessagesResult {
+    fn from(query_broadcast_messages_result: QueryBroadcastMessagesResult) -> Self {
+        molecule_gossip::QueryBroadcastMessagesResult::new_builder()
+            .id(query_broadcast_messages_result.id.pack())
+            .messages(
+                molecule_gossip::BroadcastMessages::new_builder()
+                    .set(
+                        query_broadcast_messages_result
+                            .messages
+                            .into_iter()
+                            .map(|message| message.into())
+                            .collect(),
+                    )
+                    .build(),
+            )
+            .missing_queries(
+                query_broadcast_messages_result
+                    .missing_queries
+                    .into_iter()
+                    .map(|x| x.into())
+                    .collect(),
+            )
+            .build()
+    }
+}
+
+impl TryFrom<molecule_gossip::QueryBroadcastMessagesResult> for QueryBroadcastMessagesResult {
+    type Error = Error;
+
+    fn try_from(
+        query_broadcast_messages_result: molecule_gossip::QueryBroadcastMessagesResult,
+    ) -> Result<Self, Self::Error> {
+        Ok(QueryBroadcastMessagesResult {
+            id: query_broadcast_messages_result.id().unpack(),
+            messages: query_broadcast_messages_result
+                .messages()
+                .into_iter()
+                .map(|message| message.try_into())
+                .collect::<Result<Vec<BroadcastMessage>, Error>>()?,
+            missing_queries: query_broadcast_messages_result
+                .missing_queries()
+                .into_iter()
+                .map(|x| x.into())
+                .collect(),
         })
     }
 }

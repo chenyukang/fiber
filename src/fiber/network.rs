@@ -58,10 +58,9 @@ use super::graph::{NetworkGraph, NetworkGraphStateStore};
 use super::graph_syncer::{GraphSyncer, GraphSyncerMessage};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
-    BroadcastMessage, ChannelAnnouncement, ChannelAnnouncementQuery, ChannelUpdate,
-    ChannelUpdateQuery, EcdsaSignature, FiberBroadcastMessageQuery, FiberMessage, GossipMessage,
-    Hash256, NodeAnnouncement, NodeAnnouncementQuery, OpenChannel, Privkey, Pubkey, RemoveTlc,
-    RemoveTlcReason, TlcErr, TlcErrData, TlcErrPacket, TlcErrorCode,
+    BroadcastMessage, BroadcastMessageQuery, ChannelAnnouncement, ChannelUpdate, EcdsaSignature,
+    FiberMessage, GossipMessage, Hash256, NodeAnnouncement, OpenChannel, Privkey, Pubkey,
+    RemoveTlc, RemoveTlcReason, TlcErr, TlcErrData, TlcErrPacket, TlcErrorCode,
 };
 use super::{FiberConfig, ASSUME_NETWORK_ACTOR_ALIVE};
 
@@ -685,139 +684,6 @@ where
             }
         };
         Ok(())
-    }
-
-    pub async fn query_channels_within_block_range(
-        &self,
-        start_block: u64,
-        end_block: u64,
-    ) -> (Vec<ChannelInfo>, u64, bool) {
-        let network_graph = self.network_graph.read().await;
-        let (channels, next_offset, is_finished) =
-            network_graph.get_channels_within_block_range(start_block, end_block);
-        (channels.cloned().collect(), next_offset, is_finished)
-    }
-
-    // TODO: set a upper limit for the number of message to send.
-    pub async fn query_broadcast_messages_within_time_range(
-        &self,
-        start_time: u64,
-        end_time: u64,
-    ) -> Result<(Vec<FiberBroadcastMessageQuery>, u64, bool), Error> {
-        let is_within_range = |timestamp: u64| timestamp >= start_time && timestamp < end_time;
-
-        let network_graph = self.network_graph.read().await;
-
-        let mut queries = Vec::new();
-        for node_info in network_graph.nodes() {
-            if is_within_range(node_info.timestamp) {
-                queries.push(FiberBroadcastMessageQuery::NodeAnnouncement(
-                    NodeAnnouncementQuery {
-                        node_id: node_info.node_id,
-                        flags: 0,
-                    },
-                ));
-            }
-        }
-        for channel_info in network_graph.channels() {
-            if let Some(t) = channel_info.channel_update_node1_to_node2_timestamp() {
-                if is_within_range(t) {
-                    queries.push(FiberBroadcastMessageQuery::ChannelUpdate(
-                        ChannelUpdateQuery {
-                            channel_outpoint: channel_info.out_point(),
-                            flags: channel_info.node1_to_node2_channel_update_flags(),
-                        },
-                    ));
-                }
-            }
-
-            if let Some(t) = channel_info.channel_update_node2_to_node1_timestamp() {
-                if is_within_range(t) {
-                    queries.push(FiberBroadcastMessageQuery::ChannelUpdate(
-                        ChannelUpdateQuery {
-                            channel_outpoint: channel_info.out_point(),
-                            flags: channel_info.node2_to_node1_channel_update_flags(),
-                        },
-                    ));
-                }
-            }
-        }
-        Ok((queries, end_time, true))
-    }
-
-    pub async fn query_broadcast_message(
-        &self,
-        query: FiberBroadcastMessageQuery,
-    ) -> Result<BroadcastMessage, Error> {
-        let network_graph = self.network_graph.read().await;
-        match query {
-            FiberBroadcastMessageQuery::NodeAnnouncement(NodeAnnouncementQuery {
-                node_id,
-                flags: _,
-            }) => {
-                let node_info = network_graph.get_node(node_id);
-                match node_info {
-                    Some(node_info) => Ok(BroadcastMessage::NodeAnnouncement(
-                        node_info.anouncement_msg.clone(),
-                    )),
-                    None => Err(Error::InvalidParameter(format!(
-                        "Node not found: {:?}",
-                        &node_id
-                    ))),
-                }
-            }
-            FiberBroadcastMessageQuery::ChannelAnnouncement(ChannelAnnouncementQuery {
-                channel_outpoint,
-                flags: _,
-            }) => {
-                let channel_info = network_graph.get_channel(&channel_outpoint);
-                match channel_info {
-                    Some(channel_info) => {
-                        let channel_announcement = BroadcastMessage::ChannelAnnouncement(
-                            channel_info.announcement_msg.clone(),
-                        );
-                        Ok(channel_announcement)
-                    }
-                    None => Err(Error::InvalidParameter(format!(
-                        "Channel not found: {:?}",
-                        &channel_outpoint
-                    ))),
-                }
-            }
-            FiberBroadcastMessageQuery::ChannelUpdate(ChannelUpdateQuery {
-                channel_outpoint,
-                flags,
-            }) => {
-                let channel_info = network_graph.get_channel(&channel_outpoint);
-                let is_node1_to_node2 = flags & 1 == 0;
-                match channel_info {
-                    Some(channel_info) => {
-                        let update = if is_node1_to_node2 {
-                            channel_info
-                                .node1_to_node2
-                                .as_ref()
-                                .map(|u| u.last_update_message.clone())
-                        } else {
-                            channel_info
-                                .node2_to_node1
-                                .as_ref()
-                                .map(|u| u.last_update_message.clone())
-                        };
-                        match update {
-                            Some(update) => Ok(BroadcastMessage::ChannelUpdate(update)),
-                            None => Err(Error::InvalidParameter(format!(
-                                "Channel update not found: {:?}",
-                                &channel_outpoint
-                            ))),
-                        }
-                    }
-                    None => Err(Error::InvalidParameter(format!(
-                        "Channel not found: {:?}",
-                        &channel_outpoint
-                    ))),
-                }
-            }
-        }
     }
 
     pub async fn handle_event(
