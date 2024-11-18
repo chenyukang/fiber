@@ -29,6 +29,7 @@ use secp256k1::{
 use secp256k1::{Verification, XOnlyPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+use std::io::Write;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use strum::{AsRefStr, EnumString};
@@ -351,9 +352,18 @@ impl From<Pubkey> for tentacle::secio::PublicKey {
     }
 }
 
+const PUBKEY_SIZE: usize = 33;
 impl Pubkey {
-    pub fn serialize(&self) -> [u8; 33] {
+    pub const fn serialization_len() -> usize {
+        PUBKEY_SIZE
+    }
+
+    pub fn serialize(&self) -> [u8; PUBKEY_SIZE] {
         PublicKey::from(self).serialize()
+    }
+
+    pub fn from_slice(slice: &[u8]) -> Result<Self, secp256k1::Error> {
+        PublicKey::from_slice(slice).map(Into::into)
     }
 
     pub fn tweak<I: Into<[u8; 32]>>(&self, scalar: I) -> Self {
@@ -448,9 +458,7 @@ impl TryFrom<molecule_fiber::Pubkey> for Pubkey {
 
     fn try_from(pubkey: molecule_fiber::Pubkey) -> Result<Self, Self::Error> {
         let pubkey = pubkey.as_slice();
-        PublicKey::from_slice(pubkey)
-            .map(Into::into)
-            .map_err(Into::into)
+        Ok(Self::from_slice(pubkey)?)
     }
 }
 
@@ -2344,27 +2352,93 @@ impl TryFrom<molecule_gossip::BroadcastMessageQuery> for BroadcastMessageQuery {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Cursor([u8; 45]);
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum BroadcastMessageId {
+    ChannelAnnouncement(OutPoint),
+    ChannelUpdate(OutPoint),
+    NodeAnnouncement(Pubkey),
+}
+
+// 1 byte for message type, 36 bytes for message id
+const MESSAGE_ID_SIZE: usize = 1 + 36;
+// 8 bytes for timestamp, MESSAGE_ID_SIZE bytes for message id
+const CURSOR_SIZE: usize = 8 + MESSAGE_ID_SIZE;
+
+impl BroadcastMessageId {
+    fn to_bytes(&self) -> [u8; MESSAGE_ID_SIZE] {
+        let mut result = [0u8; MESSAGE_ID_SIZE];
+        match self {
+            BroadcastMessageId::ChannelAnnouncement(channel_outpoint) => {
+                result[0] = 0;
+                result[1..].copy_from_slice(&channel_outpoint.as_bytes());
+            }
+            BroadcastMessageId::ChannelUpdate(channel_outpoint) => {
+                result[0] = 1;
+                result[1..].copy_from_slice(&channel_outpoint.as_bytes());
+            }
+            BroadcastMessageId::NodeAnnouncement(node_id) => {
+                result[0] = 2;
+                let node_id = node_id.serialize();
+                result[1..1 + node_id.len()].copy_from_slice(&node_id);
+            }
+        };
+        result
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() != MESSAGE_ID_SIZE {
+            return Err(Error::AnyHow(anyhow!(
+                "Invalid message id size: {}",
+                bytes.len()
+            )));
+        }
+        match bytes[0] {
+            0 => Ok(BroadcastMessageId::ChannelAnnouncement(
+                OutPoint::from_slice(&bytes[1..])?,
+            )),
+            1 => Ok(BroadcastMessageId::ChannelUpdate(OutPoint::from_slice(
+                &bytes[1..],
+            )?)),
+            2 => Ok(BroadcastMessageId::NodeAnnouncement(Pubkey::from_slice(
+                &bytes[1..1 + Pubkey::serialization_len()],
+            )?)),
+            _ => Err(Error::AnyHow(anyhow!(
+                "Invalid message id type: {}",
+                bytes[0]
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Cursor {
+    timestamp: u64,
+    message_id: BroadcastMessageId,
+}
 
 impl Cursor {
-    pub fn new(cursor: [u8; 45]) -> Self {
-        Cursor(cursor)
+    pub fn new(timestamp: u64, message_id: BroadcastMessageId) -> Self {
+        Self {
+            timestamp,
+            message_id,
+        }
     }
 }
 
 impl From<Cursor> for molecule_gossip::Cursor {
     fn from(cursor: Cursor) -> Self {
+        let serialized = cursor
+            .timestamp
+            .to_le_bytes()
+            .into_iter()
+            .chain(cursor.message_id.to_bytes())
+            .map(Byte::new)
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("Must serialize cursor to 45 bytes");
+
         molecule_gossip::Cursor::new_builder()
-            .set(
-                cursor
-                    .0
-                    .into_iter()
-                    .map(Byte::new)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .expect("Cursor from [u8; 45]"),
-            )
+            .set(serialized)
             .build()
     }
 }
@@ -2373,9 +2447,20 @@ impl TryFrom<molecule_gossip::Cursor> for Cursor {
     type Error = Error;
 
     fn try_from(cursor: molecule_gossip::Cursor) -> Result<Self, Self::Error> {
-        Ok(Cursor(
-            cursor.as_slice().try_into().expect("Cursor to [u8; 45]"),
-        ))
+        let slice = cursor.as_slice();
+        if slice.len() != CURSOR_SIZE {
+            return Err(Error::AnyHow(anyhow!(
+                "Invalid cursor size: {}, want {}",
+                slice.len(),
+                CURSOR_SIZE
+            )));
+        }
+        let timestamp = u64::from_le_bytes(slice[..8].try_into().expect("Cursor timestamp to u64"));
+        let message_id = BroadcastMessageId::from_bytes(&slice[8..])?;
+        Ok(Cursor {
+            timestamp,
+            message_id,
+        })
     }
 }
 

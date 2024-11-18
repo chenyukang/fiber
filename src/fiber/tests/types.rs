@@ -1,17 +1,38 @@
 use super::test_utils::generate_seckey;
 use crate::fiber::{
-    gen::fiber as molecule_fiber,
+    gen::{fiber as molecule_fiber, gossip},
     hash_algorithm::HashAlgorithm,
     tests::test_utils::generate_pubkey,
     types::{
-        secp256k1_instance, AddTlc, PaymentHopData, PeeledOnionPacket, Privkey, Pubkey, TlcErr,
-        TlcErrPacket, TlcErrorCode,
+        secp256k1_instance, AddTlc, BroadcastMessageId, Cursor, PaymentHopData, PeeledOnionPacket,
+        Privkey, Pubkey, TlcErr, TlcErrPacket, TlcErrorCode,
     },
 };
 use ckb_types::packed::OutPointBuilder;
 use ckb_types::prelude::Builder;
-use secp256k1::{Secp256k1, SecretKey};
+use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 use std::str::FromStr;
+
+fn gen_rand_public_key() -> Pubkey {
+    let secp = secp256k1_instance();
+    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
+    PublicKey::from_keypair(&key_pair).into()
+}
+
+fn gen_rand_private_key() -> Privkey {
+    let secp = secp256k1_instance();
+    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
+    SecretKey::from_keypair(&key_pair).into()
+}
+
+fn gen_rand_keypair() -> (Pubkey, Privkey) {
+    let secp = Secp256k1::new();
+    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
+    (
+        PublicKey::from_keypair(&key_pair).into(),
+        SecretKey::from_keypair(&key_pair).into(),
+    )
+}
 
 #[test]
 fn test_serde_public_key() {
@@ -24,6 +45,16 @@ fn test_serde_public_key() {
     );
     let pubkey: Pubkey = serde_json::from_str(&pk_str).unwrap();
     assert_eq!(pubkey, public_key)
+}
+
+#[test]
+fn test_serde_cursor_node_id() {
+    let now = 0u64;
+    let node_id = gen_rand_public_key();
+    let cursor = Cursor::new(now, BroadcastMessageId::NodeAnnouncement(node_id));
+    let moleculed_cursor: gossip::Cursor = cursor.clone().into();
+    let unmoleculed_cursor: Cursor = moleculed_cursor.try_into().expect("decode");
+    assert_eq!(cursor, unmoleculed_cursor);
 }
 
 #[test]
