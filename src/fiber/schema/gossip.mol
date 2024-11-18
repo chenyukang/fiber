@@ -5,10 +5,10 @@ array Uint16 [byte; 2];
 
 // A cursor for the broadcast message. Consists of the following data
 // timestamp (8 bytes in big-endian), union id (1 byte), message id (36 bytes)
-// where message ID is defined as 
-// NodeAnnouncement (union ID 0): node_id 33 bytes padding 3 zero bytes
-// ChannelAnnouncement (union ID 1): channel_outpoint, 36 bytes
-// ChannelUpdate (union ID 2): channel_outpoint, 36 bytes
+// where message ID is defined as
+// ChannelAnnouncement (union ID 0): channel_outpoint, 36 bytes
+// ChannelUpdate (union ID 1): channel_outpoint, 36 bytes
+// NodeAnnouncement (union ID 2): node_id 33 bytes padding 3 zero bytes
 // All broadcast messages are sorted by Cursor in dictionary order,
 // so whenever we pass a `after_cursor` parameter below, we want data that
 // come after the `after_cursor` in dictionary order, which basically means that we
@@ -36,32 +36,18 @@ table GetBroadcastMessages {
     count: Uint16,
 }
 
-// NodeAnnouncementQuery is a query sent to another peer to query a NodeAnnouncement message.
-// This query may be sent with other queries.
-struct NodeAnnouncementQuery {
-    node_id: Pubkey,
-    flags: byte,
-}
-
-// ChannelAnnouncementQuery is a query sent to another peer to query a ChannelAnnouncement message.
-// This query may be sent with other queries.
-struct ChannelAnnouncementQuery {
+// BroadcastMessageQuery is a query sent to another peer to query
+// ChannelAnnouncement/ChannelUpdate/NodeAnnouncement messages related a channel outpoint.
+// The `flags` is used to specify an array of bitfields. Bits have the following meaning:
+// 0 	Sender wants ChannelAnnouncement
+// 1 	Sender wants ChannelUpdate for node 1
+// 2 	Sender wants ChannelUpdate for node 2
+// 3 	Sender wants NodeAnnouncement for node 1
+// 4 	Sender wants NodeAnnouncement for node 2
+// The bit field order of these messages is the same to the union id order of cursors.
+struct BroadcastMessageQuery {
     channel_outpoint: OutPoint,
     flags: byte,
-}
-
-// ChannelUpdateQuery is a query sent to another peer to query a ChannelUpdate message.
-// This query may be sent with other queries.
-struct ChannelUpdateQuery {
-    channel_outpoint: OutPoint,
-    flags: byte,
-}
-
-// All the query messages.
-union BroadcastMessageQuery {
-    NodeAnnouncementQuery,
-    ChannelAnnouncementQuery,
-    ChannelUpdateQuery,
 }
 
 vector BroadcastMessageQueries <BroadcastMessageQuery>;
