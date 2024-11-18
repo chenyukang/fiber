@@ -15,27 +15,6 @@ array Uint16 [byte; 2];
 // need data after certain timestamp.
 array Cursor [byte; 45];
 
-// BroadcastMessagesFilter is used to instruct peer to broadcast messages to the sender.
-// The sender must only send messages after the cursor specified in `after_cursor`.
-// The sender should also send current broadcast message which are after the cursor immediately.
-table BroadcastMessagesFilter {
-    chain_hash: Byte32,
-    after_cursor: Cursor,
-}
-
-// GetBroadcastMessages is used to batch get broadcast messages from another peer.
-// This is used in the initial sync process of a node. The node should repeatedly send GetBroadcastMessages
-// to peers (with `after_cursor` replaced with the cursor of the latest data) until an empty result is returned.
-// The difference between GetBroadcastMessages and QueryBroadcastMessages is that QueryBroadcastMessages
-// will make some specific queries to some specific channels/nodes, while GetBroadcastMessages only gets
-// messages after a cursor.
-table GetBroadcastMessages {
-    id: Uint64,
-    chain_hash: Byte32,
-    after_cursor: Cursor,
-    count: Uint16,
-}
-
 // BroadcastMessageQuery is a query sent to another peer to query
 // ChannelAnnouncement/ChannelUpdate/NodeAnnouncement messages related a channel outpoint.
 // The `flags` is used to specify an array of bitfields. Bits have the following meaning:
@@ -51,15 +30,6 @@ struct BroadcastMessageQuery {
 }
 
 vector BroadcastMessageQueries <BroadcastMessageQuery>;
-
-// To query some specific messages (e.g. a NodeAnnouncement) from peers.
-// The difference between GetBroadcastMessages and QueryBroadcastMessages is that QueryBroadcastMessages
-// will make some specific queries to some specific channels/nodes, while GetBroadcastMessages only gets
-// messages after a cursor.
-table QueryBroadcastMessages {
-    id: Uint64,
-    queries: BroadcastMessageQueries,
-}
 
 // A NodeAnnouncement is a broadcast message to the network for the node information.
 // An update to the node information can be broadcasted with a NodeAnnouncement with larger timestamp. 
@@ -131,9 +101,40 @@ union BroadcastMessage {
 
 vector BroadcastMessages <BroadcastMessage>;
 
-// BroadcastMessagesFilterResult is the response to BroadcastMessagesFilter requests.
-table BroadcastMessagesFilterResult {
+vector MissingQueryIndexes <Uint16>;
+
+// BroadcastMessagesFilter is used to instruct peer to broadcast messages to the sender.
+// The sender must only send messages after the cursor specified in `after_cursor`.
+// The sender should also send current broadcast message which are after the cursor immediately.
+struct BroadcastMessagesFilter {
+    chain_hash: Byte32,
+    after_cursor: Cursor,
+}
+
+// GetBroadcastMessages is used to batch get broadcast messages from another peer.
+// This is used in the initial sync process of a node. The node should repeatedly send GetBroadcastMessages
+// to peers (with `after_cursor` replaced with the cursor of the latest data) until an empty result is returned.
+// The difference between GetBroadcastMessages and QueryBroadcastMessages is that QueryBroadcastMessages
+// will make some specific queries to some specific channels/nodes, while GetBroadcastMessages only gets
+// messages after a cursor.
+struct GetBroadcastMessages {
     id: Uint64,
+    chain_hash: Byte32,
+    after_cursor: Cursor,
+    count: Uint16,
+}
+
+// To query some specific messages (e.g. a NodeAnnouncement) from peers.
+// The difference between GetBroadcastMessages and QueryBroadcastMessages is that QueryBroadcastMessages
+// will make some specific queries to some specific channels/nodes, while GetBroadcastMessages only gets
+// messages after a cursor.
+table QueryBroadcastMessages {
+    id: Uint64,
+    queries: BroadcastMessageQueries,
+}
+
+// BroadcastMessagesFilterResult is the message to BroadcastMessagesFilter requests.
+table BroadcastMessagesFilterResult {
     messages: BroadcastMessages,
 }
 
@@ -148,7 +149,6 @@ table GetBroadcastMessagesResult {
 // The id here corresponds to the id passed by the peer. This is used to track the progress of certain request.
 // The missing_queries here is used to indicate that the results correpsonding to some queries can not be found
 // by the remote peer. The request initiator should try another remote node for the missing data.
-vector MissingQueryIndexes <Uint16>;
 table QueryBroadcastMessagesResult {
     id: Uint64,
     messages: BroadcastMessages,
