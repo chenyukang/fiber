@@ -2214,31 +2214,31 @@ impl TryFrom<molecule_gossip::GossipMessage> for GossipMessage {
 }
 
 #[derive(Debug, Clone)]
-pub enum FiberBroadcastMessage {
+pub enum BroadcastMessage {
     NodeAnnouncement(NodeAnnouncement),
     ChannelAnnouncement(ChannelAnnouncement),
     ChannelUpdate(ChannelUpdate),
 }
 
-impl From<FiberBroadcastMessage> for molecule_gossip::BroadcastMessageUnion {
-    fn from(fiber_broadcast_message: FiberBroadcastMessage) -> Self {
+impl From<BroadcastMessage> for molecule_gossip::BroadcastMessageUnion {
+    fn from(fiber_broadcast_message: BroadcastMessage) -> Self {
         match fiber_broadcast_message {
-            FiberBroadcastMessage::NodeAnnouncement(node_announcement) => {
+            BroadcastMessage::NodeAnnouncement(node_announcement) => {
                 molecule_gossip::BroadcastMessageUnion::NodeAnnouncement(node_announcement.into())
             }
-            FiberBroadcastMessage::ChannelAnnouncement(channel_announcement) => {
+            BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
                 molecule_gossip::BroadcastMessageUnion::ChannelAnnouncement(
                     channel_announcement.into(),
                 )
             }
-            FiberBroadcastMessage::ChannelUpdate(channel_update) => {
+            BroadcastMessage::ChannelUpdate(channel_update) => {
                 molecule_gossip::BroadcastMessageUnion::ChannelUpdate(channel_update.into())
             }
         }
     }
 }
 
-impl TryFrom<molecule_gossip::BroadcastMessageUnion> for FiberBroadcastMessage {
+impl TryFrom<molecule_gossip::BroadcastMessageUnion> for BroadcastMessage {
     type Error = Error;
 
     fn try_from(
@@ -2246,29 +2246,29 @@ impl TryFrom<molecule_gossip::BroadcastMessageUnion> for FiberBroadcastMessage {
     ) -> Result<Self, Self::Error> {
         match fiber_broadcast_message {
             molecule_gossip::BroadcastMessageUnion::NodeAnnouncement(node_announcement) => Ok(
-                FiberBroadcastMessage::NodeAnnouncement(node_announcement.try_into()?),
+                BroadcastMessage::NodeAnnouncement(node_announcement.try_into()?),
             ),
             molecule_gossip::BroadcastMessageUnion::ChannelAnnouncement(channel_announcement) => {
-                Ok(FiberBroadcastMessage::ChannelAnnouncement(
+                Ok(BroadcastMessage::ChannelAnnouncement(
                     channel_announcement.try_into()?,
                 ))
             }
-            molecule_gossip::BroadcastMessageUnion::ChannelUpdate(channel_update) => Ok(
-                FiberBroadcastMessage::ChannelUpdate(channel_update.try_into()?),
-            ),
+            molecule_gossip::BroadcastMessageUnion::ChannelUpdate(channel_update) => {
+                Ok(BroadcastMessage::ChannelUpdate(channel_update.try_into()?))
+            }
         }
     }
 }
 
-impl From<FiberBroadcastMessage> for molecule_gossip::BroadcastMessage {
-    fn from(fiber_broadcast_message: FiberBroadcastMessage) -> Self {
+impl From<BroadcastMessage> for molecule_gossip::BroadcastMessage {
+    fn from(fiber_broadcast_message: BroadcastMessage) -> Self {
         molecule_gossip::BroadcastMessage::new_builder()
             .set(fiber_broadcast_message)
             .build()
     }
 }
 
-impl TryFrom<molecule_gossip::BroadcastMessage> for FiberBroadcastMessage {
+impl TryFrom<molecule_gossip::BroadcastMessage> for BroadcastMessage {
     type Error = Error;
 
     fn try_from(
@@ -2278,16 +2278,16 @@ impl TryFrom<molecule_gossip::BroadcastMessage> for FiberBroadcastMessage {
     }
 }
 
-impl FiberBroadcastMessage {
+impl BroadcastMessage {
     pub fn id(&self) -> Hash256 {
         match self {
-            FiberBroadcastMessage::NodeAnnouncement(node_announcement) => {
+            BroadcastMessage::NodeAnnouncement(node_announcement) => {
                 deterministically_hash(node_announcement).into()
             }
-            FiberBroadcastMessage::ChannelAnnouncement(channel_announcement) => {
+            BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
                 deterministically_hash(channel_announcement).into()
             }
-            FiberBroadcastMessage::ChannelUpdate(channel_update) => {
+            BroadcastMessage::ChannelUpdate(channel_update) => {
                 deterministically_hash(channel_update).into()
             }
         }
@@ -2512,7 +2512,7 @@ impl From<molecule_gossip::Uint16> for u16 {
 #[derive(Debug, Clone)]
 pub struct BroadcastMessagesResult {
     pub id: u64,
-    pub messages: Vec<FiberBroadcastMessage>,
+    pub messages: Vec<BroadcastMessage>,
 }
 
 impl From<BroadcastMessagesResult> for molecule_gossip::BroadcastMessagesResult {
@@ -2546,7 +2546,7 @@ impl TryFrom<molecule_gossip::BroadcastMessagesResult> for BroadcastMessagesResu
                 .messages()
                 .into_iter()
                 .map(|message| message.try_into())
-                .collect::<Result<Vec<FiberBroadcastMessage>, Error>>()?,
+                .collect::<Result<Vec<BroadcastMessage>, Error>>()?,
         })
     }
 }

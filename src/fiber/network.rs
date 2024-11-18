@@ -58,8 +58,8 @@ use super::graph::{NetworkGraph, NetworkGraphStateStore};
 use super::graph_syncer::{GraphSyncer, GraphSyncerMessage};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
-    ChannelAnnouncement, ChannelAnnouncementQuery, ChannelUpdate, ChannelUpdateQuery,
-    EcdsaSignature, FiberBroadcastMessage, FiberBroadcastMessageQuery, FiberMessage, GossipMessage,
+    BroadcastMessage, ChannelAnnouncement, ChannelAnnouncementQuery, ChannelUpdate,
+    ChannelUpdateQuery, EcdsaSignature, FiberBroadcastMessageQuery, FiberMessage, GossipMessage,
     Hash256, NodeAnnouncement, NodeAnnouncementQuery, OpenChannel, Privkey, Pubkey, RemoveTlc,
     RemoveTlcReason, TlcErr, TlcErrData, TlcErrPacket, TlcErrorCode,
 };
@@ -221,7 +221,7 @@ pub enum NetworkActorCommand {
     // nodes that are going to receive this message.
     ProccessChannelUpdate(PeerId, ChannelUpdate),
     // Broadcast node/channel information to the network.
-    BroadcastMessage(FiberBroadcastMessage),
+    BroadcastMessage(BroadcastMessage),
     // Broadcast local information to the network.
     BroadcastLocalInfo(LocalInfoKind),
     SignMessage([u8; 32], RpcReplyPort<EcdsaSignature>),
@@ -748,7 +748,7 @@ where
     pub async fn query_broadcast_message(
         &self,
         query: FiberBroadcastMessageQuery,
-    ) -> Result<FiberBroadcastMessage, Error> {
+    ) -> Result<BroadcastMessage, Error> {
         let network_graph = self.network_graph.read().await;
         match query {
             FiberBroadcastMessageQuery::NodeAnnouncement(NodeAnnouncementQuery {
@@ -757,7 +757,7 @@ where
             }) => {
                 let node_info = network_graph.get_node(node_id);
                 match node_info {
-                    Some(node_info) => Ok(FiberBroadcastMessage::NodeAnnouncement(
+                    Some(node_info) => Ok(BroadcastMessage::NodeAnnouncement(
                         node_info.anouncement_msg.clone(),
                     )),
                     None => Err(Error::InvalidParameter(format!(
@@ -773,7 +773,7 @@ where
                 let channel_info = network_graph.get_channel(&channel_outpoint);
                 match channel_info {
                     Some(channel_info) => {
-                        let channel_announcement = FiberBroadcastMessage::ChannelAnnouncement(
+                        let channel_announcement = BroadcastMessage::ChannelAnnouncement(
                             channel_info.announcement_msg.clone(),
                         );
                         Ok(channel_announcement)
@@ -804,7 +804,7 @@ where
                                 .map(|u| u.last_update_message.clone())
                         };
                         match update {
-                            Some(update) => Ok(FiberBroadcastMessage::ChannelUpdate(update)),
+                            Some(update) => Ok(BroadcastMessage::ChannelUpdate(update)),
                             None => Err(Error::InvalidParameter(format!(
                                 "Channel update not found: {:?}",
                                 &channel_outpoint
@@ -1348,7 +1348,7 @@ where
                     myself
                         .send_message(NetworkActorMessage::new_command(
                             NetworkActorCommand::BroadcastMessage(
-                                FiberBroadcastMessage::NodeAnnouncement(message),
+                                BroadcastMessage::NodeAnnouncement(message),
                             ),
                         ))
                         .expect(ASSUME_NETWORK_MYSELF_ALIVE);
@@ -1475,7 +1475,7 @@ where
         &self,
         state: &mut NetworkActorState<S>,
         peer_id: PeerId,
-        message: FiberBroadcastMessage,
+        message: BroadcastMessage,
     ) -> Result<(), Error> {
         if state.sync_status.is_syncing() {
             debug!(
@@ -1498,10 +1498,10 @@ where
     async fn process_broadcasted_message(
         &self,
         state: &mut NetworkActorState<S>,
-        message: FiberBroadcastMessage,
+        message: BroadcastMessage,
     ) -> Result<(), Error> {
         match message {
-            FiberBroadcastMessage::NodeAnnouncement(node_announcement) => {
+            BroadcastMessage::NodeAnnouncement(node_announcement) => {
                 let message = node_announcement.message_to_sign();
                 if !self
                     .network_graph
@@ -1545,7 +1545,7 @@ where
                 }
             }
 
-            FiberBroadcastMessage::ChannelAnnouncement(channel_announcement) => {
+            BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
                 debug!(
                     "Received channel announcement message: {:?}",
                     &channel_announcement
@@ -1705,7 +1705,7 @@ where
                 Ok(())
             }
 
-            FiberBroadcastMessage::ChannelUpdate(ref channel_update) => {
+            BroadcastMessage::ChannelUpdate(ref channel_update) => {
                 let message = channel_update.message_to_sign();
 
                 let signature = match channel_update.signature {
@@ -2256,7 +2256,7 @@ pub struct NetworkActorState<S> {
     sync_status: NetworkSyncStatus,
     // A queue of messages that are received while we are syncing network messages.
     // Need to be processed after the sync is done.
-    broadcasted_message_queue: Vec<(PeerId, FiberBroadcastMessage)>,
+    broadcasted_message_queue: Vec<(PeerId, BroadcastMessage)>,
 }
 
 #[serde_as]
@@ -2416,7 +2416,7 @@ where
             .expect("last node announcement message is present")
     }
 
-    pub fn should_message_be_broadcasted(&mut self, message: &FiberBroadcastMessage) -> bool {
+    pub fn should_message_be_broadcasted(&mut self, message: &BroadcastMessage) -> bool {
         self.broadcasted_messages.insert(message.id())
     }
 

@@ -5,7 +5,7 @@ use crate::{
         network::{get_chain_hash, NetworkActorStateStore},
         tests::test_utils::NetworkNodeConfigBuilder,
         types::{
-            ChannelAnnouncement, ChannelUpdate, FiberBroadcastMessage, FiberMessage,
+            ChannelAnnouncement, ChannelUpdate, BroadcastMessage, FiberMessage,
             NodeAnnouncement, Privkey, Pubkey,
         },
         NetworkActorCommand, NetworkActorEvent, NetworkActorMessage,
@@ -162,7 +162,7 @@ async fn test_sync_channel_announcement_on_startup() {
         .network_actor
         .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
             get_test_peer_id(),
-            FiberMessage::BroadcastMessage(FiberBroadcastMessage::ChannelAnnouncement(
+            FiberMessage::BroadcastMessage(BroadcastMessage::ChannelAnnouncement(
                 channel_announcement.clone(),
             )),
         )))
@@ -222,7 +222,7 @@ async fn create_a_channel() -> (NetworkNode, ChannelInfo, Privkey, Privkey, Priv
         .network_actor
         .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
             get_test_peer_id(),
-            FiberMessage::BroadcastMessage(FiberBroadcastMessage::ChannelAnnouncement(
+            FiberMessage::BroadcastMessage(BroadcastMessage::ChannelAnnouncement(
                 channel_announcement.clone(),
             )),
         )))
@@ -260,7 +260,7 @@ async fn test_node1_node2_channel_update() {
         node.network_actor
             .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
                 get_test_peer_id(),
-                FiberMessage::BroadcastMessage(FiberBroadcastMessage::ChannelUpdate(
+                FiberMessage::BroadcastMessage(BroadcastMessage::ChannelUpdate(
                     channel_update.clone(),
                 )),
             )))
@@ -329,7 +329,7 @@ async fn test_channel_update_version() {
         node.network_actor
             .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
                 get_test_peer_id(),
-                FiberMessage::BroadcastMessage(FiberBroadcastMessage::ChannelUpdate(
+                FiberMessage::BroadcastMessage(BroadcastMessage::ChannelUpdate(
                     channel_update.clone(),
                 )),
             )))
@@ -396,7 +396,7 @@ async fn test_sync_node_announcement_version() {
     node.network_actor
         .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
             test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
+            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
                 create_fake_node_announcement_mesage_version2(),
             )),
         )))
@@ -416,7 +416,7 @@ async fn test_sync_node_announcement_version() {
     node.network_actor
         .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
             test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
+            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
                 create_fake_node_announcement_mesage_version1(),
             )),
         )))
@@ -436,7 +436,7 @@ async fn test_sync_node_announcement_version() {
     node.network_actor
         .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
             test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
+            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
                 create_fake_node_announcement_mesage_version3(),
             )),
         )))
@@ -470,7 +470,7 @@ async fn test_sync_node_announcement_on_startup() {
         .network_actor
         .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
             test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
+            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
                 create_fake_node_announcement_mesage_version1(),
             )),
         )))
@@ -517,7 +517,7 @@ async fn test_sync_node_announcement_after_restart() {
         .network_actor
         .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
             test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
+            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
                 create_fake_node_announcement_mesage_version1(),
             )),
         )))
@@ -580,7 +580,7 @@ async fn test_persisting_announced_nodes() {
     node.network_actor
         .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
             peer_id.clone(),
-            FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
+            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
                 create_fake_node_announcement_mesage_version1(),
             )),
         )))
