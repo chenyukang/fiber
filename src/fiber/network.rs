@@ -1208,9 +1208,6 @@ where
             NetworkActorCommand::BroadcastLocalInfo(kind) => match kind {
                 LocalInfoKind::NodeAnnouncement => {
                     let message = state.get_or_create_new_node_announcement_message();
-                    // Need also to update our own graph with the new node announcement.
-                    let mut graph = self.network_graph.write().await;
-                    graph.process_node_announcement(message.clone());
                     myself
                         .send_message(NetworkActorMessage::new_command(
                             NetworkActorCommand::BroadcastMessage(
@@ -1223,18 +1220,6 @@ where
             NetworkActorCommand::MarkSyncingDone => {
                 info!("Syncing network information finished");
                 state.sync_status = NetworkSyncStatus::Done;
-                let mut broadcasted_message_queue = vec![];
-                // Consume broadcasted message queue without consue the whole state.
-                std::mem::swap(
-                    &mut state.broadcasted_message_queue,
-                    &mut broadcasted_message_queue,
-                );
-                for message in broadcasted_message_queue {
-                    let (_peer_id, message) = message;
-                    if let Err(e) = self.process_broadcasted_message(state, message).await {
-                        error!("Failed to process broadcasted message: {:?}", e);
-                    }
-                }
                 // Send a service event that manifests the syncing is done.
                 myself
                     .send_message(NetworkActorMessage::new_event(
@@ -1335,30 +1320,6 @@ where
             }
         };
         Ok(())
-    }
-
-    async fn process_or_stash_broadcasted_message(
-        &self,
-        state: &mut NetworkActorState<S>,
-        peer_id: PeerId,
-        message: BroadcastMessage,
-    ) -> Result<(), Error> {
-        if state.sync_status.is_syncing() {
-            debug!(
-                "Saving broadcasted message to queue as we are syncing: {:?}",
-                &message
-            );
-            state.broadcasted_message_queue.push((peer_id, message));
-            return Ok(());
-        }
-        // Rebroadcast the message to other peers if necessary.
-        state
-            .network
-            .send_message(NetworkActorMessage::new_command(
-                NetworkActorCommand::BroadcastMessage(message.clone()),
-            ))
-            .expect(ASSUME_NETWORK_MYSELF_ALIVE);
-        self.process_broadcasted_message(state, message).await
     }
 
     async fn process_broadcasted_message(
@@ -2120,9 +2081,6 @@ pub struct NetworkActorState<S> {
     original_requests: HashMap<(PeerId, u64), u64>,
     // This field holds the information about our syncing status.
     sync_status: NetworkSyncStatus,
-    // A queue of messages that are received while we are syncing network messages.
-    // Need to be processed after the sync is done.
-    broadcasted_message_queue: Vec<(PeerId, BroadcastMessage)>,
 }
 
 #[serde_as]
@@ -3527,7 +3485,6 @@ where
             broadcast_message_responses: Default::default(),
             original_requests: Default::default(),
             sync_status,
-            broadcasted_message_queue: Default::default(),
         };
 
         // Save our own NodeInfo to the network graph.
