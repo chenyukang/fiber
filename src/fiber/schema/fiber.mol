@@ -1,8 +1,6 @@
 import blockchain;
 
 vector EcdsaSignature <byte>;
-array SchnorrSignature [byte; 64];
-array SchnorrXOnlyPubkey [byte; 32];
 array PubNonce [byte; 66]; // PubNonce used by musig2 crate.
 option PubNonceOpt (PubNonce);
 array Pubkey [byte; 33];

@@ -2,6 +2,8 @@ import blockchain;
 import fiber;
 
 array Uint16 [byte; 2];
+array SchnorrSignature [byte; 64];
+array SchnorrXOnlyPubkey [byte; 32];
 
 // A cursor for the broadcast message. Consists of the following data
 // timestamp (8 bytes in big-endian), union id (1 byte), message id (36 bytes)

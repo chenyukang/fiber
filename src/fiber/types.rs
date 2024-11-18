@@ -482,9 +482,9 @@ impl TryFrom<molecule_fiber::EcdsaSignature> for EcdsaSignature {
     }
 }
 
-impl From<XOnlyPublicKey> for molecule_fiber::SchnorrXOnlyPubkey {
-    fn from(pk: XOnlyPublicKey) -> molecule_fiber::SchnorrXOnlyPubkey {
-        molecule_fiber::SchnorrXOnlyPubkey::new_builder()
+impl From<XOnlyPublicKey> for molecule_gossip::SchnorrXOnlyPubkey {
+    fn from(pk: XOnlyPublicKey) -> molecule_gossip::SchnorrXOnlyPubkey {
+        molecule_gossip::SchnorrXOnlyPubkey::new_builder()
             .set(
                 pk.serialize()
                     .into_iter()
@@ -497,18 +497,18 @@ impl From<XOnlyPublicKey> for molecule_fiber::SchnorrXOnlyPubkey {
     }
 }
 
-impl TryFrom<molecule_fiber::SchnorrXOnlyPubkey> for XOnlyPublicKey {
+impl TryFrom<molecule_gossip::SchnorrXOnlyPubkey> for XOnlyPublicKey {
     type Error = Error;
 
-    fn try_from(pubkey: molecule_fiber::SchnorrXOnlyPubkey) -> Result<Self, Self::Error> {
+    fn try_from(pubkey: molecule_gossip::SchnorrXOnlyPubkey) -> Result<Self, Self::Error> {
         let pubkey = pubkey.as_slice();
         XOnlyPublicKey::from_slice(pubkey).map_err(Into::into)
     }
 }
 
-impl From<SchnorrSignature> for molecule_fiber::SchnorrSignature {
-    fn from(signature: SchnorrSignature) -> molecule_fiber::SchnorrSignature {
-        molecule_fiber::SchnorrSignature::new_builder()
+impl From<SchnorrSignature> for molecule_gossip::SchnorrSignature {
+    fn from(signature: SchnorrSignature) -> molecule_gossip::SchnorrSignature {
+        molecule_gossip::SchnorrSignature::new_builder()
             .set(
                 signature
                     .serialize()
@@ -522,10 +522,10 @@ impl From<SchnorrSignature> for molecule_fiber::SchnorrSignature {
     }
 }
 
-impl TryFrom<molecule_fiber::SchnorrSignature> for SchnorrSignature {
+impl TryFrom<molecule_gossip::SchnorrSignature> for SchnorrSignature {
     type Error = Error;
 
-    fn try_from(signature: molecule_fiber::SchnorrSignature) -> Result<Self, Self::Error> {
+    fn try_from(signature: molecule_gossip::SchnorrSignature) -> Result<Self, Self::Error> {
         let signature = signature.as_slice();
         SchnorrSignature::from_slice(signature)
             .map(Into::into)
