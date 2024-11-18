@@ -5269,8 +5269,8 @@ impl ::core::iter::FromIterator<BroadcastMessage> for BroadcastMessages {
     }
 }
 #[derive(Clone)]
-pub struct BroadcastMessagesResult(molecule::bytes::Bytes);
-impl ::core::fmt::LowerHex for BroadcastMessagesResult {
+pub struct BroadcastMessagesFilterResult(molecule::bytes::Bytes);
+impl ::core::fmt::LowerHex for BroadcastMessagesFilterResult {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         use molecule::hex_string;
         if f.alternate() {
@@ -5279,12 +5279,12 @@ impl ::core::fmt::LowerHex for BroadcastMessagesResult {
         write!(f, "{}", hex_string(self.as_slice()))
     }
 }
-impl ::core::fmt::Debug for BroadcastMessagesResult {
+impl ::core::fmt::Debug for BroadcastMessagesFilterResult {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{}({:#x})", Self::NAME, self)
     }
 }
-impl ::core::fmt::Display for BroadcastMessagesResult {
+impl ::core::fmt::Display for BroadcastMessagesFilterResult {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{} {{ ", Self::NAME)?;
         write!(f, "{}: {}", "id", self.id())?;
@@ -5296,13 +5296,13 @@ impl ::core::fmt::Display for BroadcastMessagesResult {
         write!(f, " }}")
     }
 }
-impl ::core::default::Default for BroadcastMessagesResult {
+impl ::core::default::Default for BroadcastMessagesFilterResult {
     fn default() -> Self {
         let v = molecule::bytes::Bytes::from_static(&Self::DEFAULT_VALUE);
-        BroadcastMessagesResult::new_unchecked(v)
+        BroadcastMessagesFilterResult::new_unchecked(v)
     }
 }
-impl BroadcastMessagesResult {
+impl BroadcastMessagesFilterResult {
     const DEFAULT_VALUE: [u8; 24] = [
         24, 0, 0, 0, 12, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
     ];
@@ -5339,15 +5339,15 @@ impl BroadcastMessagesResult {
             BroadcastMessages::new_unchecked(self.0.slice(start..))
         }
     }
-    pub fn as_reader<'r>(&'r self) -> BroadcastMessagesResultReader<'r> {
-        BroadcastMessagesResultReader::new_unchecked(self.as_slice())
+    pub fn as_reader<'r>(&'r self) -> BroadcastMessagesFilterResultReader<'r> {
+        BroadcastMessagesFilterResultReader::new_unchecked(self.as_slice())
     }
 }
-impl molecule::prelude::Entity for BroadcastMessagesResult {
-    type Builder = BroadcastMessagesResultBuilder;
-    const NAME: &'static str = "BroadcastMessagesResult";
+impl molecule::prelude::Entity for BroadcastMessagesFilterResult {
+    type Builder = BroadcastMessagesFilterResultBuilder;
+    const NAME: &'static str = "BroadcastMessagesFilterResult";
     fn new_unchecked(data: molecule::bytes::Bytes) -> Self {
-        BroadcastMessagesResult(data)
+        BroadcastMessagesFilterResult(data)
     }
     fn as_bytes(&self) -> molecule::bytes::Bytes {
         self.0.clone()
@@ -5356,10 +5356,11 @@ impl molecule::prelude::Entity for BroadcastMessagesResult {
         &self.0[..]
     }
     fn from_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
-        BroadcastMessagesResultReader::from_slice(slice).map(|reader| reader.to_entity())
+        BroadcastMessagesFilterResultReader::from_slice(slice).map(|reader| reader.to_entity())
     }
     fn from_compatible_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
-        BroadcastMessagesResultReader::from_compatible_slice(slice).map(|reader| reader.to_entity())
+        BroadcastMessagesFilterResultReader::from_compatible_slice(slice)
+            .map(|reader| reader.to_entity())
     }
     fn new_builder() -> Self::Builder {
         ::core::default::Default::default()
@@ -5369,8 +5370,8 @@ impl molecule::prelude::Entity for BroadcastMessagesResult {
     }
 }
 #[derive(Clone, Copy)]
-pub struct BroadcastMessagesResultReader<'r>(&'r [u8]);
-impl<'r> ::core::fmt::LowerHex for BroadcastMessagesResultReader<'r> {
+pub struct BroadcastMessagesFilterResultReader<'r>(&'r [u8]);
+impl<'r> ::core::fmt::LowerHex for BroadcastMessagesFilterResultReader<'r> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         use molecule::hex_string;
         if f.alternate() {
@@ -5379,12 +5380,12 @@ impl<'r> ::core::fmt::LowerHex for BroadcastMessagesResultReader<'r> {
         write!(f, "{}", hex_string(self.as_slice()))
     }
 }
-impl<'r> ::core::fmt::Debug for BroadcastMessagesResultReader<'r> {
+impl<'r> ::core::fmt::Debug for BroadcastMessagesFilterResultReader<'r> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{}({:#x})", Self::NAME, self)
     }
 }
-impl<'r> ::core::fmt::Display for BroadcastMessagesResultReader<'r> {
+impl<'r> ::core::fmt::Display for BroadcastMessagesFilterResultReader<'r> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{} {{ ", Self::NAME)?;
         write!(f, "{}: {}", "id", self.id())?;
@@ -5396,7 +5397,7 @@ impl<'r> ::core::fmt::Display for BroadcastMessagesResultReader<'r> {
         write!(f, " }}")
     }
 }
-impl<'r> BroadcastMessagesResultReader<'r> {
+impl<'r> BroadcastMessagesFilterResultReader<'r> {
     pub const FIELD_COUNT: usize = 2;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
@@ -5431,14 +5432,14 @@ impl<'r> BroadcastMessagesResultReader<'r> {
         }
     }
 }
-impl<'r> molecule::prelude::Reader<'r> for BroadcastMessagesResultReader<'r> {
-    type Entity = BroadcastMessagesResult;
-    const NAME: &'static str = "BroadcastMessagesResultReader";
+impl<'r> molecule::prelude::Reader<'r> for BroadcastMessagesFilterResultReader<'r> {
+    type Entity = BroadcastMessagesFilterResult;
+    const NAME: &'static str = "BroadcastMessagesFilterResultReader";
     fn to_entity(&self) -> Self::Entity {
         Self::Entity::new_unchecked(self.as_slice().to_owned().into())
     }
     fn new_unchecked(slice: &'r [u8]) -> Self {
-        BroadcastMessagesResultReader(slice)
+        BroadcastMessagesFilterResultReader(slice)
     }
     fn as_slice(&self) -> &'r [u8] {
         self.0
@@ -5483,11 +5484,11 @@ impl<'r> molecule::prelude::Reader<'r> for BroadcastMessagesResultReader<'r> {
     }
 }
 #[derive(Clone, Debug, Default)]
-pub struct BroadcastMessagesResultBuilder {
+pub struct BroadcastMessagesFilterResultBuilder {
     pub(crate) id: Uint64,
     pub(crate) messages: BroadcastMessages,
 }
-impl BroadcastMessagesResultBuilder {
+impl BroadcastMessagesFilterResultBuilder {
     pub const FIELD_COUNT: usize = 2;
     pub fn id(mut self, v: Uint64) -> Self {
         self.id = v;
@@ -5498,9 +5499,9 @@ impl BroadcastMessagesResultBuilder {
         self
     }
 }
-impl molecule::prelude::Builder for BroadcastMessagesResultBuilder {
-    type Entity = BroadcastMessagesResult;
-    const NAME: &'static str = "BroadcastMessagesResultBuilder";
+impl molecule::prelude::Builder for BroadcastMessagesFilterResultBuilder {
+    type Entity = BroadcastMessagesFilterResult;
+    const NAME: &'static str = "BroadcastMessagesFilterResultBuilder";
     fn expected_length(&self) -> usize {
         molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1)
             + self.id.as_slice().len()
@@ -5525,7 +5526,838 @@ impl molecule::prelude::Builder for BroadcastMessagesResultBuilder {
         let mut inner = Vec::with_capacity(self.expected_length());
         self.write(&mut inner)
             .unwrap_or_else(|_| panic!("{} build should be ok", Self::NAME));
-        BroadcastMessagesResult::new_unchecked(inner.into())
+        BroadcastMessagesFilterResult::new_unchecked(inner.into())
+    }
+}
+#[derive(Clone)]
+pub struct GetBroadcastMessagesResult(molecule::bytes::Bytes);
+impl ::core::fmt::LowerHex for GetBroadcastMessagesResult {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl ::core::fmt::Debug for GetBroadcastMessagesResult {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl ::core::fmt::Display for GetBroadcastMessagesResult {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} {{ ", Self::NAME)?;
+        write!(f, "{}: {}", "id", self.id())?;
+        write!(f, ", {}: {}", "messages", self.messages())?;
+        let extra_count = self.count_extra_fields();
+        if extra_count != 0 {
+            write!(f, ", .. ({} fields)", extra_count)?;
+        }
+        write!(f, " }}")
+    }
+}
+impl ::core::default::Default for GetBroadcastMessagesResult {
+    fn default() -> Self {
+        let v = molecule::bytes::Bytes::from_static(&Self::DEFAULT_VALUE);
+        GetBroadcastMessagesResult::new_unchecked(v)
+    }
+}
+impl GetBroadcastMessagesResult {
+    const DEFAULT_VALUE: [u8; 24] = [
+        24, 0, 0, 0, 12, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+    ];
+    pub const FIELD_COUNT: usize = 2;
+    pub fn total_size(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn field_count(&self) -> usize {
+        if self.total_size() == molecule::NUMBER_SIZE {
+            0
+        } else {
+            (molecule::unpack_number(&self.as_slice()[molecule::NUMBER_SIZE..]) as usize / 4) - 1
+        }
+    }
+    pub fn count_extra_fields(&self) -> usize {
+        self.field_count() - Self::FIELD_COUNT
+    }
+    pub fn has_extra_fields(&self) -> bool {
+        Self::FIELD_COUNT != self.field_count()
+    }
+    pub fn id(&self) -> Uint64 {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[4..]) as usize;
+        let end = molecule::unpack_number(&slice[8..]) as usize;
+        Uint64::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn messages(&self) -> BroadcastMessages {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[8..]) as usize;
+        if self.has_extra_fields() {
+            let end = molecule::unpack_number(&slice[12..]) as usize;
+            BroadcastMessages::new_unchecked(self.0.slice(start..end))
+        } else {
+            BroadcastMessages::new_unchecked(self.0.slice(start..))
+        }
+    }
+    pub fn as_reader<'r>(&'r self) -> GetBroadcastMessagesResultReader<'r> {
+        GetBroadcastMessagesResultReader::new_unchecked(self.as_slice())
+    }
+}
+impl molecule::prelude::Entity for GetBroadcastMessagesResult {
+    type Builder = GetBroadcastMessagesResultBuilder;
+    const NAME: &'static str = "GetBroadcastMessagesResult";
+    fn new_unchecked(data: molecule::bytes::Bytes) -> Self {
+        GetBroadcastMessagesResult(data)
+    }
+    fn as_bytes(&self) -> molecule::bytes::Bytes {
+        self.0.clone()
+    }
+    fn as_slice(&self) -> &[u8] {
+        &self.0[..]
+    }
+    fn from_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        GetBroadcastMessagesResultReader::from_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn from_compatible_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        GetBroadcastMessagesResultReader::from_compatible_slice(slice)
+            .map(|reader| reader.to_entity())
+    }
+    fn new_builder() -> Self::Builder {
+        ::core::default::Default::default()
+    }
+    fn as_builder(self) -> Self::Builder {
+        Self::new_builder().id(self.id()).messages(self.messages())
+    }
+}
+#[derive(Clone, Copy)]
+pub struct GetBroadcastMessagesResultReader<'r>(&'r [u8]);
+impl<'r> ::core::fmt::LowerHex for GetBroadcastMessagesResultReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl<'r> ::core::fmt::Debug for GetBroadcastMessagesResultReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl<'r> ::core::fmt::Display for GetBroadcastMessagesResultReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} {{ ", Self::NAME)?;
+        write!(f, "{}: {}", "id", self.id())?;
+        write!(f, ", {}: {}", "messages", self.messages())?;
+        let extra_count = self.count_extra_fields();
+        if extra_count != 0 {
+            write!(f, ", .. ({} fields)", extra_count)?;
+        }
+        write!(f, " }}")
+    }
+}
+impl<'r> GetBroadcastMessagesResultReader<'r> {
+    pub const FIELD_COUNT: usize = 2;
+    pub fn total_size(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn field_count(&self) -> usize {
+        if self.total_size() == molecule::NUMBER_SIZE {
+            0
+        } else {
+            (molecule::unpack_number(&self.as_slice()[molecule::NUMBER_SIZE..]) as usize / 4) - 1
+        }
+    }
+    pub fn count_extra_fields(&self) -> usize {
+        self.field_count() - Self::FIELD_COUNT
+    }
+    pub fn has_extra_fields(&self) -> bool {
+        Self::FIELD_COUNT != self.field_count()
+    }
+    pub fn id(&self) -> Uint64Reader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[4..]) as usize;
+        let end = molecule::unpack_number(&slice[8..]) as usize;
+        Uint64Reader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn messages(&self) -> BroadcastMessagesReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[8..]) as usize;
+        if self.has_extra_fields() {
+            let end = molecule::unpack_number(&slice[12..]) as usize;
+            BroadcastMessagesReader::new_unchecked(&self.as_slice()[start..end])
+        } else {
+            BroadcastMessagesReader::new_unchecked(&self.as_slice()[start..])
+        }
+    }
+}
+impl<'r> molecule::prelude::Reader<'r> for GetBroadcastMessagesResultReader<'r> {
+    type Entity = GetBroadcastMessagesResult;
+    const NAME: &'static str = "GetBroadcastMessagesResultReader";
+    fn to_entity(&self) -> Self::Entity {
+        Self::Entity::new_unchecked(self.as_slice().to_owned().into())
+    }
+    fn new_unchecked(slice: &'r [u8]) -> Self {
+        GetBroadcastMessagesResultReader(slice)
+    }
+    fn as_slice(&self) -> &'r [u8] {
+        self.0
+    }
+    fn verify(slice: &[u8], compatible: bool) -> molecule::error::VerificationResult<()> {
+        use molecule::verification_error as ve;
+        let slice_len = slice.len();
+        if slice_len < molecule::NUMBER_SIZE {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE, slice_len);
+        }
+        let total_size = molecule::unpack_number(slice) as usize;
+        if slice_len != total_size {
+            return ve!(Self, TotalSizeNotMatch, total_size, slice_len);
+        }
+        if slice_len < molecule::NUMBER_SIZE * 2 {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE * 2, slice_len);
+        }
+        let offset_first = molecule::unpack_number(&slice[molecule::NUMBER_SIZE..]) as usize;
+        if offset_first % molecule::NUMBER_SIZE != 0 || offset_first < molecule::NUMBER_SIZE * 2 {
+            return ve!(Self, OffsetsNotMatch);
+        }
+        if slice_len < offset_first {
+            return ve!(Self, HeaderIsBroken, offset_first, slice_len);
+        }
+        let field_count = offset_first / molecule::NUMBER_SIZE - 1;
+        if field_count < Self::FIELD_COUNT {
+            return ve!(Self, FieldCountNotMatch, Self::FIELD_COUNT, field_count);
+        } else if !compatible && field_count > Self::FIELD_COUNT {
+            return ve!(Self, FieldCountNotMatch, Self::FIELD_COUNT, field_count);
+        };
+        let mut offsets: Vec<usize> = slice[molecule::NUMBER_SIZE..offset_first]
+            .chunks_exact(molecule::NUMBER_SIZE)
+            .map(|x| molecule::unpack_number(x) as usize)
+            .collect();
+        offsets.push(total_size);
+        if offsets.windows(2).any(|i| i[0] > i[1]) {
+            return ve!(Self, OffsetsNotMatch);
+        }
+        Uint64Reader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
+        BroadcastMessagesReader::verify(&slice[offsets[1]..offsets[2]], compatible)?;
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct GetBroadcastMessagesResultBuilder {
+    pub(crate) id: Uint64,
+    pub(crate) messages: BroadcastMessages,
+}
+impl GetBroadcastMessagesResultBuilder {
+    pub const FIELD_COUNT: usize = 2;
+    pub fn id(mut self, v: Uint64) -> Self {
+        self.id = v;
+        self
+    }
+    pub fn messages(mut self, v: BroadcastMessages) -> Self {
+        self.messages = v;
+        self
+    }
+}
+impl molecule::prelude::Builder for GetBroadcastMessagesResultBuilder {
+    type Entity = GetBroadcastMessagesResult;
+    const NAME: &'static str = "GetBroadcastMessagesResultBuilder";
+    fn expected_length(&self) -> usize {
+        molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1)
+            + self.id.as_slice().len()
+            + self.messages.as_slice().len()
+    }
+    fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
+        let mut total_size = molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1);
+        let mut offsets = Vec::with_capacity(Self::FIELD_COUNT);
+        offsets.push(total_size);
+        total_size += self.id.as_slice().len();
+        offsets.push(total_size);
+        total_size += self.messages.as_slice().len();
+        writer.write_all(&molecule::pack_number(total_size as molecule::Number))?;
+        for offset in offsets.into_iter() {
+            writer.write_all(&molecule::pack_number(offset as molecule::Number))?;
+        }
+        writer.write_all(self.id.as_slice())?;
+        writer.write_all(self.messages.as_slice())?;
+        Ok(())
+    }
+    fn build(&self) -> Self::Entity {
+        let mut inner = Vec::with_capacity(self.expected_length());
+        self.write(&mut inner)
+            .unwrap_or_else(|_| panic!("{} build should be ok", Self::NAME));
+        GetBroadcastMessagesResult::new_unchecked(inner.into())
+    }
+}
+#[derive(Clone)]
+pub struct MissingQueryIndexes(molecule::bytes::Bytes);
+impl ::core::fmt::LowerHex for MissingQueryIndexes {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl ::core::fmt::Debug for MissingQueryIndexes {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl ::core::fmt::Display for MissingQueryIndexes {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} [", Self::NAME)?;
+        for i in 0..self.len() {
+            if i == 0 {
+                write!(f, "{}", self.get_unchecked(i))?;
+            } else {
+                write!(f, ", {}", self.get_unchecked(i))?;
+            }
+        }
+        write!(f, "]")
+    }
+}
+impl ::core::default::Default for MissingQueryIndexes {
+    fn default() -> Self {
+        let v = molecule::bytes::Bytes::from_static(&Self::DEFAULT_VALUE);
+        MissingQueryIndexes::new_unchecked(v)
+    }
+}
+impl MissingQueryIndexes {
+    const DEFAULT_VALUE: [u8; 4] = [0, 0, 0, 0];
+    pub const ITEM_SIZE: usize = 2;
+    pub fn total_size(&self) -> usize {
+        molecule::NUMBER_SIZE + Self::ITEM_SIZE * self.item_count()
+    }
+    pub fn item_count(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn len(&self) -> usize {
+        self.item_count()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    pub fn get(&self, idx: usize) -> Option<Uint16> {
+        if idx >= self.len() {
+            None
+        } else {
+            Some(self.get_unchecked(idx))
+        }
+    }
+    pub fn get_unchecked(&self, idx: usize) -> Uint16 {
+        let start = molecule::NUMBER_SIZE + Self::ITEM_SIZE * idx;
+        let end = start + Self::ITEM_SIZE;
+        Uint16::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn as_reader<'r>(&'r self) -> MissingQueryIndexesReader<'r> {
+        MissingQueryIndexesReader::new_unchecked(self.as_slice())
+    }
+}
+impl molecule::prelude::Entity for MissingQueryIndexes {
+    type Builder = MissingQueryIndexesBuilder;
+    const NAME: &'static str = "MissingQueryIndexes";
+    fn new_unchecked(data: molecule::bytes::Bytes) -> Self {
+        MissingQueryIndexes(data)
+    }
+    fn as_bytes(&self) -> molecule::bytes::Bytes {
+        self.0.clone()
+    }
+    fn as_slice(&self) -> &[u8] {
+        &self.0[..]
+    }
+    fn from_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        MissingQueryIndexesReader::from_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn from_compatible_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        MissingQueryIndexesReader::from_compatible_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn new_builder() -> Self::Builder {
+        ::core::default::Default::default()
+    }
+    fn as_builder(self) -> Self::Builder {
+        Self::new_builder().extend(self.into_iter())
+    }
+}
+#[derive(Clone, Copy)]
+pub struct MissingQueryIndexesReader<'r>(&'r [u8]);
+impl<'r> ::core::fmt::LowerHex for MissingQueryIndexesReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl<'r> ::core::fmt::Debug for MissingQueryIndexesReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl<'r> ::core::fmt::Display for MissingQueryIndexesReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} [", Self::NAME)?;
+        for i in 0..self.len() {
+            if i == 0 {
+                write!(f, "{}", self.get_unchecked(i))?;
+            } else {
+                write!(f, ", {}", self.get_unchecked(i))?;
+            }
+        }
+        write!(f, "]")
+    }
+}
+impl<'r> MissingQueryIndexesReader<'r> {
+    pub const ITEM_SIZE: usize = 2;
+    pub fn total_size(&self) -> usize {
+        molecule::NUMBER_SIZE + Self::ITEM_SIZE * self.item_count()
+    }
+    pub fn item_count(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn len(&self) -> usize {
+        self.item_count()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    pub fn get(&self, idx: usize) -> Option<Uint16Reader<'r>> {
+        if idx >= self.len() {
+            None
+        } else {
+            Some(self.get_unchecked(idx))
+        }
+    }
+    pub fn get_unchecked(&self, idx: usize) -> Uint16Reader<'r> {
+        let start = molecule::NUMBER_SIZE + Self::ITEM_SIZE * idx;
+        let end = start + Self::ITEM_SIZE;
+        Uint16Reader::new_unchecked(&self.as_slice()[start..end])
+    }
+}
+impl<'r> molecule::prelude::Reader<'r> for MissingQueryIndexesReader<'r> {
+    type Entity = MissingQueryIndexes;
+    const NAME: &'static str = "MissingQueryIndexesReader";
+    fn to_entity(&self) -> Self::Entity {
+        Self::Entity::new_unchecked(self.as_slice().to_owned().into())
+    }
+    fn new_unchecked(slice: &'r [u8]) -> Self {
+        MissingQueryIndexesReader(slice)
+    }
+    fn as_slice(&self) -> &'r [u8] {
+        self.0
+    }
+    fn verify(slice: &[u8], _compatible: bool) -> molecule::error::VerificationResult<()> {
+        use molecule::verification_error as ve;
+        let slice_len = slice.len();
+        if slice_len < molecule::NUMBER_SIZE {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE, slice_len);
+        }
+        let item_count = molecule::unpack_number(slice) as usize;
+        if item_count == 0 {
+            if slice_len != molecule::NUMBER_SIZE {
+                return ve!(Self, TotalSizeNotMatch, molecule::NUMBER_SIZE, slice_len);
+            }
+            return Ok(());
+        }
+        let total_size = molecule::NUMBER_SIZE + Self::ITEM_SIZE * item_count;
+        if slice_len != total_size {
+            return ve!(Self, TotalSizeNotMatch, total_size, slice_len);
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct MissingQueryIndexesBuilder(pub(crate) Vec<Uint16>);
+impl MissingQueryIndexesBuilder {
+    pub const ITEM_SIZE: usize = 2;
+    pub fn set(mut self, v: Vec<Uint16>) -> Self {
+        self.0 = v;
+        self
+    }
+    pub fn push(mut self, v: Uint16) -> Self {
+        self.0.push(v);
+        self
+    }
+    pub fn extend<T: ::core::iter::IntoIterator<Item = Uint16>>(mut self, iter: T) -> Self {
+        for elem in iter {
+            self.0.push(elem);
+        }
+        self
+    }
+    pub fn replace(&mut self, index: usize, v: Uint16) -> Option<Uint16> {
+        self.0
+            .get_mut(index)
+            .map(|item| ::core::mem::replace(item, v))
+    }
+}
+impl molecule::prelude::Builder for MissingQueryIndexesBuilder {
+    type Entity = MissingQueryIndexes;
+    const NAME: &'static str = "MissingQueryIndexesBuilder";
+    fn expected_length(&self) -> usize {
+        molecule::NUMBER_SIZE + Self::ITEM_SIZE * self.0.len()
+    }
+    fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
+        writer.write_all(&molecule::pack_number(self.0.len() as molecule::Number))?;
+        for inner in &self.0[..] {
+            writer.write_all(inner.as_slice())?;
+        }
+        Ok(())
+    }
+    fn build(&self) -> Self::Entity {
+        let mut inner = Vec::with_capacity(self.expected_length());
+        self.write(&mut inner)
+            .unwrap_or_else(|_| panic!("{} build should be ok", Self::NAME));
+        MissingQueryIndexes::new_unchecked(inner.into())
+    }
+}
+pub struct MissingQueryIndexesIterator(MissingQueryIndexes, usize, usize);
+impl ::core::iter::Iterator for MissingQueryIndexesIterator {
+    type Item = Uint16;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.1 >= self.2 {
+            None
+        } else {
+            let ret = self.0.get_unchecked(self.1);
+            self.1 += 1;
+            Some(ret)
+        }
+    }
+}
+impl ::core::iter::ExactSizeIterator for MissingQueryIndexesIterator {
+    fn len(&self) -> usize {
+        self.2 - self.1
+    }
+}
+impl ::core::iter::IntoIterator for MissingQueryIndexes {
+    type Item = Uint16;
+    type IntoIter = MissingQueryIndexesIterator;
+    fn into_iter(self) -> Self::IntoIter {
+        let len = self.len();
+        MissingQueryIndexesIterator(self, 0, len)
+    }
+}
+impl<'r> MissingQueryIndexesReader<'r> {
+    pub fn iter<'t>(&'t self) -> MissingQueryIndexesReaderIterator<'t, 'r> {
+        MissingQueryIndexesReaderIterator(&self, 0, self.len())
+    }
+}
+pub struct MissingQueryIndexesReaderIterator<'t, 'r>(
+    &'t MissingQueryIndexesReader<'r>,
+    usize,
+    usize,
+);
+impl<'t: 'r, 'r> ::core::iter::Iterator for MissingQueryIndexesReaderIterator<'t, 'r> {
+    type Item = Uint16Reader<'t>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.1 >= self.2 {
+            None
+        } else {
+            let ret = self.0.get_unchecked(self.1);
+            self.1 += 1;
+            Some(ret)
+        }
+    }
+}
+impl<'t: 'r, 'r> ::core::iter::ExactSizeIterator for MissingQueryIndexesReaderIterator<'t, 'r> {
+    fn len(&self) -> usize {
+        self.2 - self.1
+    }
+}
+impl ::core::iter::FromIterator<Uint16> for MissingQueryIndexes {
+    fn from_iter<T: IntoIterator<Item = Uint16>>(iter: T) -> Self {
+        Self::new_builder().extend(iter).build()
+    }
+}
+#[derive(Clone)]
+pub struct QueryBroadcastMessagesResult(molecule::bytes::Bytes);
+impl ::core::fmt::LowerHex for QueryBroadcastMessagesResult {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl ::core::fmt::Debug for QueryBroadcastMessagesResult {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl ::core::fmt::Display for QueryBroadcastMessagesResult {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} {{ ", Self::NAME)?;
+        write!(f, "{}: {}", "id", self.id())?;
+        write!(f, ", {}: {}", "messages", self.messages())?;
+        write!(f, ", {}: {}", "missing_queries", self.missing_queries())?;
+        let extra_count = self.count_extra_fields();
+        if extra_count != 0 {
+            write!(f, ", .. ({} fields)", extra_count)?;
+        }
+        write!(f, " }}")
+    }
+}
+impl ::core::default::Default for QueryBroadcastMessagesResult {
+    fn default() -> Self {
+        let v = molecule::bytes::Bytes::from_static(&Self::DEFAULT_VALUE);
+        QueryBroadcastMessagesResult::new_unchecked(v)
+    }
+}
+impl QueryBroadcastMessagesResult {
+    const DEFAULT_VALUE: [u8; 32] = [
+        32, 0, 0, 0, 16, 0, 0, 0, 24, 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0,
+        0, 0, 0,
+    ];
+    pub const FIELD_COUNT: usize = 3;
+    pub fn total_size(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn field_count(&self) -> usize {
+        if self.total_size() == molecule::NUMBER_SIZE {
+            0
+        } else {
+            (molecule::unpack_number(&self.as_slice()[molecule::NUMBER_SIZE..]) as usize / 4) - 1
+        }
+    }
+    pub fn count_extra_fields(&self) -> usize {
+        self.field_count() - Self::FIELD_COUNT
+    }
+    pub fn has_extra_fields(&self) -> bool {
+        Self::FIELD_COUNT != self.field_count()
+    }
+    pub fn id(&self) -> Uint64 {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[4..]) as usize;
+        let end = molecule::unpack_number(&slice[8..]) as usize;
+        Uint64::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn messages(&self) -> BroadcastMessages {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[8..]) as usize;
+        let end = molecule::unpack_number(&slice[12..]) as usize;
+        BroadcastMessages::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn missing_queries(&self) -> MissingQueryIndexes {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[12..]) as usize;
+        if self.has_extra_fields() {
+            let end = molecule::unpack_number(&slice[16..]) as usize;
+            MissingQueryIndexes::new_unchecked(self.0.slice(start..end))
+        } else {
+            MissingQueryIndexes::new_unchecked(self.0.slice(start..))
+        }
+    }
+    pub fn as_reader<'r>(&'r self) -> QueryBroadcastMessagesResultReader<'r> {
+        QueryBroadcastMessagesResultReader::new_unchecked(self.as_slice())
+    }
+}
+impl molecule::prelude::Entity for QueryBroadcastMessagesResult {
+    type Builder = QueryBroadcastMessagesResultBuilder;
+    const NAME: &'static str = "QueryBroadcastMessagesResult";
+    fn new_unchecked(data: molecule::bytes::Bytes) -> Self {
+        QueryBroadcastMessagesResult(data)
+    }
+    fn as_bytes(&self) -> molecule::bytes::Bytes {
+        self.0.clone()
+    }
+    fn as_slice(&self) -> &[u8] {
+        &self.0[..]
+    }
+    fn from_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        QueryBroadcastMessagesResultReader::from_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn from_compatible_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        QueryBroadcastMessagesResultReader::from_compatible_slice(slice)
+            .map(|reader| reader.to_entity())
+    }
+    fn new_builder() -> Self::Builder {
+        ::core::default::Default::default()
+    }
+    fn as_builder(self) -> Self::Builder {
+        Self::new_builder()
+            .id(self.id())
+            .messages(self.messages())
+            .missing_queries(self.missing_queries())
+    }
+}
+#[derive(Clone, Copy)]
+pub struct QueryBroadcastMessagesResultReader<'r>(&'r [u8]);
+impl<'r> ::core::fmt::LowerHex for QueryBroadcastMessagesResultReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl<'r> ::core::fmt::Debug for QueryBroadcastMessagesResultReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl<'r> ::core::fmt::Display for QueryBroadcastMessagesResultReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} {{ ", Self::NAME)?;
+        write!(f, "{}: {}", "id", self.id())?;
+        write!(f, ", {}: {}", "messages", self.messages())?;
+        write!(f, ", {}: {}", "missing_queries", self.missing_queries())?;
+        let extra_count = self.count_extra_fields();
+        if extra_count != 0 {
+            write!(f, ", .. ({} fields)", extra_count)?;
+        }
+        write!(f, " }}")
+    }
+}
+impl<'r> QueryBroadcastMessagesResultReader<'r> {
+    pub const FIELD_COUNT: usize = 3;
+    pub fn total_size(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn field_count(&self) -> usize {
+        if self.total_size() == molecule::NUMBER_SIZE {
+            0
+        } else {
+            (molecule::unpack_number(&self.as_slice()[molecule::NUMBER_SIZE..]) as usize / 4) - 1
+        }
+    }
+    pub fn count_extra_fields(&self) -> usize {
+        self.field_count() - Self::FIELD_COUNT
+    }
+    pub fn has_extra_fields(&self) -> bool {
+        Self::FIELD_COUNT != self.field_count()
+    }
+    pub fn id(&self) -> Uint64Reader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[4..]) as usize;
+        let end = molecule::unpack_number(&slice[8..]) as usize;
+        Uint64Reader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn messages(&self) -> BroadcastMessagesReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[8..]) as usize;
+        let end = molecule::unpack_number(&slice[12..]) as usize;
+        BroadcastMessagesReader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn missing_queries(&self) -> MissingQueryIndexesReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[12..]) as usize;
+        if self.has_extra_fields() {
+            let end = molecule::unpack_number(&slice[16..]) as usize;
+            MissingQueryIndexesReader::new_unchecked(&self.as_slice()[start..end])
+        } else {
+            MissingQueryIndexesReader::new_unchecked(&self.as_slice()[start..])
+        }
+    }
+}
+impl<'r> molecule::prelude::Reader<'r> for QueryBroadcastMessagesResultReader<'r> {
+    type Entity = QueryBroadcastMessagesResult;
+    const NAME: &'static str = "QueryBroadcastMessagesResultReader";
+    fn to_entity(&self) -> Self::Entity {
+        Self::Entity::new_unchecked(self.as_slice().to_owned().into())
+    }
+    fn new_unchecked(slice: &'r [u8]) -> Self {
+        QueryBroadcastMessagesResultReader(slice)
+    }
+    fn as_slice(&self) -> &'r [u8] {
+        self.0
+    }
+    fn verify(slice: &[u8], compatible: bool) -> molecule::error::VerificationResult<()> {
+        use molecule::verification_error as ve;
+        let slice_len = slice.len();
+        if slice_len < molecule::NUMBER_SIZE {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE, slice_len);
+        }
+        let total_size = molecule::unpack_number(slice) as usize;
+        if slice_len != total_size {
+            return ve!(Self, TotalSizeNotMatch, total_size, slice_len);
+        }
+        if slice_len < molecule::NUMBER_SIZE * 2 {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE * 2, slice_len);
+        }
+        let offset_first = molecule::unpack_number(&slice[molecule::NUMBER_SIZE..]) as usize;
+        if offset_first % molecule::NUMBER_SIZE != 0 || offset_first < molecule::NUMBER_SIZE * 2 {
+            return ve!(Self, OffsetsNotMatch);
+        }
+        if slice_len < offset_first {
+            return ve!(Self, HeaderIsBroken, offset_first, slice_len);
+        }
+        let field_count = offset_first / molecule::NUMBER_SIZE - 1;
+        if field_count < Self::FIELD_COUNT {
+            return ve!(Self, FieldCountNotMatch, Self::FIELD_COUNT, field_count);
+        } else if !compatible && field_count > Self::FIELD_COUNT {
+            return ve!(Self, FieldCountNotMatch, Self::FIELD_COUNT, field_count);
+        };
+        let mut offsets: Vec<usize> = slice[molecule::NUMBER_SIZE..offset_first]
+            .chunks_exact(molecule::NUMBER_SIZE)
+            .map(|x| molecule::unpack_number(x) as usize)
+            .collect();
+        offsets.push(total_size);
+        if offsets.windows(2).any(|i| i[0] > i[1]) {
+            return ve!(Self, OffsetsNotMatch);
+        }
+        Uint64Reader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
+        BroadcastMessagesReader::verify(&slice[offsets[1]..offsets[2]], compatible)?;
+        MissingQueryIndexesReader::verify(&slice[offsets[2]..offsets[3]], compatible)?;
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct QueryBroadcastMessagesResultBuilder {
+    pub(crate) id: Uint64,
+    pub(crate) messages: BroadcastMessages,
+    pub(crate) missing_queries: MissingQueryIndexes,
+}
+impl QueryBroadcastMessagesResultBuilder {
+    pub const FIELD_COUNT: usize = 3;
+    pub fn id(mut self, v: Uint64) -> Self {
+        self.id = v;
+        self
+    }
+    pub fn messages(mut self, v: BroadcastMessages) -> Self {
+        self.messages = v;
+        self
+    }
+    pub fn missing_queries(mut self, v: MissingQueryIndexes) -> Self {
+        self.missing_queries = v;
+        self
+    }
+}
+impl molecule::prelude::Builder for QueryBroadcastMessagesResultBuilder {
+    type Entity = QueryBroadcastMessagesResult;
+    const NAME: &'static str = "QueryBroadcastMessagesResultBuilder";
+    fn expected_length(&self) -> usize {
+        molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1)
+            + self.id.as_slice().len()
+            + self.messages.as_slice().len()
+            + self.missing_queries.as_slice().len()
+    }
+    fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
+        let mut total_size = molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1);
+        let mut offsets = Vec::with_capacity(Self::FIELD_COUNT);
+        offsets.push(total_size);
+        total_size += self.id.as_slice().len();
+        offsets.push(total_size);
+        total_size += self.messages.as_slice().len();
+        offsets.push(total_size);
+        total_size += self.missing_queries.as_slice().len();
+        writer.write_all(&molecule::pack_number(total_size as molecule::Number))?;
+        for offset in offsets.into_iter() {
+            writer.write_all(&molecule::pack_number(offset as molecule::Number))?;
+        }
+        writer.write_all(self.id.as_slice())?;
+        writer.write_all(self.messages.as_slice())?;
+        writer.write_all(self.missing_queries.as_slice())?;
+        Ok(())
+    }
+    fn build(&self) -> Self::Entity {
+        let mut inner = Vec::with_capacity(self.expected_length());
+        self.write(&mut inner)
+            .unwrap_or_else(|_| panic!("{} build should be ok", Self::NAME));
+        QueryBroadcastMessagesResult::new_unchecked(inner.into())
     }
 }
 #[derive(Clone)]
@@ -5558,20 +6390,25 @@ impl ::core::default::Default for GossipMessage {
     }
 }
 impl GossipMessage {
-    const DEFAULT_VALUE: [u8; 28] = [
-        0, 0, 0, 0, 24, 0, 0, 0, 12, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+    const DEFAULT_VALUE: [u8; 93] = [
+        0, 0, 0, 0, 89, 0, 0, 0, 12, 0, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0,
     ];
-    pub const ITEMS_COUNT: usize = 4;
+    pub const ITEMS_COUNT: usize = 6;
     pub fn item_id(&self) -> molecule::Number {
         molecule::unpack_number(self.as_slice())
     }
     pub fn to_enum(&self) -> GossipMessageUnion {
         let inner = self.0.slice(molecule::NUMBER_SIZE..);
         match self.item_id() {
-            0 => BroadcastMessagesResult::new_unchecked(inner).into(),
-            1 => BroadcastMessagesFilter::new_unchecked(inner).into(),
+            0 => BroadcastMessagesFilter::new_unchecked(inner).into(),
+            1 => BroadcastMessagesFilterResult::new_unchecked(inner).into(),
             2 => GetBroadcastMessages::new_unchecked(inner).into(),
-            3 => QueryBroadcastMessages::new_unchecked(inner).into(),
+            3 => GetBroadcastMessagesResult::new_unchecked(inner).into(),
+            4 => QueryBroadcastMessages::new_unchecked(inner).into(),
+            5 => QueryBroadcastMessagesResult::new_unchecked(inner).into(),
             _ => panic!("{}: invalid data", Self::NAME),
         }
     }
@@ -5628,17 +6465,19 @@ impl<'r> ::core::fmt::Display for GossipMessageReader<'r> {
     }
 }
 impl<'r> GossipMessageReader<'r> {
-    pub const ITEMS_COUNT: usize = 4;
+    pub const ITEMS_COUNT: usize = 6;
     pub fn item_id(&self) -> molecule::Number {
         molecule::unpack_number(self.as_slice())
     }
     pub fn to_enum(&self) -> GossipMessageUnionReader<'r> {
         let inner = &self.as_slice()[molecule::NUMBER_SIZE..];
         match self.item_id() {
-            0 => BroadcastMessagesResultReader::new_unchecked(inner).into(),
-            1 => BroadcastMessagesFilterReader::new_unchecked(inner).into(),
+            0 => BroadcastMessagesFilterReader::new_unchecked(inner).into(),
+            1 => BroadcastMessagesFilterResultReader::new_unchecked(inner).into(),
             2 => GetBroadcastMessagesReader::new_unchecked(inner).into(),
-            3 => QueryBroadcastMessagesReader::new_unchecked(inner).into(),
+            3 => GetBroadcastMessagesResultReader::new_unchecked(inner).into(),
+            4 => QueryBroadcastMessagesReader::new_unchecked(inner).into(),
+            5 => QueryBroadcastMessagesResultReader::new_unchecked(inner).into(),
             _ => panic!("{}: invalid data", Self::NAME),
         }
     }
@@ -5664,10 +6503,12 @@ impl<'r> molecule::prelude::Reader<'r> for GossipMessageReader<'r> {
         let item_id = molecule::unpack_number(slice);
         let inner_slice = &slice[molecule::NUMBER_SIZE..];
         match item_id {
-            0 => BroadcastMessagesResultReader::verify(inner_slice, compatible),
-            1 => BroadcastMessagesFilterReader::verify(inner_slice, compatible),
+            0 => BroadcastMessagesFilterReader::verify(inner_slice, compatible),
+            1 => BroadcastMessagesFilterResultReader::verify(inner_slice, compatible),
             2 => GetBroadcastMessagesReader::verify(inner_slice, compatible),
-            3 => QueryBroadcastMessagesReader::verify(inner_slice, compatible),
+            3 => GetBroadcastMessagesResultReader::verify(inner_slice, compatible),
+            4 => QueryBroadcastMessagesReader::verify(inner_slice, compatible),
+            5 => QueryBroadcastMessagesResultReader::verify(inner_slice, compatible),
             _ => ve!(Self, UnknownItem, Self::ITEMS_COUNT, item_id),
         }?;
         Ok(())
@@ -5676,7 +6517,7 @@ impl<'r> molecule::prelude::Reader<'r> for GossipMessageReader<'r> {
 #[derive(Clone, Debug, Default)]
 pub struct GossipMessageBuilder(pub(crate) GossipMessageUnion);
 impl GossipMessageBuilder {
-    pub const ITEMS_COUNT: usize = 4;
+    pub const ITEMS_COUNT: usize = 6;
     pub fn set<I>(mut self, v: I) -> Self
     where
         I: ::core::convert::Into<GossipMessageUnion>,
@@ -5704,41 +6545,45 @@ impl molecule::prelude::Builder for GossipMessageBuilder {
 }
 #[derive(Debug, Clone)]
 pub enum GossipMessageUnion {
-    BroadcastMessagesResult(BroadcastMessagesResult),
     BroadcastMessagesFilter(BroadcastMessagesFilter),
+    BroadcastMessagesFilterResult(BroadcastMessagesFilterResult),
     GetBroadcastMessages(GetBroadcastMessages),
+    GetBroadcastMessagesResult(GetBroadcastMessagesResult),
     QueryBroadcastMessages(QueryBroadcastMessages),
+    QueryBroadcastMessagesResult(QueryBroadcastMessagesResult),
 }
 #[derive(Debug, Clone, Copy)]
 pub enum GossipMessageUnionReader<'r> {
-    BroadcastMessagesResult(BroadcastMessagesResultReader<'r>),
     BroadcastMessagesFilter(BroadcastMessagesFilterReader<'r>),
+    BroadcastMessagesFilterResult(BroadcastMessagesFilterResultReader<'r>),
     GetBroadcastMessages(GetBroadcastMessagesReader<'r>),
+    GetBroadcastMessagesResult(GetBroadcastMessagesResultReader<'r>),
     QueryBroadcastMessages(QueryBroadcastMessagesReader<'r>),
+    QueryBroadcastMessagesResult(QueryBroadcastMessagesResultReader<'r>),
 }
 impl ::core::default::Default for GossipMessageUnion {
     fn default() -> Self {
-        GossipMessageUnion::BroadcastMessagesResult(::core::default::Default::default())
+        GossipMessageUnion::BroadcastMessagesFilter(::core::default::Default::default())
     }
 }
 impl ::core::fmt::Display for GossipMessageUnion {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
-            GossipMessageUnion::BroadcastMessagesResult(ref item) => {
-                write!(
-                    f,
-                    "{}::{}({})",
-                    Self::NAME,
-                    BroadcastMessagesResult::NAME,
-                    item
-                )
-            }
             GossipMessageUnion::BroadcastMessagesFilter(ref item) => {
                 write!(
                     f,
                     "{}::{}({})",
                     Self::NAME,
                     BroadcastMessagesFilter::NAME,
+                    item
+                )
+            }
+            GossipMessageUnion::BroadcastMessagesFilterResult(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    BroadcastMessagesFilterResult::NAME,
                     item
                 )
             }
@@ -5751,6 +6596,15 @@ impl ::core::fmt::Display for GossipMessageUnion {
                     item
                 )
             }
+            GossipMessageUnion::GetBroadcastMessagesResult(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    GetBroadcastMessagesResult::NAME,
+                    item
+                )
+            }
             GossipMessageUnion::QueryBroadcastMessages(ref item) => {
                 write!(
                     f,
@@ -5760,27 +6614,36 @@ impl ::core::fmt::Display for GossipMessageUnion {
                     item
                 )
             }
+            GossipMessageUnion::QueryBroadcastMessagesResult(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    QueryBroadcastMessagesResult::NAME,
+                    item
+                )
+            }
         }
     }
 }
 impl<'r> ::core::fmt::Display for GossipMessageUnionReader<'r> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
-            GossipMessageUnionReader::BroadcastMessagesResult(ref item) => {
-                write!(
-                    f,
-                    "{}::{}({})",
-                    Self::NAME,
-                    BroadcastMessagesResult::NAME,
-                    item
-                )
-            }
             GossipMessageUnionReader::BroadcastMessagesFilter(ref item) => {
                 write!(
                     f,
                     "{}::{}({})",
                     Self::NAME,
                     BroadcastMessagesFilter::NAME,
+                    item
+                )
+            }
+            GossipMessageUnionReader::BroadcastMessagesFilterResult(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    BroadcastMessagesFilterResult::NAME,
                     item
                 )
             }
@@ -5793,6 +6656,15 @@ impl<'r> ::core::fmt::Display for GossipMessageUnionReader<'r> {
                     item
                 )
             }
+            GossipMessageUnionReader::GetBroadcastMessagesResult(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    GetBroadcastMessagesResult::NAME,
+                    item
+                )
+            }
             GossipMessageUnionReader::QueryBroadcastMessages(ref item) => {
                 write!(
                     f,
@@ -5802,32 +6674,44 @@ impl<'r> ::core::fmt::Display for GossipMessageUnionReader<'r> {
                     item
                 )
             }
+            GossipMessageUnionReader::QueryBroadcastMessagesResult(ref item) => {
+                write!(
+                    f,
+                    "{}::{}({})",
+                    Self::NAME,
+                    QueryBroadcastMessagesResult::NAME,
+                    item
+                )
+            }
         }
     }
 }
 impl GossipMessageUnion {
     pub(crate) fn display_inner(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
-            GossipMessageUnion::BroadcastMessagesResult(ref item) => write!(f, "{}", item),
             GossipMessageUnion::BroadcastMessagesFilter(ref item) => write!(f, "{}", item),
+            GossipMessageUnion::BroadcastMessagesFilterResult(ref item) => write!(f, "{}", item),
             GossipMessageUnion::GetBroadcastMessages(ref item) => write!(f, "{}", item),
+            GossipMessageUnion::GetBroadcastMessagesResult(ref item) => write!(f, "{}", item),
             GossipMessageUnion::QueryBroadcastMessages(ref item) => write!(f, "{}", item),
+            GossipMessageUnion::QueryBroadcastMessagesResult(ref item) => write!(f, "{}", item),
         }
     }
 }
 impl<'r> GossipMessageUnionReader<'r> {
     pub(crate) fn display_inner(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         match self {
-            GossipMessageUnionReader::BroadcastMessagesResult(ref item) => write!(f, "{}", item),
             GossipMessageUnionReader::BroadcastMessagesFilter(ref item) => write!(f, "{}", item),
+            GossipMessageUnionReader::BroadcastMessagesFilterResult(ref item) => {
+                write!(f, "{}", item)
+            }
             GossipMessageUnionReader::GetBroadcastMessages(ref item) => write!(f, "{}", item),
+            GossipMessageUnionReader::GetBroadcastMessagesResult(ref item) => write!(f, "{}", item),
             GossipMessageUnionReader::QueryBroadcastMessages(ref item) => write!(f, "{}", item),
+            GossipMessageUnionReader::QueryBroadcastMessagesResult(ref item) => {
+                write!(f, "{}", item)
+            }
         }
-    }
-}
-impl ::core::convert::From<BroadcastMessagesResult> for GossipMessageUnion {
-    fn from(item: BroadcastMessagesResult) -> Self {
-        GossipMessageUnion::BroadcastMessagesResult(item)
     }
 }
 impl ::core::convert::From<BroadcastMessagesFilter> for GossipMessageUnion {
@@ -5835,9 +6719,19 @@ impl ::core::convert::From<BroadcastMessagesFilter> for GossipMessageUnion {
         GossipMessageUnion::BroadcastMessagesFilter(item)
     }
 }
+impl ::core::convert::From<BroadcastMessagesFilterResult> for GossipMessageUnion {
+    fn from(item: BroadcastMessagesFilterResult) -> Self {
+        GossipMessageUnion::BroadcastMessagesFilterResult(item)
+    }
+}
 impl ::core::convert::From<GetBroadcastMessages> for GossipMessageUnion {
     fn from(item: GetBroadcastMessages) -> Self {
         GossipMessageUnion::GetBroadcastMessages(item)
+    }
+}
+impl ::core::convert::From<GetBroadcastMessagesResult> for GossipMessageUnion {
+    fn from(item: GetBroadcastMessagesResult) -> Self {
+        GossipMessageUnion::GetBroadcastMessagesResult(item)
     }
 }
 impl ::core::convert::From<QueryBroadcastMessages> for GossipMessageUnion {
@@ -5845,9 +6739,9 @@ impl ::core::convert::From<QueryBroadcastMessages> for GossipMessageUnion {
         GossipMessageUnion::QueryBroadcastMessages(item)
     }
 }
-impl<'r> ::core::convert::From<BroadcastMessagesResultReader<'r>> for GossipMessageUnionReader<'r> {
-    fn from(item: BroadcastMessagesResultReader<'r>) -> Self {
-        GossipMessageUnionReader::BroadcastMessagesResult(item)
+impl ::core::convert::From<QueryBroadcastMessagesResult> for GossipMessageUnion {
+    fn from(item: QueryBroadcastMessagesResult) -> Self {
+        GossipMessageUnion::QueryBroadcastMessagesResult(item)
     }
 }
 impl<'r> ::core::convert::From<BroadcastMessagesFilterReader<'r>> for GossipMessageUnionReader<'r> {
@@ -5855,9 +6749,23 @@ impl<'r> ::core::convert::From<BroadcastMessagesFilterReader<'r>> for GossipMess
         GossipMessageUnionReader::BroadcastMessagesFilter(item)
     }
 }
+impl<'r> ::core::convert::From<BroadcastMessagesFilterResultReader<'r>>
+    for GossipMessageUnionReader<'r>
+{
+    fn from(item: BroadcastMessagesFilterResultReader<'r>) -> Self {
+        GossipMessageUnionReader::BroadcastMessagesFilterResult(item)
+    }
+}
 impl<'r> ::core::convert::From<GetBroadcastMessagesReader<'r>> for GossipMessageUnionReader<'r> {
     fn from(item: GetBroadcastMessagesReader<'r>) -> Self {
         GossipMessageUnionReader::GetBroadcastMessages(item)
+    }
+}
+impl<'r> ::core::convert::From<GetBroadcastMessagesResultReader<'r>>
+    for GossipMessageUnionReader<'r>
+{
+    fn from(item: GetBroadcastMessagesResultReader<'r>) -> Self {
+        GossipMessageUnionReader::GetBroadcastMessagesResult(item)
     }
 }
 impl<'r> ::core::convert::From<QueryBroadcastMessagesReader<'r>> for GossipMessageUnionReader<'r> {
@@ -5865,46 +6773,63 @@ impl<'r> ::core::convert::From<QueryBroadcastMessagesReader<'r>> for GossipMessa
         GossipMessageUnionReader::QueryBroadcastMessages(item)
     }
 }
+impl<'r> ::core::convert::From<QueryBroadcastMessagesResultReader<'r>>
+    for GossipMessageUnionReader<'r>
+{
+    fn from(item: QueryBroadcastMessagesResultReader<'r>) -> Self {
+        GossipMessageUnionReader::QueryBroadcastMessagesResult(item)
+    }
+}
 impl GossipMessageUnion {
     pub const NAME: &'static str = "GossipMessageUnion";
     pub fn as_bytes(&self) -> molecule::bytes::Bytes {
         match self {
-            GossipMessageUnion::BroadcastMessagesResult(item) => item.as_bytes(),
             GossipMessageUnion::BroadcastMessagesFilter(item) => item.as_bytes(),
+            GossipMessageUnion::BroadcastMessagesFilterResult(item) => item.as_bytes(),
             GossipMessageUnion::GetBroadcastMessages(item) => item.as_bytes(),
+            GossipMessageUnion::GetBroadcastMessagesResult(item) => item.as_bytes(),
             GossipMessageUnion::QueryBroadcastMessages(item) => item.as_bytes(),
+            GossipMessageUnion::QueryBroadcastMessagesResult(item) => item.as_bytes(),
         }
     }
     pub fn as_slice(&self) -> &[u8] {
         match self {
-            GossipMessageUnion::BroadcastMessagesResult(item) => item.as_slice(),
             GossipMessageUnion::BroadcastMessagesFilter(item) => item.as_slice(),
+            GossipMessageUnion::BroadcastMessagesFilterResult(item) => item.as_slice(),
             GossipMessageUnion::GetBroadcastMessages(item) => item.as_slice(),
+            GossipMessageUnion::GetBroadcastMessagesResult(item) => item.as_slice(),
             GossipMessageUnion::QueryBroadcastMessages(item) => item.as_slice(),
+            GossipMessageUnion::QueryBroadcastMessagesResult(item) => item.as_slice(),
         }
     }
     pub fn item_id(&self) -> molecule::Number {
         match self {
-            GossipMessageUnion::BroadcastMessagesResult(_) => 0,
-            GossipMessageUnion::BroadcastMessagesFilter(_) => 1,
+            GossipMessageUnion::BroadcastMessagesFilter(_) => 0,
+            GossipMessageUnion::BroadcastMessagesFilterResult(_) => 1,
             GossipMessageUnion::GetBroadcastMessages(_) => 2,
-            GossipMessageUnion::QueryBroadcastMessages(_) => 3,
+            GossipMessageUnion::GetBroadcastMessagesResult(_) => 3,
+            GossipMessageUnion::QueryBroadcastMessages(_) => 4,
+            GossipMessageUnion::QueryBroadcastMessagesResult(_) => 5,
         }
     }
     pub fn item_name(&self) -> &str {
         match self {
-            GossipMessageUnion::BroadcastMessagesResult(_) => "BroadcastMessagesResult",
             GossipMessageUnion::BroadcastMessagesFilter(_) => "BroadcastMessagesFilter",
+            GossipMessageUnion::BroadcastMessagesFilterResult(_) => "BroadcastMessagesFilterResult",
             GossipMessageUnion::GetBroadcastMessages(_) => "GetBroadcastMessages",
+            GossipMessageUnion::GetBroadcastMessagesResult(_) => "GetBroadcastMessagesResult",
             GossipMessageUnion::QueryBroadcastMessages(_) => "QueryBroadcastMessages",
+            GossipMessageUnion::QueryBroadcastMessagesResult(_) => "QueryBroadcastMessagesResult",
         }
     }
     pub fn as_reader<'r>(&'r self) -> GossipMessageUnionReader<'r> {
         match self {
-            GossipMessageUnion::BroadcastMessagesResult(item) => item.as_reader().into(),
             GossipMessageUnion::BroadcastMessagesFilter(item) => item.as_reader().into(),
+            GossipMessageUnion::BroadcastMessagesFilterResult(item) => item.as_reader().into(),
             GossipMessageUnion::GetBroadcastMessages(item) => item.as_reader().into(),
+            GossipMessageUnion::GetBroadcastMessagesResult(item) => item.as_reader().into(),
             GossipMessageUnion::QueryBroadcastMessages(item) => item.as_reader().into(),
+            GossipMessageUnion::QueryBroadcastMessagesResult(item) => item.as_reader().into(),
         }
     }
 }
@@ -5912,36 +6837,46 @@ impl<'r> GossipMessageUnionReader<'r> {
     pub const NAME: &'r str = "GossipMessageUnionReader";
     pub fn as_slice(&self) -> &'r [u8] {
         match self {
-            GossipMessageUnionReader::BroadcastMessagesResult(item) => item.as_slice(),
             GossipMessageUnionReader::BroadcastMessagesFilter(item) => item.as_slice(),
+            GossipMessageUnionReader::BroadcastMessagesFilterResult(item) => item.as_slice(),
             GossipMessageUnionReader::GetBroadcastMessages(item) => item.as_slice(),
+            GossipMessageUnionReader::GetBroadcastMessagesResult(item) => item.as_slice(),
             GossipMessageUnionReader::QueryBroadcastMessages(item) => item.as_slice(),
+            GossipMessageUnionReader::QueryBroadcastMessagesResult(item) => item.as_slice(),
         }
     }
     pub fn item_id(&self) -> molecule::Number {
         match self {
-            GossipMessageUnionReader::BroadcastMessagesResult(_) => 0,
-            GossipMessageUnionReader::BroadcastMessagesFilter(_) => 1,
+            GossipMessageUnionReader::BroadcastMessagesFilter(_) => 0,
+            GossipMessageUnionReader::BroadcastMessagesFilterResult(_) => 1,
             GossipMessageUnionReader::GetBroadcastMessages(_) => 2,
-            GossipMessageUnionReader::QueryBroadcastMessages(_) => 3,
+            GossipMessageUnionReader::GetBroadcastMessagesResult(_) => 3,
+            GossipMessageUnionReader::QueryBroadcastMessages(_) => 4,
+            GossipMessageUnionReader::QueryBroadcastMessagesResult(_) => 5,
         }
     }
     pub fn item_name(&self) -> &str {
         match self {
-            GossipMessageUnionReader::BroadcastMessagesResult(_) => "BroadcastMessagesResult",
             GossipMessageUnionReader::BroadcastMessagesFilter(_) => "BroadcastMessagesFilter",
+            GossipMessageUnionReader::BroadcastMessagesFilterResult(_) => {
+                "BroadcastMessagesFilterResult"
+            }
             GossipMessageUnionReader::GetBroadcastMessages(_) => "GetBroadcastMessages",
+            GossipMessageUnionReader::GetBroadcastMessagesResult(_) => "GetBroadcastMessagesResult",
             GossipMessageUnionReader::QueryBroadcastMessages(_) => "QueryBroadcastMessages",
+            GossipMessageUnionReader::QueryBroadcastMessagesResult(_) => {
+                "QueryBroadcastMessagesResult"
+            }
         }
-    }
-}
-impl From<BroadcastMessagesResult> for GossipMessage {
-    fn from(value: BroadcastMessagesResult) -> Self {
-        Self::new_builder().set(value).build()
     }
 }
 impl From<BroadcastMessagesFilter> for GossipMessage {
     fn from(value: BroadcastMessagesFilter) -> Self {
+        Self::new_builder().set(value).build()
+    }
+}
+impl From<BroadcastMessagesFilterResult> for GossipMessage {
+    fn from(value: BroadcastMessagesFilterResult) -> Self {
         Self::new_builder().set(value).build()
     }
 }
@@ -5950,8 +6885,18 @@ impl From<GetBroadcastMessages> for GossipMessage {
         Self::new_builder().set(value).build()
     }
 }
+impl From<GetBroadcastMessagesResult> for GossipMessage {
+    fn from(value: GetBroadcastMessagesResult) -> Self {
+        Self::new_builder().set(value).build()
+    }
+}
 impl From<QueryBroadcastMessages> for GossipMessage {
     fn from(value: QueryBroadcastMessages) -> Self {
+        Self::new_builder().set(value).build()
+    }
+}
+impl From<QueryBroadcastMessagesResult> for GossipMessage {
+    fn from(value: QueryBroadcastMessagesResult) -> Self {
         Self::new_builder().set(value).build()
     }
 }

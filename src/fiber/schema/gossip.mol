@@ -145,17 +145,31 @@ union BroadcastMessage {
 
 vector BroadcastMessages <BroadcastMessage>;
 
-// BroadcastMessagesResult is the response to GetBroadcastMessages, BroadcastMessagesFilter and QueryBroadcastMessages requests.
-// The id here corresponds to the id passed by the peer. This is used to track the progress of certain request.
-// It is recommended to use 0 for messages that doesn't corresponds to previous requests (e.g. BroadcastMessagesFilter results).
-table BroadcastMessagesResult {
+// BroadcastMessagesFilterResult is the response to BroadcastMessagesFilter requests.
+table BroadcastMessagesFilterResult {
     id: Uint64,
     messages: BroadcastMessages,
 }
 
+// GetBroadcastMessagesResult is the response to GetBroadcastMessages requests.
+// The id here corresponds to the id passed by the peer. This is used to track the progress of certain request.
+table GetBroadcastMessagesResult {
+    id: Uint64,
+    messages: BroadcastMessages,
+}
+
+vector MissingQueryIndexes <Uint16>;
+table QueryBroadcastMessagesResult {
+    id: Uint64,
+    messages: BroadcastMessages,
+    missing_queries: MissingQueryIndexes,
+}
+
 union GossipMessage {
-    BroadcastMessagesResult,
     BroadcastMessagesFilter,
+    BroadcastMessagesFilterResult,
     GetBroadcastMessages,
+    GetBroadcastMessagesResult,
     QueryBroadcastMessages,
+    QueryBroadcastMessagesResult,
 }
