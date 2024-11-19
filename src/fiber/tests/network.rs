@@ -5,7 +5,7 @@ use crate::{
         network::{get_chain_hash, NetworkActorStateStore},
         tests::test_utils::NetworkNodeConfigBuilder,
         types::{
-            ChannelAnnouncement, ChannelUpdate, BroadcastMessage, FiberMessage,
+            BroadcastMessage, ChannelAnnouncement, ChannelUpdate, FiberMessage, GossipMessage,
             NodeAnnouncement, Privkey, Pubkey,
         },
         NetworkActorCommand, NetworkActorEvent, NetworkActorMessage,
@@ -160,12 +160,12 @@ async fn test_sync_channel_announcement_on_startup() {
 
     node1
         .network_actor
-        .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-            get_test_peer_id(),
-            FiberMessage::BroadcastMessage(BroadcastMessage::ChannelAnnouncement(
-                channel_announcement.clone(),
-            )),
-        )))
+        .send_message(NetworkActorMessage::Event(
+            NetworkActorEvent::GossipMessage(
+                get_test_peer_id(),
+                GossipMessage::channel_announcement(channel_announcement.clone()),
+            ),
+        ))
         .expect("send message to network actor");
 
     node1.connect_to(&node2).await;
@@ -220,12 +220,12 @@ async fn create_a_channel() -> (NetworkNode, ChannelInfo, Privkey, Privkey, Priv
     channel_announcement.node2_signature = Some(sk2.sign(message));
     node1
         .network_actor
-        .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-            get_test_peer_id(),
-            FiberMessage::BroadcastMessage(BroadcastMessage::ChannelAnnouncement(
-                channel_announcement.clone(),
-            )),
-        )))
+        .send_message(NetworkActorMessage::Event(
+            NetworkActorEvent::GossipMessage(
+                get_test_peer_id(),
+                GossipMessage::channel_announcement(channel_announcement.clone()),
+            ),
+        ))
         .expect("send message to network actor");
 
     assert_eq!(node1.submit_tx(tx.clone()).await, Status::Committed);
@@ -258,12 +258,12 @@ async fn test_node1_node2_channel_update() {
 
         channel_update.signature = Some(key.sign(channel_update.message_to_sign()));
         node.network_actor
-            .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-                get_test_peer_id(),
-                FiberMessage::BroadcastMessage(BroadcastMessage::ChannelUpdate(
-                    channel_update.clone(),
-                )),
-            )))
+            .send_message(NetworkActorMessage::Event(
+                NetworkActorEvent::GossipMessage(
+                    get_test_peer_id(),
+                    GossipMessage::channel_update(channel_update.clone()),
+                ),
+            ))
             .expect("send message to network actor");
         channel_update
     };
@@ -327,12 +327,12 @@ async fn test_channel_update_version() {
 
         channel_update.signature = Some(key.sign(channel_update.message_to_sign()));
         node.network_actor
-            .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-                get_test_peer_id(),
-                FiberMessage::BroadcastMessage(BroadcastMessage::ChannelUpdate(
-                    channel_update.clone(),
-                )),
-            )))
+            .send_message(NetworkActorMessage::Event(
+                NetworkActorEvent::GossipMessage(
+                    get_test_peer_id(),
+                    GossipMessage::channel_update(channel_update.clone()),
+                ),
+            ))
             .expect("send message to network actor");
         channel_update
     };
@@ -394,12 +394,12 @@ async fn test_sync_node_announcement_version() {
     let test_peer_id = get_test_peer_id();
 
     node.network_actor
-        .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-            test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
-                create_fake_node_announcement_mesage_version2(),
-            )),
-        )))
+        .send_message(NetworkActorMessage::Event(
+            NetworkActorEvent::GossipMessage(
+                test_peer_id.clone(),
+                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version2()),
+            ),
+        ))
         .expect("send message to network actor");
 
     // Wait for the broadcast message to be processed.
@@ -414,12 +414,12 @@ async fn test_sync_node_announcement_version() {
     }
 
     node.network_actor
-        .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-            test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
-                create_fake_node_announcement_mesage_version1(),
-            )),
-        )))
+        .send_message(NetworkActorMessage::Event(
+            NetworkActorEvent::GossipMessage(
+                test_peer_id.clone(),
+                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version1()),
+            ),
+        ))
         .expect("send message to network actor");
 
     // Wait for the broadcast message to be processed.
@@ -434,12 +434,12 @@ async fn test_sync_node_announcement_version() {
     }
 
     node.network_actor
-        .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-            test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
-                create_fake_node_announcement_mesage_version3(),
-            )),
-        )))
+        .send_message(NetworkActorMessage::Event(
+            NetworkActorEvent::GossipMessage(
+                test_peer_id.clone(),
+                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version3()),
+            ),
+        ))
         .expect("send message to network actor");
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -468,12 +468,12 @@ async fn test_sync_node_announcement_on_startup() {
 
     node1
         .network_actor
-        .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-            test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
-                create_fake_node_announcement_mesage_version1(),
-            )),
-        )))
+        .send_message(NetworkActorMessage::Event(
+            NetworkActorEvent::GossipMessage(
+                test_peer_id.clone(),
+                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version1()),
+            ),
+        ))
         .expect("send message to network actor");
 
     node1.connect_to(&node2).await;
@@ -515,12 +515,12 @@ async fn test_sync_node_announcement_after_restart() {
     let test_peer_id = get_test_peer_id();
     node1
         .network_actor
-        .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-            test_peer_id.clone(),
-            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
-                create_fake_node_announcement_mesage_version1(),
-            )),
-        )))
+        .send_message(NetworkActorMessage::Event(
+            NetworkActorEvent::GossipMessage(
+                test_peer_id.clone(),
+                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version1()),
+            ),
+        ))
         .expect("send message to network actor");
 
     node2.start().await;
@@ -578,12 +578,12 @@ async fn test_persisting_announced_nodes() {
     let peer_id = node_pk.tentacle_peer_id();
 
     node.network_actor
-        .send_message(NetworkActorMessage::Event(NetworkActorEvent::PeerMessage(
-            peer_id.clone(),
-            FiberMessage::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
-                create_fake_node_announcement_mesage_version1(),
-            )),
-        )))
+        .send_message(NetworkActorMessage::Event(
+            NetworkActorEvent::GossipMessage(
+                peer_id.clone(),
+                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version1()),
+            ),
+        ))
         .expect("send message to network actor");
 
     // Wait for the above message to be processed.

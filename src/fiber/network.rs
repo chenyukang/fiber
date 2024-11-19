@@ -488,7 +488,8 @@ pub enum NetworkActorEvent {
     /// Network eventss to be processed by this actor.
     PeerConnected(PeerId, Pubkey, SessionContext),
     PeerDisconnected(PeerId, SessionContext),
-    PeerMessage(PeerId, FiberMessage),
+    FiberMessage(PeerId, FiberMessage),
+    GossipMessage(PeerId, GossipMessage),
 
     /// Channel related events.
 
@@ -803,7 +804,7 @@ where
                     ))
                     .expect(ASSUME_NETWORK_MYSELF_ALIVE);
             }
-            NetworkActorEvent::PeerMessage(peer_id, message) => {
+            NetworkActorEvent::FiberMessage(peer_id, message) => {
                 self.handle_peer_message(state, peer_id, message).await?
             }
             NetworkActorEvent::FundingTransactionPending(transaction, outpoint, channel_id) => {
@@ -887,6 +888,7 @@ where
                 self.on_tlc_remove_received(state, payment_hash, remove_tlc.reason)
                     .await;
             }
+            NetworkActorEvent::GossipMessage(peer_id, gossip_message) => todo!(),
         }
         Ok(())
     }
@@ -3716,7 +3718,7 @@ impl ServiceProtocol for FiberProtocolHandle {
                 let peer_id = PeerId::from_public_key(pubkey);
                 try_send_actor_message(
                     &self.actor,
-                    NetworkActorMessage::new_event(NetworkActorEvent::PeerMessage(peer_id, msg)),
+                    NetworkActorMessage::new_event(NetworkActorEvent::FiberMessage(peer_id, msg)),
                 );
             }
             None => {
