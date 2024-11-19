@@ -394,8 +394,10 @@ where
             &channel, &update
         );
         let update_info = if update.message_flags & 1 == 1 {
+            debug!("now update node1_to_node2: {:?}", &update);
             &mut channel.node1_to_node2
         } else {
+            debug!("now update node2_to_node1: {:?}", &update);
             &mut channel.node2_to_node1
         };
 
@@ -428,6 +430,7 @@ where
             last_update_message: update.clone(),
         });
 
+        info!("now new update_info: {:?}", *update_info);
         self.store.insert_channel(channel.to_owned());
         debug!(
             "Processed channel update: channel {:?}, update {:?}",
@@ -450,12 +453,14 @@ where
         self.channels.values().filter_map(move |channel| {
             if let Some(info) = channel.node1_to_node2.as_ref() {
                 if info.enabled && channel.node2() == node_id {
+                    debug!("now use node1_to_node2: {:?}", info);
                     return Some((channel.node1(), channel.node2(), channel, info));
                 }
             }
 
             if let Some(info) = channel.node2_to_node1.as_ref() {
                 if info.enabled && channel.node1() == node_id {
+                    debug!("now use node2_to_node1: {:?}", info);
                     return Some((channel.node2(), channel.node1(), channel, info));
                 }
             }
@@ -582,14 +587,23 @@ where
                     .get_channel(&route[i + 1].channel_outpoint)
                     .expect("channel not found");
                 let channel_update = &if channel_info.node1() == route[i + 1].target {
+                    info!(
+                        "build router use node2_to_node1: {:?}",
+                        channel_info.node2_to_node1
+                    );
                     channel_info.node2_to_node1.as_ref()
                 } else {
+                    info!(
+                        "build router use node1_to_node2: {:?}",
+                        channel_info.node1_to_node2
+                    );
                     channel_info.node1_to_node2.as_ref()
                 }
                 .expect("channel_update is none");
                 let fee_rate = channel_update.fee_rate;
                 let fee = calculate_tlc_forward_fee(current_amount, fee_rate as u128);
                 let expiry = channel_update.htlc_expiry_delta;
+                info!("debug fee: {:?}, expiry: {:?}", fee, expiry);
                 (fee, expiry)
             };
 
