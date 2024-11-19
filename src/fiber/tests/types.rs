@@ -8,7 +8,7 @@ use crate::fiber::{
         Privkey, Pubkey, TlcErr, TlcErrPacket, TlcErrorCode,
     },
 };
-use ckb_types::packed::OutPointBuilder;
+use ckb_types::packed::{OutPoint, OutPointBuilder};
 use ckb_types::prelude::Builder;
 use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 use std::str::FromStr;
@@ -19,19 +19,9 @@ fn gen_rand_public_key() -> Pubkey {
     PublicKey::from_keypair(&key_pair).into()
 }
 
-fn gen_rand_private_key() -> Privkey {
-    let secp = secp256k1_instance();
-    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
-    SecretKey::from_keypair(&key_pair).into()
-}
-
-fn gen_rand_keypair() -> (Pubkey, Privkey) {
-    let secp = Secp256k1::new();
-    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
-    (
-        PublicKey::from_keypair(&key_pair).into(),
-        SecretKey::from_keypair(&key_pair).into(),
-    )
+// TODO: Generate a really random OutPoint
+fn gen_random_channel_outpoint() -> OutPoint {
+    OutPointBuilder::default().build()
 }
 
 #[test]
@@ -48,10 +38,33 @@ fn test_serde_public_key() {
 }
 
 #[test]
-fn test_serde_cursor_node_id() {
+fn test_serde_cursor_node_announcement() {
     let now = 0u64;
     let node_id = gen_rand_public_key();
     let cursor = Cursor::new(now, BroadcastMessageId::NodeAnnouncement(node_id));
+    let moleculed_cursor: gossip::Cursor = cursor.clone().into();
+    let unmoleculed_cursor: Cursor = moleculed_cursor.try_into().expect("decode");
+    assert_eq!(cursor, unmoleculed_cursor);
+}
+
+#[test]
+fn test_serde_cursor_channel_announcement() {
+    let now = 0u64;
+    let channel_announcement_id = gen_random_channel_outpoint();
+    let cursor = Cursor::new(
+        now,
+        BroadcastMessageId::ChannelAnnouncement(channel_announcement_id),
+    );
+    let moleculed_cursor: gossip::Cursor = cursor.clone().into();
+    let unmoleculed_cursor: Cursor = moleculed_cursor.try_into().expect("decode");
+    assert_eq!(cursor, unmoleculed_cursor);
+}
+
+#[test]
+fn test_serde_cursor_channel_update() {
+    let now = 0u64;
+    let channel_update_id = gen_random_channel_outpoint();
+    let cursor = Cursor::new(now, BroadcastMessageId::ChannelUpdate(channel_update_id));
     let moleculed_cursor: gossip::Cursor = cursor.clone().into();
     let unmoleculed_cursor: Cursor = moleculed_cursor.try_into().expect("decode");
     assert_eq!(cursor, unmoleculed_cursor);
