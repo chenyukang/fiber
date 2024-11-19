@@ -7,7 +7,7 @@ use crate::{
     fiber::{
         fee::calculate_tlc_forward_fee,
         network::{get_chain_hash, SendOnionPacketCommand},
-        types::{ChannelUpdate, TlcErr, TlcErrPacket, TlcErrorCode},
+        types::{BroadcastMessage, ChannelUpdate, TlcErr, TlcErrPacket, TlcErrorCode},
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceStore},
 };
@@ -1478,10 +1478,9 @@ where
 
                 self.network
                     .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::ProccessChannelUpdate(
-                            self.get_remote_peer_id(),
+                        NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
                             update,
-                        ),
+                        )),
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
@@ -2621,10 +2620,9 @@ impl ChannelActorState {
 
         network
             .send_message(NetworkActorMessage::new_command(
-                NetworkActorCommand::ProccessChannelUpdate(
-                    self.get_remote_peer_id(),
+                NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
                     channel_update,
-                ),
+                )),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
     }
@@ -4626,11 +4624,10 @@ impl ChannelActorState {
             );
             network
                 .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::ProcessChannelAnnouncement(
-                        self.get_remote_peer_id(),
-                        self.get_funding_transaction_block_number(),
-                        self.get_funding_transaction_index(),
-                        channel_announcement,
+                    NetworkActorCommand::BroadcastMessage(
+                        crate::fiber::types::BroadcastMessage::ChannelAnnouncement(
+                            channel_announcement,
+                        ),
                     ),
                 ))
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
@@ -4641,10 +4638,9 @@ impl ChannelActorState {
 
             network
                 .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::ProccessChannelUpdate(
-                        self.get_remote_peer_id(),
+                    NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
                         channel_update,
-                    ),
+                    )),
                 ))
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
         }

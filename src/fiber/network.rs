@@ -211,17 +211,6 @@ pub enum NetworkActorCommand {
     ),
     UpdateChannelFunding(Hash256, Transaction, FundingRequest),
     SignTx(PeerId, Hash256, Transaction, Option<Vec<Vec<u8>>>),
-    // A ChannelAnnouncement is ready to broadcast, we need to
-    // update our network graph and broadcast it to the network.
-    // The channel counterparty should definitely be part of the
-    // nodes that are going to receive this message.
-    ProcessChannelAnnouncement(PeerId, BlockNumber, u32, ChannelAnnouncement),
-    // A ChannelUpdate is ready to broadcast, we need to update
-    // our network graph and broadcast it to the network.
-    // The channel counterparty should definitely be part of the
-    // nodes that are going to receive this message.
-    ProccessChannelUpdate(PeerId, ChannelUpdate),
-    // Broadcast node/channel information to the network.
     BroadcastMessage(BroadcastMessage),
     // Broadcast local information to the network.
     BroadcastLocalInfo(LocalInfoKind),
@@ -1284,29 +1273,7 @@ where
                     );
                 }
             },
-            NetworkActorCommand::ProcessChannelAnnouncement(
-                peer_id,
-                block_number,
-                tx_index,
-                channel_announcement,
-            ) => {
-                debug!(
-                    "Processing our channel announcement message (confirmed at #{} block #{} tx) to peer {:?}: {:?}",
-                    &block_number,
-                    &tx_index,
-                    &peer_id,
-                    &channel_announcement
-                );
-                // TODO: Save the channel announcement to the database.
-            }
 
-            NetworkActorCommand::ProccessChannelUpdate(peer_id, channel_update) => {
-                debug!(
-                    "Processing our channel update message to peer {:?}: {:?}",
-                    &peer_id, &channel_update
-                );
-                // TODO: Save the channel update to the database.
-            }
             NetworkActorCommand::NodeInfo(_, rpc) => {
                 let response = NodeInfoResponse {
                     node_name: state.node_name.clone(),
