@@ -579,7 +579,7 @@ where
                 (0, 0)
             } else {
                 let channel_info = self
-                    .get_channel(&route[i + 1].channel_outpoint)
+                    .get_channel(&route[i].channel_outpoint)
                     .expect("channel not found");
                 let channel_update = &if channel_info.node1() == route[i + 1].target {
                     channel_info.node2_to_node1.as_ref()
