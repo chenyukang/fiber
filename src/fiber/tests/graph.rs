@@ -97,16 +97,22 @@ impl MockNetworkGraph {
     ) {
         let public_key1 = self.keys[node_a];
         let public_key2 = self.keys[node_b];
+        let node_a_is_node1 = public_key1 < public_key2;
         let idx = self.edges.len() + 1;
         let channel_outpoint = OutPoint::from_slice(&[idx as u8; 36]).unwrap();
         self.edges.push((node_a, node_b, channel_outpoint.clone()));
+        let (node_a_key, node_b_key) = if node_a_is_node1 {
+            (public_key1, public_key2)
+        } else {
+            (public_key2, public_key1)
+        };
         let channel_info = ChannelInfo {
             funding_tx_block_number: 0,
             funding_tx_index: 0,
             announcement_msg: ChannelAnnouncement {
                 chain_hash: get_chain_hash(),
-                node1_id: public_key1.into(),
-                node2_id: public_key2.into(),
+                node1_id: node_a_key.into(),
+                node2_id: node_b_key.into(),
                 channel_outpoint: channel_outpoint.clone(),
                 node1_signature: None,
                 node2_signature: None,
@@ -120,12 +126,12 @@ impl MockNetworkGraph {
             node1_to_node2: None,
             node2_to_node1: None,
         };
-        self.graph.add_channel(channel_info);
+        self.graph.add_channel(channel_info.clone());
         let channel_update = ChannelUpdate {
             signature: None,
             chain_hash: get_chain_hash(),
             version: 0,
-            message_flags: 1,
+            message_flags: if node_a_is_node1 { 1 } else { 0 },
             channel_flags: 0,
             tlc_expiry_delta: 144,
             tlc_fee_proportional_millionths: fee_rate.unwrap_or(0),
@@ -133,13 +139,15 @@ impl MockNetworkGraph {
             tlc_minimum_value: min_htlc_value.unwrap_or(0),
             channel_outpoint: channel_outpoint.clone(),
         };
+        eprintln!("add channel_info: {:?}", channel_info);
+        eprintln!("add channel_update: {:?}", channel_update);
         self.graph.process_channel_update(channel_update).unwrap();
         if let Some(fee_rate) = other_fee_rate {
             let channel_update = ChannelUpdate {
                 signature: None,
                 chain_hash: get_chain_hash(),
                 version: 0,
-                message_flags: 0,
+                message_flags: if node_a_is_node1 { 0 } else { 1 },
                 channel_flags: 0,
                 tlc_expiry_delta: 144,
                 tlc_fee_proportional_millionths: fee_rate,
@@ -147,7 +155,9 @@ impl MockNetworkGraph {
                 tlc_minimum_value: min_htlc_value.unwrap_or(0),
                 channel_outpoint: channel_outpoint.clone(),
             };
+            eprintln!("add rev channel_update: {:?}", channel_update);
             self.graph.process_channel_update(channel_update).unwrap();
+            //eprintln!("add channel_info: {:?}", channel_info);
         }
     }
 
@@ -523,7 +533,6 @@ fn test_graph_build_route_three_nodes() {
     let mut network = MockNetworkGraph::new(3);
     network.add_edge(0, 2, Some(500), Some(2));
     network.add_edge(2, 3, Some(500), Some(2));
-    let _node0 = network.keys[0];
     let node2 = network.keys[2];
     let node3 = network.keys[3];
     // Test build route from node1 to node3
@@ -895,6 +904,7 @@ fn test_graph_payment_pay_self_with_one_node() {
     let payment_data = payment_data.unwrap();
 
     let route = network.graph.build_route(payment_data);
+    eprintln!("final result {:?}", route);
     assert!(route.is_ok());
     let route = route.unwrap();
     assert_eq!(route[1].next_hop, Some(node0.into()));
