@@ -3394,7 +3394,7 @@ where
         let secio_pk = secio_kp.public_key();
         let handle = MyServiceHandle::new(myself.clone());
         let fiber_handle = FiberProtocolHandle::from(&handle);
-        let gossip_handle = GossipProtocolHandle::new(None, myself.get_cell()).await;
+        let gossip_handle = GossipProtocolHandle::new(myself.get_cell()).await;
         let mut service = ServiceBuilder::default()
             .insert_protocol(fiber_handle.create_meta())
             .insert_protocol(gossip_handle.create_meta())

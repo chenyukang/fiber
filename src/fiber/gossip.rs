@@ -1,7 +1,11 @@
-use core::prelude::rust_2021;
 use std::collections::HashMap;
 
-use ractor::{async_trait as rasync_trait, Actor, ActorCell, ActorProcessingErr, ActorRef};
+use ractor::{
+    async_trait as rasync_trait,
+    concurrency::{timeout, Duration},
+    Actor, ActorCell, ActorProcessingErr, ActorRef, ActorRuntime,
+};
+use serde::Serialize;
 use tentacle::{
     async_trait as tasync_trait,
     builder::MetaBuilder,
@@ -9,11 +13,12 @@ use tentacle::{
     context::{ProtocolContext, ProtocolContextMutRef, SessionContext},
     multiaddr::Multiaddr,
     secio::PeerId,
-    service::{ProtocolHandle, ProtocolMeta, ServiceAsyncControl},
+    service::{ProtocolHandle, ProtocolMeta, Service, ServiceAsyncControl},
     traits::ServiceProtocol,
     SessionId,
 };
-use tracing::{error, info, warn};
+use tokio::sync::oneshot;
+use tracing::{debug, error, info, warn};
 
 use crate::unwrap_or_return;
 
@@ -23,7 +28,7 @@ use super::{
 };
 
 pub(crate) enum GossipActorMessage {
-    /// Network eventss to be processed by this actor.
+    /// Network events to be processed by this actor.
     PeerConnected(PeerId, Pubkey, SessionContext),
     PeerDisconnected(PeerId, SessionContext),
 
@@ -33,41 +38,40 @@ pub(crate) enum GossipActorMessage {
     GossipMessage(GossipMessageWithPeerId),
 }
 
-pub(crate) struct GossipActor {
-    // We need this to send message to the network, the problem now is that while
-    // creating GossipActor, the control is not available yet. So we have to use Option
-    // for control.
-    control: Option<ServiceAsyncControl>,
-}
+pub(crate) struct GossipActor {}
 
 impl GossipActor {
-    fn new(control: Option<ServiceAsyncControl>) -> Self {
-        Self { control }
+    fn new() -> Self {
+        Self {}
     }
 }
 
-#[derive(Default)]
 pub(crate) struct GossipActorState {
+    control: ServiceAsyncControl,
     peer_session_map: HashMap<PeerId, SessionId>,
     peer_pubkey_map: HashMap<PeerId, Pubkey>,
 }
 
-#[derive(Clone)]
 pub(crate) struct GossipProtocolHandle {
     actor: ActorRef<GossipActorMessage>,
+    sender: Option<oneshot::Sender<ServiceAsyncControl>>,
 }
 
 impl GossipProtocolHandle {
-    pub(crate) async fn new(control: Option<ServiceAsyncControl>, supervisor: ActorCell) -> Self {
-        let (actor, _handle) = Actor::spawn_linked(
+    pub(crate) async fn new(supervisor: ActorCell) -> Self {
+        let (sender, receiver) = oneshot::channel();
+
+        let (actor, _handle) = ActorRuntime::spawn_linked_instant(
             Some("gossip actor".to_string()),
-            GossipActor::new(control),
-            (),
+            GossipActor::new(),
+            receiver,
             supervisor,
         )
-        .await
         .expect("start gossip actor");
-        Self { actor }
+        Self {
+            actor,
+            sender: Some(sender),
+        }
     }
 
     pub(crate) fn actor(&self) -> &ActorRef<GossipActorMessage> {
@@ -89,14 +93,23 @@ impl GossipProtocolHandle {
 impl Actor for GossipActor {
     type Msg = GossipActorMessage;
     type State = GossipActorState;
-    type Arguments = ();
+    type Arguments = oneshot::Receiver<ServiceAsyncControl>;
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        _args: Self::Arguments,
+        rx: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let state = Default::default();
+        let control = timeout(Duration::from_secs(1), rx)
+            .await
+            .expect("received control timely")
+            .expect("receive control");
+        debug!("Gossip actor received service control");
+        let state = Self::State {
+            control,
+            peer_pubkey_map: Default::default(),
+            peer_session_map: Default::default(),
+        };
         Ok(state)
     }
 
@@ -120,7 +133,15 @@ impl Actor for GossipActor {
 
 #[tasync_trait]
 impl ServiceProtocol for GossipProtocolHandle {
-    async fn init(&mut self, _context: &mut ProtocolContext) {}
+    async fn init(&mut self, context: &mut ProtocolContext) {
+        let sender = self
+            .sender
+            .take()
+            .expect("service control sender set and init called once");
+        if let Err(_) = sender.send(context.control().clone()) {
+            panic!("Failed to send service control");
+        }
+    }
 
     async fn connected(&mut self, context: ProtocolContextMutRef<'_>, version: &str) {
         info!(
