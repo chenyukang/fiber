@@ -1,4 +1,7 @@
-use super::migration::{DefaultMigration, Migrations};
+use super::{
+    migration::{DefaultMigration, Migrations},
+    migrations::sample::SampleMigration,
+};
 use crate::Error;
 use rocksdb::{ops::Open, DB};
 use std::{cmp::Ordering, path::Path, sync::Arc};
@@ -14,6 +17,7 @@ impl DbMigrate {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let mut migrations = Migrations::default();
         migrations.add_migration(Arc::new(DefaultMigration::new()));
+        migrations.add_migration(Arc::new(SampleMigration::new()));
         // add more migrations here
         let db = Arc::new(DB::open_default(path).expect("Failed to open rocksdb"));
 

@@ -2107,6 +2107,8 @@ pub struct ChannelActorState {
     pub reestablishing: bool,
 
     pub created_at: SystemTime,
+
+    pub last_updated_at: Option<SystemTime>,
 }
 
 #[serde_as]
@@ -2761,6 +2763,7 @@ impl ChannelActorState {
 
             reestablishing: false,
             created_at: SystemTime::now(),
+            last_updated_at: None,
         };
         if let Some(nonce) = remote_channel_announcement_nonce {
             state.update_remote_channel_announcement_nonce(&nonce);
@@ -2823,6 +2826,7 @@ impl ChannelActorState {
 
             reestablishing: false,
             created_at: SystemTime::now(),
+            last_updated_at: None,
         }
     }
 
