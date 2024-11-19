@@ -584,7 +584,7 @@ where
                 (0, 0)
             } else {
                 let channel_info = self
-                    .get_channel(&route[i + 1].channel_outpoint)
+                    .get_channel(&route[i].channel_outpoint)
                     .expect("channel not found");
                 let channel_update = &if channel_info.node1() == route[i + 1].target {
                     info!(
@@ -782,6 +782,7 @@ where
                         continue;
                     }
                 }
+                info!("now use fee_rate: {:?}", fee_rate);
                 let node = NodeHeapElement {
                     node_id: from,
                     weight,
