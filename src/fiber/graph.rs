@@ -113,6 +113,20 @@ impl ChannelInfo {
     pub fn funding_tx_block_number(&self) -> u64 {
         self.funding_tx_block_number
     }
+
+    fn get_channel_update_info_with_direction(&self, node: Pubkey) -> Option<&ChannelUpdateInfo> {
+        eprintln!("from node1: {:?}", node);
+        if self.node2() == node {
+            eprintln!("now use node1_to_node2: {:?}", self.node1_to_node2);
+            self.node1_to_node2.as_ref()
+        } else if self.node1() == node {
+            eprintln!("now use node2_to_node1: {:?}", self.node2_to_node1);
+            self.node2_to_node1.as_ref()
+        } else {
+            eprintln!("get_update now use none");
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -586,20 +600,11 @@ where
                 let channel_info = self
                     .get_channel(&route[i].channel_outpoint)
                     .expect("channel not found");
-                let channel_update = &if channel_info.node1() == route[i + 1].target {
-                    info!(
-                        "build router use node2_to_node1: {:?}",
-                        channel_info.node2_to_node1
-                    );
-                    channel_info.node2_to_node1.as_ref()
-                } else {
-                    info!(
-                        "build router use node1_to_node2: {:?}",
-                        channel_info.node1_to_node2
-                    );
-                    channel_info.node1_to_node2.as_ref()
-                }
-                .expect("channel_update is none");
+                eprintln!("now use channel_info: {:?}", channel_info);
+                let channel_update = channel_info
+                    .get_channel_update_info_with_direction(route[i].target)
+                    .expect("channel_update is none");
+                eprintln!("now use channel_update: {:?}", channel_update);
                 let fee_rate = channel_update.fee_rate;
                 let fee = calculate_tlc_forward_fee(current_amount, fee_rate as u128);
                 let expiry = channel_update.htlc_expiry_delta;
@@ -782,7 +787,8 @@ where
                         continue;
                     }
                 }
-                info!("now use fee_rate: {:?}", fee_rate);
+                eprintln!("\n\nfind_path from: {:?}, to: {:?}", from, to);
+                eprintln!("add use channel_info: {:?}\n\n", channel_info);
                 let node = NodeHeapElement {
                     node_id: from,
                     weight,
