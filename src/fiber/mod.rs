@@ -26,6 +26,8 @@ pub mod serde_utils;
 
 mod graph_syncer;
 
+mod gossip;
+
 #[cfg(test)]
 pub mod tests;
 

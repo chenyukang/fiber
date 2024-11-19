@@ -70,6 +70,7 @@ use crate::ckb::{CkbChainMessage, FundingRequest, FundingTx, TraceTxRequest, Tra
 use crate::fiber::channel::{
     AddTlcCommand, AddTlcResponse, TxCollaborationCommand, TxUpdateCommand,
 };
+use crate::fiber::gossip::GossipProtocolHandle;
 use crate::fiber::graph::{ChannelInfo, PaymentSession, PaymentSessionStatus};
 use crate::fiber::serde_utils::EntityHex;
 use crate::fiber::types::{
@@ -184,6 +185,10 @@ pub enum NetworkActorCommand {
     // changes to local state. Even if we can send a message to a peer, some
     // part of the local state is not changed.
     SendFiberMessage(FiberMessageWithPeerId),
+    // For internal use and debugging only. Most of the messages requires some
+    // changes to local state. Even if we can send a message to a peer, some
+    // part of the local state is not changed.
+    SendGossipMessage(GossipMessageWithPeerId),
     // Open a channel to a peer.
     OpenChannel(
         OpenChannelCommand,
@@ -588,13 +593,19 @@ impl FiberMessageWithPeerId {
 }
 
 #[derive(Debug)]
-pub struct FiberMessageWithSessionId {
-    pub session_id: SessionId,
-    pub message: FiberMessage,
+pub struct GossipMessageWithPeerId {
+    pub peer_id: PeerId,
+    pub message: GossipMessage,
+}
+
+impl GossipMessageWithPeerId {
+    pub fn new(peer_id: PeerId, message: GossipMessage) -> Self {
+        Self { peer_id, message }
+    }
 }
 
 pub struct NetworkActor<S> {
-    // An event emitter to notify ourside observers.
+    // An event emitter to notify outside observers.
     event_sender: mpsc::Sender<NetworkServiceEvent>,
     chain_actor: ActorRef<CkbChainMessage>,
     store: S,
@@ -902,6 +913,13 @@ where
         match command {
             NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId { peer_id, message }) => {
                 state.send_fiber_message_to_peer(&peer_id, message).await?;
+            }
+
+            NetworkActorCommand::SendGossipMessage(GossipMessageWithPeerId {
+                peer_id,
+                message,
+            }) => {
+                state.send_gossip_message_to_peer(&peer_id, message).await?;
             }
 
             NetworkActorCommand::ConnectPeer(addr) => {
@@ -3376,7 +3394,7 @@ where
         let secio_pk = secio_kp.public_key();
         let handle = MyServiceHandle::new(myself.clone());
         let fiber_handle = FiberProtocolHandle::from(&handle);
-        let gossip_handle = GossipProtocolHandle::from(&handle);
+        let gossip_handle = GossipProtocolHandle::new(None, myself.get_cell()).await;
         let mut service = ServiceBuilder::default()
             .insert_protocol(fiber_handle.create_meta())
             .insert_protocol(gossip_handle.create_meta())
@@ -3601,48 +3619,6 @@ where
         }
         Ok(())
     }
-}
-
-#[derive(Clone, Debug)]
-struct GossipProtocolHandle {
-    actor: ActorRef<NetworkActorMessage>,
-}
-
-impl From<&MyServiceHandle> for GossipProtocolHandle {
-    fn from(handle: &MyServiceHandle) -> Self {
-        GossipProtocolHandle {
-            actor: handle.actor.clone(),
-        }
-    }
-}
-
-impl GossipProtocolHandle {
-    fn create_meta(self) -> ProtocolMeta {
-        MetaBuilder::new()
-            .id(GOSSIP_PROTOCOL_ID)
-            .service_handle(move || {
-                let handle = Box::new(self);
-                ProtocolHandle::Callback(handle)
-            })
-            .build()
-    }
-}
-
-#[async_trait]
-impl ServiceProtocol for GossipProtocolHandle {
-    async fn init(&mut self, _context: &mut ProtocolContext) {}
-
-    async fn connected(&mut self, _context: ProtocolContextMutRef<'_>, _version: &str) {}
-
-    async fn disconnected(&mut self, _context: ProtocolContextMutRef<'_>) {}
-
-    async fn received(&mut self, _context: ProtocolContextMutRef<'_>, data: Bytes) {
-        let msg = unwrap_or_return!(GossipMessage::from_molecule_slice(&data), "parse message");
-        debug!("Received gossip message: {:?}", &msg);
-        // TODO: handle gossip message
-    }
-
-    async fn notify(&mut self, _context: &mut ProtocolContext, _token: u64) {}
 }
 
 #[derive(Clone, Debug)]
