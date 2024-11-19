@@ -40,7 +40,7 @@ script:pre-request {
 script:post-response {
   // Sleep for sometime to make sure current operation finishes before next request starts.
   await new Promise(r => setTimeout(r, 500));
-  console.log("get result: ", res.body.result);
+  console.log("step 31 get result: ", res.body.result);
   if (res.body.result.status != "Success") {
     throw new Error("Assertion failed: payment session status expected to be Success");
   }
