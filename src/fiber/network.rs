@@ -54,6 +54,7 @@ use super::channel::{
 };
 use super::config::AnnouncedNodeName;
 use super::fee::{calculate_commitment_tx_fee, default_minimal_ckb_amount};
+use super::gossip::GossipActorMessage;
 use super::graph::{NetworkGraph, NetworkGraphStateStore};
 use super::graph_syncer::{GraphSyncer, GraphSyncerMessage};
 use super::key::blake2b_hash_with_salt;
@@ -185,10 +186,6 @@ pub enum NetworkActorCommand {
     // changes to local state. Even if we can send a message to a peer, some
     // part of the local state is not changed.
     SendFiberMessage(FiberMessageWithPeerId),
-    // For internal use and debugging only. Most of the messages requires some
-    // changes to local state. Even if we can send a message to a peer, some
-    // part of the local state is not changed.
-    SendGossipMessage(GossipMessageWithPeerId),
     // Open a channel to a peer.
     OpenChannel(
         OpenChannelCommand,
@@ -490,7 +487,7 @@ pub enum NetworkServiceEvent {
 /// all events are processed by the network actor.
 #[derive(Debug)]
 pub enum NetworkActorEvent {
-    /// Network eventss to be processed by this actor.
+    /// Network events to be processed by this actor.
     PeerConnected(PeerId, Pubkey, SessionContext),
     PeerDisconnected(PeerId, SessionContext),
     FiberMessage(PeerId, FiberMessage),
@@ -915,13 +912,6 @@ where
                 state.send_fiber_message_to_peer(&peer_id, message).await?;
             }
 
-            NetworkActorCommand::SendGossipMessage(GossipMessageWithPeerId {
-                peer_id,
-                message,
-            }) => {
-                state.send_gossip_message_to_peer(&peer_id, message).await?;
-            }
-
             NetworkActorCommand::ConnectPeer(addr) => {
                 // TODO: It is more than just dialing a peer. We need to exchange capabilities of the peer,
                 // e.g. whether the peer support some specific feature.
@@ -1198,7 +1188,9 @@ where
                     .expect("network actor alive");
             }
             NetworkActorCommand::BroadcastMessage(message) => {
-                // TODO: gossip protocol refactor, fix me
+                let _ = state
+                    .gossip_actor
+                    .send_message(GossipActorMessage::BroadcastMessage(message));
             }
             NetworkActorCommand::SignMessage(message, reply) => {
                 let signature = state.private_key.sign(message);
@@ -2078,6 +2070,8 @@ pub struct NetworkActorState<S> {
     tlc_max_value: u128,
     // The default tlc fee proportional millionths to be used when auto accepting a channel.
     tlc_fee_proportional_millionths: u128,
+    // The gossip messages actor to process and send gossip messages.
+    gossip_actor: ActorRef<GossipActorMessage>,
     // A hashset to store the list of all broadcasted messages.
     // This is used to avoid re-broadcasting the same message over and over again
     // TODO: some more intelligent way to manage broadcasting.
@@ -2737,17 +2731,6 @@ where
         Ok(())
     }
 
-    async fn send_gossip_message_to_peer(
-        &self,
-        peer_id: &PeerId,
-        message: GossipMessage,
-    ) -> crate::Result<()> {
-        match self.get_peer_session(peer_id) {
-            Some(session) => self.send_gossip_message_to_session(session, message).await,
-            None => Err(Error::PeerNotFound(peer_id.clone())),
-        }
-    }
-
     async fn send_command_to_channel(
         &self,
         channel_id: Hash256,
@@ -3395,6 +3378,7 @@ where
         let handle = MyServiceHandle::new(myself.clone());
         let fiber_handle = FiberProtocolHandle::from(&handle);
         let gossip_handle = GossipProtocolHandle::new(myself.get_cell()).await;
+        let gossip_actor = gossip_handle.actor().clone();
         let mut service = ServiceBuilder::default()
             .insert_protocol(fiber_handle.create_meta())
             .insert_protocol(gossip_handle.create_meta())
@@ -3499,6 +3483,7 @@ where
             tlc_min_value: config.tlc_min_value(),
             tlc_max_value: config.tlc_max_value(),
             tlc_fee_proportional_millionths: config.tlc_fee_proportional_millionths(),
+            gossip_actor,
             broadcasted_messages: Default::default(),
             channel_subscribers,
             next_request_id: Default::default(),

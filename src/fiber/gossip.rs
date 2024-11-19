@@ -23,8 +23,8 @@ use tracing::{debug, error, info, warn};
 use crate::unwrap_or_return;
 
 use super::{
-    network::{GossipMessageWithPeerId, GOSSIP_PROTOCOL_ID},
-    types::{BroadcastMessage, GossipMessage, Pubkey},
+    network::{get_chain_hash, GossipMessageWithPeerId, GOSSIP_PROTOCOL_ID},
+    types::{BroadcastMessage, BroadcastMessagesFilter, Cursor, GossipMessage, Pubkey},
 };
 
 pub(crate) enum GossipActorMessage {
@@ -50,6 +50,7 @@ pub(crate) struct GossipActorState {
     control: ServiceAsyncControl,
     peer_session_map: HashMap<PeerId, SessionId>,
     peer_pubkey_map: HashMap<PeerId, Pubkey>,
+    peer_filter_map: HashMap<PeerId, Cursor>,
 }
 
 pub(crate) struct GossipProtocolHandle {
@@ -109,6 +110,7 @@ impl Actor for GossipActor {
             control,
             peer_pubkey_map: Default::default(),
             peer_session_map: Default::default(),
+            peer_filter_map: Default::default(),
         };
         Ok(state)
     }
@@ -119,14 +121,73 @@ impl Actor for GossipActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        Ok(())
-    }
+        match message {
+            GossipActorMessage::PeerConnected(peer_id, pubkey, session) => {
+                if state.peer_session_map.contains_key(&peer_id) {
+                    warn!(
+                        "Repeated connection from {:?} for gossip protocol",
+                        &peer_id
+                    );
+                    return Ok(());
+                }
+                state.peer_session_map.insert(peer_id.clone(), session.id);
+                state.peer_pubkey_map.insert(peer_id.clone(), pubkey);
+            }
+            GossipActorMessage::PeerDisconnected(peer_id, session) => {
+                debug!(
+                    "Peer disconnected: peer {:?}, session {:?}",
+                    &peer_id, &session.id
+                );
+                let _ = state.peer_session_map.remove(&peer_id);
+                let _ = state.peer_pubkey_map.remove(&peer_id);
+            }
+            GossipActorMessage::BroadcastMessage(broadcast_message) => {
+                for (peer, session) in &state.peer_session_map {
+                    match state.peer_filter_map.get(peer) {
+                        Some(cursor) if cursor < &broadcast_message.cursor() => {
+                            state
+                                .control
+                                .send_message_to(
+                                    *session,
+                                    GOSSIP_PROTOCOL_ID,
+                                    GossipMessage::BroadcastMessagesFilterResult(
+                                        broadcast_message.create_broadcast_messages_filter_result(),
+                                    )
+                                    .to_molecule_bytes(),
+                                )
+                                .await?;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            GossipActorMessage::GossipMessage(GossipMessageWithPeerId { peer_id, message }) => {
+                match message {
+                    GossipMessage::BroadcastMessagesFilter(BroadcastMessagesFilter {
+                        chain_hash,
+                        after_cursor,
+                    }) => {
+                        if chain_hash != get_chain_hash() {
+                            warn!("Received BroadcastMessagesFilter with unknown chain hash {:?} (wants {:?})", chain_hash, get_chain_hash());
+                            return Ok(());
+                        }
+                        state.peer_filter_map.insert(peer_id, after_cursor);
+                    }
+                    GossipMessage::BroadcastMessagesFilterResult(
+                        broadcast_messages_filter_result,
+                    ) => todo!(),
+                    GossipMessage::GetBroadcastMessages(get_broadcast_messages) => todo!(),
+                    GossipMessage::GetBroadcastMessagesResult(get_broadcast_messages_result) => {
+                        todo!()
+                    }
+                    GossipMessage::QueryBroadcastMessages(query_broadcast_messages) => todo!(),
+                    GossipMessage::QueryBroadcastMessagesResult(
+                        query_broadcast_messages_result,
+                    ) => todo!(),
+                }
+            }
+        }
 
-    async fn post_stop(
-        &self,
-        _myself: ActorRef<Self::Msg>,
-        state: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
         Ok(())
     }
 }

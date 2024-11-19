@@ -2274,6 +2274,14 @@ pub enum BroadcastMessage {
     ChannelUpdate(ChannelUpdate),
 }
 
+impl BroadcastMessage {
+    pub fn create_broadcast_messages_filter_result(&self) -> BroadcastMessagesFilterResult {
+        BroadcastMessagesFilterResult {
+            messages: vec![self.clone()],
+        }
+    }
+}
+
 impl From<BroadcastMessage> for molecule_gossip::BroadcastMessageUnion {
     fn from(fiber_broadcast_message: BroadcastMessage) -> Self {
         match fiber_broadcast_message {
@@ -2344,6 +2352,27 @@ impl BroadcastMessage {
             BroadcastMessage::ChannelUpdate(channel_update) => {
                 deterministically_hash(channel_update).into()
             }
+        }
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        match self {
+            BroadcastMessage::NodeAnnouncement(node_announcement) => Cursor::new(
+                node_announcement.version,
+                BroadcastMessageId::NodeAnnouncement(node_announcement.node_id),
+            ),
+            BroadcastMessage::ChannelAnnouncement(channel_announcement) => Cursor::new(
+                // TODO: Correctly set channel announcement timestamp
+                // 由于 ChannelAnnouncement 消息没有自带 timestamp, 以 channel outpoint 所在的 block header 中的 timestamp 作为该值
+                u64::MAX,
+                BroadcastMessageId::ChannelAnnouncement(
+                    channel_announcement.channel_outpoint.clone(),
+                ),
+            ),
+            BroadcastMessage::ChannelUpdate(channel_update) => Cursor::new(
+                channel_update.version,
+                BroadcastMessageId::ChannelUpdate(channel_update.channel_outpoint.clone()),
+            ),
         }
     }
 }
@@ -2446,6 +2475,28 @@ impl Cursor {
             timestamp,
             message_id,
         }
+    }
+
+    pub fn to_bytes(&self) -> [u8; 45] {
+        self.timestamp
+            .to_le_bytes()
+            .into_iter()
+            .chain(self.message_id.to_bytes())
+            .collect::<Vec<_>>()
+            .try_into()
+            .expect("Must serialize cursor to 45 bytes")
+    }
+}
+
+impl Ord for Cursor {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.to_bytes().cmp(&other.to_bytes())
+    }
+}
+
+impl PartialOrd for Cursor {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.to_bytes().partial_cmp(&other.to_bytes())
     }
 }
 
