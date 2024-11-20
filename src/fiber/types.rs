@@ -2267,11 +2267,52 @@ impl TryFrom<molecule_gossip::GossipMessage> for GossipMessage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BroadcastMessage {
     NodeAnnouncement(NodeAnnouncement),
     ChannelAnnouncement(ChannelAnnouncement),
     ChannelUpdate(ChannelUpdate),
+}
+
+#[derive(Debug, Clone)]
+pub enum BroadcastMessageWithTimestamp {
+    NodeAnnouncement(NodeAnnouncement),
+    ChannelAnnouncement(u64, ChannelAnnouncement),
+    ChannelUpdate(ChannelUpdate),
+}
+
+impl From<BroadcastMessageWithTimestamp> for BroadcastMessage {
+    fn from(broadcast_message_with_timestamp: BroadcastMessageWithTimestamp) -> Self {
+        match broadcast_message_with_timestamp {
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+                BroadcastMessage::NodeAnnouncement(node_announcement)
+            }
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(_, channel_announcement) => {
+                BroadcastMessage::ChannelAnnouncement(channel_announcement)
+            }
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                BroadcastMessage::ChannelUpdate(channel_update)
+            }
+        }
+    }
+}
+
+impl From<(BroadcastMessage, u64)> for BroadcastMessageWithTimestamp {
+    fn from((broadcast_message, timestamp): (BroadcastMessage, u64)) -> Self {
+        match broadcast_message {
+            BroadcastMessage::NodeAnnouncement(node_announcement) => {
+                debug_assert_eq!(timestamp, node_announcement.version);
+                BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement)
+            }
+            BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
+                BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement)
+            }
+            BroadcastMessage::ChannelUpdate(channel_update) => {
+                debug_assert_eq!(timestamp, channel_update.version);
+                BroadcastMessageWithTimestamp::ChannelUpdate(channel_update)
+            }
+        }
+    }
 }
 
 impl BroadcastMessage {
@@ -2377,17 +2418,35 @@ impl BroadcastMessage {
     }
 }
 
+bitflags::bitflags! {
+    // Bits have the following meaning:
+    // 0 	Sender wants ChannelAnnouncement
+    // 1 	Sender wants ChannelUpdate for node 1
+    // 2 	Sender wants ChannelUpdate for node 2
+    // 3 	Sender wants NodeAnnouncement for node 1
+    // 4 	Sender wants NodeAnnouncement for node 2
+    #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct BroadcastMessageQueryFlags: u8 {
+        const CHANNEL_ANNOUNCEMENT = 1;
+        const CHANNEL_UPDATE_NODE1 = 1 << 1;
+        const CHANNEL_UPDATE_NODE2 = 1 << 2;
+        const NODE_ANNOUNCEMENT_NODE1 = 1 << 3;
+        const NODE_ANNOUNCEMENT_NODE2 = 1 << 4;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BroadcastMessageQuery {
     pub channel_outpoint: OutPoint,
-    pub flags: u8,
+    pub flags: BroadcastMessageQueryFlags,
 }
 
 impl From<BroadcastMessageQuery> for molecule_gossip::BroadcastMessageQuery {
     fn from(broadcast_message_query: BroadcastMessageQuery) -> Self {
         molecule_gossip::BroadcastMessageQuery::new_builder()
             .channel_outpoint(broadcast_message_query.channel_outpoint)
-            .flags(broadcast_message_query.flags.into())
+            .flags(broadcast_message_query.flags.bits().into())
             .build()
     }
 }
@@ -2400,7 +2459,10 @@ impl TryFrom<molecule_gossip::BroadcastMessageQuery> for BroadcastMessageQuery {
     ) -> Result<Self, Self::Error> {
         Ok(BroadcastMessageQuery {
             channel_outpoint: broadcast_message_query.channel_outpoint(),
-            flags: broadcast_message_query.flags().into(),
+            flags: BroadcastMessageQueryFlags::from_bits_truncate(
+                broadcast_message_query.flags().into(),
+            )
+            .into(),
         })
     }
 }
@@ -2415,7 +2477,7 @@ pub enum BroadcastMessageId {
 // 1 byte for message type, 36 bytes for message id
 const MESSAGE_ID_SIZE: usize = 1 + 36;
 // 8 bytes for timestamp, MESSAGE_ID_SIZE bytes for message id
-const CURSOR_SIZE: usize = 8 + MESSAGE_ID_SIZE;
+pub(crate) const CURSOR_SIZE: usize = 8 + MESSAGE_ID_SIZE;
 
 impl BroadcastMessageId {
     fn to_bytes(&self) -> [u8; MESSAGE_ID_SIZE] {
