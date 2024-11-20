@@ -271,8 +271,8 @@ impl Actor for CkbChainActor {
                     let ckb_client = CkbRpcClient::new(&rpc_url);
                     let _ = reply_port.send(
                         ckb_client
-                            .get_block(block_hash)
-                            .map(|x| x.map(|x| x.header.inner.timestamp.into())),
+                            .get_header(block_hash)
+                            .map(|x| x.map(|x| x.inner.timestamp.into())),
                     );
                 });
             }
