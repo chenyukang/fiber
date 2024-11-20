@@ -442,7 +442,9 @@ where
                 Ok(())
             }
             FiberChannelMessage::RevokeAndAck(revoke_and_ack) => {
+                error!("Received RevokeAndAck message: {:?}", &revoke_and_ack);
                 state.handle_revoke_and_ack_message(&self.network, revoke_and_ack)?;
+                error!("Finished handling RevokeAndAck message");
                 Ok(())
             }
             FiberChannelMessage::ChannelReady(_channel_ready) => {
@@ -517,6 +519,7 @@ where
                                 ))
                                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                         }
+                        error!("finished handling AddTlc message with error: {:?}", e);
                         Err(e)
                     }
                 }
@@ -4461,6 +4464,7 @@ impl ChannelActorState {
             }
         };
 
+        info!("yukang begin to verify_and_complete_tx ....");
         let tx = self.verify_and_complete_tx(
             commitment_signed.funding_tx_partial_signature,
             commitment_signed.commitment_tx_partial_signature,
@@ -5417,6 +5421,7 @@ impl ChannelActorState {
             .lock()
             .args()
             .raw_data();
+
         let message = blake2b_256(
             [
                 to_local_output.as_slice(),
@@ -5427,7 +5432,9 @@ impl ChannelActorState {
             ]
             .concat(),
         );
+        error!("begin to verify commitment_tx_partial_signature");
         verify_ctx.verify(commitment_tx_partial_signature, message.as_slice())?;
+        info!("finished verify commitment_tx_partial_signature");
 
         Ok(PartiallySignedCommitmentTransaction {
             version: self.get_current_commitment_number(false),
