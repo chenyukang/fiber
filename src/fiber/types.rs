@@ -2321,6 +2321,22 @@ impl BroadcastMessageWithTimestamp {
         }
     }
 
+    pub fn message_id(&self) -> BroadcastMessageID {
+        match self {
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+                BroadcastMessageID::NodeAnnouncement(node_announcement.node_id)
+            }
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(_, channel_announcement) => {
+                BroadcastMessageID::ChannelAnnouncement(
+                    channel_announcement.channel_outpoint.clone(),
+                )
+            }
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone())
+            }
+        }
+    }
+
     pub fn create_broadcast_messages_filter_result(&self) -> BroadcastMessagesFilterResult {
         BroadcastMessagesFilterResult {
             messages: vec![BroadcastMessage::from(self.clone())],
@@ -2506,7 +2522,7 @@ impl TryFrom<molecule_gossip::BroadcastMessageQuery> for BroadcastMessageQuery {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum BroadcastMessageID {
     ChannelAnnouncement(OutPoint),
     ChannelUpdate(OutPoint),

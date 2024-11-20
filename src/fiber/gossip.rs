@@ -168,15 +168,20 @@ pub(crate) enum GossipActorMessage {
     GossipMessage(GossipMessageWithPeerId),
 }
 
-pub(crate) struct GossipActor {}
+pub(crate) struct GossipActor<S> {
+    _phantom: std::marker::PhantomData<S>,
+}
 
-impl GossipActor {
+impl<S> GossipActor<S> {
     fn new() -> Self {
-        Self {}
+        Self {
+            _phantom: Default::default(),
+        }
     }
 }
 
-pub(crate) struct GossipActorState {
+pub(crate) struct GossipActorState<S> {
+    store: S,
     control: ServiceAsyncControl,
     peer_session_map: HashMap<PeerId, SessionId>,
     peer_pubkey_map: HashMap<PeerId, Pubkey>,
@@ -189,13 +194,13 @@ pub(crate) struct GossipProtocolHandle {
 }
 
 impl GossipProtocolHandle {
-    pub(crate) async fn new(supervisor: ActorCell) -> Self {
+    pub(crate) async fn new<S: GossipMessageStore + Send + Sync + 'static>(store: S,supervisor: ActorCell) -> Self {
         let (sender, receiver) = oneshot::channel();
 
         let (actor, _handle) = ActorRuntime::spawn_linked_instant(
             Some("gossip actor".to_string()),
             GossipActor::new(),
-            receiver,
+            (store, receiver),
             supervisor,
         )
         .expect("start gossip actor");
@@ -221,15 +226,16 @@ impl GossipProtocolHandle {
 }
 
 #[rasync_trait]
-impl Actor for GossipActor {
+impl<S> Actor for GossipActor<S>
+where S: GossipMessageStore + Send + Sync + 'static {
     type Msg = GossipActorMessage;
-    type State = GossipActorState;
-    type Arguments = oneshot::Receiver<ServiceAsyncControl>;
+    type State = GossipActorState<S>;
+    type Arguments = (S, oneshot::Receiver<ServiceAsyncControl>);
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        rx: Self::Arguments,
+        (store, rx): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let control = timeout(Duration::from_secs(1), rx)
             .await
@@ -237,6 +243,7 @@ impl Actor for GossipActor {
             .expect("receive control");
         debug!("Gossip actor received service control");
         let state = Self::State {
+            store,
             control,
             peer_pubkey_map: Default::default(),
             peer_session_map: Default::default(),

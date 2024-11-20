@@ -22,6 +22,10 @@ use tokio::{
     time::sleep,
 };
 
+use crate::fiber::gossip::GossipMessageStore;
+use crate::fiber::types::{
+    BroadcastMessage, BroadcastMessageID, BroadcastMessageWithTimestamp, Cursor,
+};
 use crate::{
     actors::{RootActor, RootActorMessage},
     ckb::tests::test_utils::{
@@ -498,6 +502,7 @@ pub struct MemoryStore {
     channel_actor_state_map: Arc<RwLock<HashMap<Hash256, ChannelActorState>>>,
     channels_map: Arc<RwLock<HashMap<OutPoint, ChannelInfo>>>,
     nodes_map: Arc<RwLock<HashMap<Pubkey, NodeInfo>>>,
+    gossip_messages_map: Arc<RwLock<HashMap<BroadcastMessageID, BroadcastMessageWithTimestamp>>>,
     payment_sessions: Arc<RwLock<HashMap<Hash256, PaymentSession>>>,
     invoice_store: Arc<RwLock<HashMap<Hash256, CkbInvoice>>>,
     invoice_hash_to_preimage: Arc<RwLock<HashMap<Hash256, Hash256>>>,
@@ -516,6 +521,78 @@ impl NetworkActorStateStore for MemoryStore {
     }
 }
 
+impl GossipMessageStore for MemoryStore {
+    fn get_broadcast_messages(
+        &self,
+        after_cursor: &Cursor,
+        count: Option<u16>,
+    ) -> Vec<BroadcastMessageWithTimestamp> {
+        let mut res = vec![];
+        for message in self.gossip_messages_map.read().unwrap().values() {
+            if after_cursor < &message.cursor() {
+                res.push(message.clone());
+            }
+        }
+        res
+    }
+
+    fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
+        match self
+            .gossip_messages_map
+            .read()
+            .unwrap()
+            .get(&message.message_id())
+        {
+            Some(old) if old.timestamp() > message.timestamp() => {
+                return;
+            }
+            _ => {}
+        }
+        self.gossip_messages_map
+            .write()
+            .unwrap()
+            .insert(message.message_id(), message);
+    }
+
+    fn get_broadcast_message_with_cursor(
+        &self,
+        cursor: &Cursor,
+    ) -> Option<BroadcastMessageWithTimestamp> {
+        self.gossip_messages_map
+            .read()
+            .unwrap()
+            .get(&cursor.message_id)
+            .cloned()
+    }
+
+    fn get_latest_channel_announcement_timestamp(&self, outpoint: &OutPoint) -> Option<u64> {
+        self.gossip_messages_map
+            .read()
+            .unwrap()
+            .get(&BroadcastMessageID::ChannelAnnouncement(outpoint.clone()))
+            .map(|msg| msg.timestamp())
+    }
+
+    fn get_latest_channel_update_timestamp(
+        &self,
+        outpoint: &OutPoint,
+        is_node1: bool,
+    ) -> Option<u64> {
+        self.gossip_messages_map
+            .read()
+            .unwrap()
+            .get(&BroadcastMessageID::ChannelUpdate(outpoint.clone()))
+            .map(|msg| msg.timestamp())
+    }
+
+    fn get_lastest_node_announcement_timestamp(&self, pk: &Pubkey) -> Option<u64> {
+        self.gossip_messages_map
+            .read()
+            .unwrap()
+            .get(&BroadcastMessageID::NodeAnnouncement(pk.clone()))
+            .map(|msg| msg.timestamp())
+    }
+}
 impl NetworkGraphStateStore for MemoryStore {
     fn get_channels(&self, outpoint: Option<OutPoint>) -> Vec<ChannelInfo> {
         if let Some(outpoint) = outpoint {

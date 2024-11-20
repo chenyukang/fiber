@@ -54,7 +54,7 @@ use super::channel::{
 };
 use super::config::AnnouncedNodeName;
 use super::fee::{calculate_commitment_tx_fee, default_minimal_ckb_amount};
-use super::gossip::GossipActorMessage;
+use super::gossip::{GossipActorMessage, GossipMessageStore};
 use super::graph::{NetworkGraph, NetworkGraphStateStore};
 use super::graph_syncer::{GraphSyncer, GraphSyncerMessage};
 use super::key::blake2b_hash_with_salt;
@@ -3305,6 +3305,7 @@ where
     S: NetworkActorStateStore
         + ChannelActorStateStore
         + NetworkGraphStateStore
+        + GossipMessageStore
         + InvoiceStore
         + Clone
         + Send
@@ -3345,7 +3346,7 @@ where
         let secio_pk = secio_kp.public_key();
         let handle = MyServiceHandle::new(myself.clone());
         let fiber_handle = FiberProtocolHandle::from(&handle);
-        let gossip_handle = GossipProtocolHandle::new(myself.get_cell()).await;
+        let gossip_handle = GossipProtocolHandle::new(self.store.clone(), myself.get_cell()).await;
         let gossip_actor = gossip_handle.actor().clone();
         let mut service = ServiceBuilder::default()
             .insert_protocol(fiber_handle.create_meta())
@@ -3718,6 +3719,7 @@ pub async fn start_network<
     S: NetworkActorStateStore
         + ChannelActorStateStore
         + NetworkGraphStateStore
+        + GossipMessageStore
         + InvoiceStore
         + Clone
         + Send
