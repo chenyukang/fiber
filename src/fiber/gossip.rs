@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use ckb_types::packed::OutPoint;
 use ractor::{
     async_trait as rasync_trait,
     concurrency::{timeout, Duration},
@@ -24,8 +25,130 @@ use crate::unwrap_or_return;
 
 use super::{
     network::{get_chain_hash, GossipMessageWithPeerId, GOSSIP_PROTOCOL_ID},
-    types::{BroadcastMessage, BroadcastMessagesFilter, Cursor, GossipMessage, Pubkey},
+    types::{
+        BroadcastMessage, BroadcastMessageId, BroadcastMessageQuery, BroadcastMessageQueryFlags,
+        BroadcastMessageWithTimestamp, BroadcastMessagesFilter, Cursor, GossipMessage, Pubkey,
+    },
 };
+
+pub(crate) trait GossipMessageStore {
+    fn get_broadcast_messages(
+        &self,
+        after_cursor: &Cursor,
+        count: Option<u16>,
+    ) -> Vec<BroadcastMessageWithTimestamp>;
+
+    fn query_broadcast_messages<I: IntoIterator<Item = BroadcastMessageQuery>>(
+        &self,
+        queries: I,
+    ) -> (Vec<BroadcastMessageWithTimestamp>, Vec<u16>) {
+        let mut results = Vec::new();
+        let mut missing = Vec::new();
+        for (index, query) in queries.into_iter().enumerate() {
+            if let Some(message) = self.query_broadcast_message(query) {
+                results.push(message);
+            } else {
+                missing.push(index as u16);
+            }
+        }
+        (results, missing)
+    }
+
+    fn query_broadcast_message(
+        &self,
+        query: BroadcastMessageQuery,
+    ) -> Option<BroadcastMessageWithTimestamp> {
+        match query.flags {
+            BroadcastMessageQueryFlags::ChannelAnnouncement => self
+                .get_latest_broadcast_message(&BroadcastMessageId::ChannelAnnouncement(
+                    query.channel_outpoint,
+                )),
+            BroadcastMessageQueryFlags::ChannelUpdateNode1 => self
+                .get_latest_broadcast_message(&BroadcastMessageId::ChannelUpdate(
+                    query.channel_outpoint,
+                    true,
+                )),
+            BroadcastMessageQueryFlags::ChannelUpdateNode2 => self
+                .get_latest_broadcast_message(&BroadcastMessageId::ChannelUpdate(
+                    query.channel_outpoint,
+                    false,
+                )),
+            BroadcastMessageQueryFlags::NodeAnnouncementNode1 | BroadcastMessageQueryFlags::NodeAnnouncementNode2 => {
+                self
+                .get_latest_broadcast_message(&BroadcastMessageId::ChannelAnnouncement(
+                    query.channel_outpoint.clone(),
+                )).and_then(
+                    |message| {
+                        match message {
+                            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement) => {
+                                let node = if query.flags == BroadcastMessageQueryFlags::NodeAnnouncementNode1 {
+                                    &channel_announcement.node1_id
+                                } else {
+                                    &channel_announcement.node2_id
+                                };
+                                self.get_latest_broadcast_message(&BroadcastMessageId::NodeAnnouncement(node.clone()))
+                            }
+                            _ => panic!("Query ChannelAnnouncement for {:?} returned non-ChannelAnnouncement message {:?}", &query.channel_outpoint, &message),
+                    }
+                }
+                )
+            },
+        }
+    }
+
+    fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp);
+
+    fn get_broadcast_message_timestamp(&self, id: &BroadcastMessageId) -> Option<u64> {
+        match id {
+            BroadcastMessageId::ChannelAnnouncement(id) => self
+                .get_latest_channel_timestamps(id)
+                .and_then(|timestamps| {
+                    if 0 == timestamps[0] {
+                        None
+                    } else {
+                        Some(timestamps[0])
+                    }
+                }),
+            BroadcastMessageId::ChannelUpdate(id, is_node_1) => self
+                .get_latest_channel_timestamps(id)
+                .and_then(|timestamps| {
+                    if *is_node_1 {
+                        if 0 == timestamps[1] {
+                            None
+                        } else {
+                            Some(timestamps[1])
+                        }
+                    } else {
+                        if 0 == timestamps[2] {
+                            None
+                        } else {
+                            Some(timestamps[2])
+                        }
+                    }
+                }),
+            BroadcastMessageId::NodeAnnouncement(pk) => self.get_latest_node_timestamp(pk),
+        }
+    }
+
+    fn get_broadcast_message_with_cursor(
+        &self,
+        cursor: &Cursor,
+    ) -> Option<BroadcastMessageWithTimestamp>;
+
+    fn get_latest_channel_timestamps(&self, outpoint: &OutPoint) -> Option<[u64; 3]>;
+
+    fn get_latest_node_timestamp(&self, pk: &Pubkey) -> Option<u64>;
+
+    fn get_latest_broadcast_message(
+        &self,
+        id: &BroadcastMessageId,
+    ) -> Option<BroadcastMessageWithTimestamp> {
+        self.get_broadcast_message_timestamp(&id)
+            .and_then(|timestamp| {
+                self.get_broadcast_message_with_cursor(&Cursor::new(timestamp, id.clone()))
+            })
+    }
+}
 
 pub(crate) enum GossipActorMessage {
     /// Network events to be processed by this actor.

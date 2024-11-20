@@ -1,9 +1,14 @@
 use crate::{
     fiber::{
         channel::{ChannelActorState, ChannelActorStateStore, ChannelState},
+        gossip::GossipMessageStore,
         graph::{ChannelInfo, NetworkGraphStateStore, NodeInfo, PaymentSession},
         network::{NetworkActorStateStore, PersistentNetworkActorState},
-        types::{Hash256, Pubkey},
+        types::{
+            BroadcastMessage, BroadcastMessageId, BroadcastMessageQuery,
+            BroadcastMessageQueryFlags, BroadcastMessageWithTimestamp, Cursor, Hash256, Pubkey,
+            CURSOR_SIZE,
+        },
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceError, InvoiceStore},
     watchtower::{ChannelData, RevocationData, WatchtowerStore},
@@ -11,10 +16,13 @@ use crate::{
 use ckb_jsonrpc_types::JsonBytes;
 use ckb_types::packed::{OutPoint, Script};
 use ckb_types::prelude::Entity;
+use core::time;
 use rocksdb::{prelude::*, DBIterator, Direction, IteratorMode, WriteBatch, DB};
 use serde_json;
 use std::{path::Path, sync::Arc};
 use tentacle::secio::PeerId;
+
+const DEFAULT_NUM_OF_BROADCAST_MESSAGES: u16 = 1000;
 
 #[derive(Clone)]
 pub struct Store {
@@ -109,16 +117,6 @@ impl Batch {
                 );
             }
             KeyValue::ChannelInfo(channel_id, channel) => {
-                // Save channel update timestamp to index, so that we can query channels by timestamp
-                self.put(
-                    [
-                        CHANNEL_UPDATE_INDEX_PREFIX.to_be_bytes().as_slice(),
-                        channel.timestamp.to_be_bytes().as_slice(),
-                    ]
-                    .concat(),
-                    channel_id.as_slice(),
-                );
-
                 // Save channel announcement block numbers to index, so that we can query channels by block number
                 self.put(
                     [
@@ -208,7 +206,8 @@ impl Batch {
 /// | 64           | PeerId | Hash256   | ChannelState                |
 /// | 96           | ChannelId          | ChannelInfo                 |
 /// | 97           | Block | Index      | ChannelId                   |
-/// | 98           | Timestamp          | ChannelId                   |
+/// | 98           | Cursor             | BroadcastMessage            |
+/// | 99           | BroadcastMessageID | Timestamp                   |
 /// | 128          | NodeId             | NodeInfo                    |
 /// | 129          | Timestamp          | NodeId                      |
 /// | 160          | PeerId             | MultiAddr                   |
@@ -225,7 +224,8 @@ const CKB_INVOICE_STATUS_PREFIX: u8 = 34;
 const PEER_ID_CHANNEL_ID_PREFIX: u8 = 64;
 pub(crate) const CHANNEL_INFO_PREFIX: u8 = 96;
 const CHANNEL_ANNOUNCEMENT_INDEX_PREFIX: u8 = 97;
-const CHANNEL_UPDATE_INDEX_PREFIX: u8 = 98;
+const BROADCAST_MESSAGE_PREFIX: u8 = 98;
+const BROADCAST_MESSAGE_TIMESTAMP_PREFIX: u8 = 98;
 pub(crate) const NODE_INFO_PREFIX: u8 = 128;
 const NODE_ANNOUNCEMENT_INDEX_PREFIX: u8 = 129;
 const PAYMENT_SESSION_PREFIX: u8 = 192;
@@ -408,6 +408,69 @@ impl InvoiceStore for Store {
         self.get(key).map(|v| {
             serde_json::from_slice(v.as_ref()).expect("deserialize CkbInvoiceStatus should be OK")
         })
+    }
+}
+
+fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
+    todo!()
+}
+
+fn get_broadcast_message_timestamp(&self, id: &BroadcastMessageId) -> Option<u64> {
+    let key = [
+        &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+        id.to_bytes().as_slice(),
+    ]
+    .concat();
+    self.get(key)
+        .map(|v| u64::from_be_bytes(v.try_into().expect("Timestamp saved in 8 bytes")))
+}
+
+impl GossipMessageStore for Store {
+    fn get_broadcast_messages(
+        &self,
+        after_cursor: &Cursor,
+        count: Option<u16>,
+    ) -> Vec<BroadcastMessageWithTimestamp> {
+        let prefix = [
+            &[BROADCAST_MESSAGE_PREFIX],
+            after_cursor.to_bytes().as_slice(),
+        ]
+        .concat();
+        let count = count.unwrap_or(DEFAULT_NUM_OF_BROADCAST_MESSAGES) as usize;
+        let iter = self
+            .db
+            .prefix_iterator(prefix.as_ref())
+            .take_while(|(key, _)| key.starts_with(&prefix));
+        iter.take(count)
+            .map(|(key, value)| {
+                debug_assert_eq!(key.len(), 1 + CURSOR_SIZE);
+                let mut timestamp_bytes = [0u8; 8];
+                timestamp_bytes.copy_from_slice(&key[1..9]);
+                let timestamp = u64::from_le_bytes(timestamp_bytes);
+                let message: BroadcastMessage = serde_json::from_slice(value.as_ref())
+                    .expect("deserialize BroadcastMessage should be OK");
+                (message, timestamp).into()
+            })
+            .collect()
+    }
+
+    fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
+        todo!()
+    }
+
+    fn get_broadcast_message_with_cursor(
+        &self,
+        cursor: &Cursor,
+    ) -> Option<BroadcastMessageWithTimestamp> {
+        todo!()
+    }
+
+    fn get_latest_channel_timestamps(&self, outpoint: &OutPoint) -> Option<[u64; 3]> {
+        todo!()
+    }
+
+    fn get_latest_node_timestamp(&self, pk: &Pubkey) -> Option<u64> {
+        todo!()
     }
 }
 

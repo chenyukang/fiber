@@ -2281,6 +2281,29 @@ pub enum BroadcastMessageWithTimestamp {
     ChannelUpdate(ChannelUpdate),
 }
 
+impl From<BroadcastMessageWithTimestamp> for Cursor {
+    fn from(broadcast_message_with_timestamp: BroadcastMessageWithTimestamp) -> Self {
+        match broadcast_message_with_timestamp {
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => Cursor::new(
+                node_announcement.version,
+                BroadcastMessageId::NodeAnnouncement(node_announcement.node_id),
+            ),
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement) => {
+                Cursor::new(
+                    timestamp,
+                    BroadcastMessageId::ChannelAnnouncement(
+                        channel_announcement.channel_outpoint.clone(),
+                    ),
+                )
+            }
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => Cursor::new(
+                channel_update.version,
+                BroadcastMessageId::ChannelUpdate(channel_update.channel_outpoint.clone()),
+            ),
+        }
+    }
+}
+
 impl From<BroadcastMessageWithTimestamp> for BroadcastMessage {
     fn from(broadcast_message_with_timestamp: BroadcastMessageWithTimestamp) -> Self {
         match broadcast_message_with_timestamp {
@@ -2418,21 +2441,45 @@ impl BroadcastMessage {
     }
 }
 
-bitflags::bitflags! {
-    // Bits have the following meaning:
-    // 0 	Sender wants ChannelAnnouncement
-    // 1 	Sender wants ChannelUpdate for node 1
-    // 2 	Sender wants ChannelUpdate for node 2
-    // 3 	Sender wants NodeAnnouncement for node 1
-    // 4 	Sender wants NodeAnnouncement for node 2
-    #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(transparent)]
-    pub struct BroadcastMessageQueryFlags: u8 {
-        const CHANNEL_ANNOUNCEMENT = 1;
-        const CHANNEL_UPDATE_NODE1 = 1 << 1;
-        const CHANNEL_UPDATE_NODE2 = 1 << 2;
-        const NODE_ANNOUNCEMENT_NODE1 = 1 << 3;
-        const NODE_ANNOUNCEMENT_NODE2 = 1 << 4;
+/// Note that currently we only allow querying for one type of broadcast message at a time.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum BroadcastMessageQueryFlags {
+    ChannelAnnouncement,
+    ChannelUpdateNode1,
+    ChannelUpdateNode2,
+    NodeAnnouncementNode1,
+    NodeAnnouncementNode2,
+}
+
+impl From<BroadcastMessageQueryFlags> for u8 {
+    fn from(value: BroadcastMessageQueryFlags) -> u8 {
+        match value {
+            // The numbers are chosen to be powers of 2 so that they can be combined using bitwise OR.
+            // But we disallow querying for multiple types of broadcast messages at a time for now.
+            BroadcastMessageQueryFlags::ChannelAnnouncement => 1,
+            BroadcastMessageQueryFlags::ChannelUpdateNode1 => 2,
+            BroadcastMessageQueryFlags::ChannelUpdateNode2 => 4,
+            BroadcastMessageQueryFlags::NodeAnnouncementNode1 => 8,
+            BroadcastMessageQueryFlags::NodeAnnouncementNode2 => 16,
+        }
+    }
+}
+
+impl TryFrom<u8> for BroadcastMessageQueryFlags {
+    type Error = Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(BroadcastMessageQueryFlags::ChannelAnnouncement),
+            2 => Ok(BroadcastMessageQueryFlags::ChannelUpdateNode1),
+            4 => Ok(BroadcastMessageQueryFlags::ChannelUpdateNode2),
+            8 => Ok(BroadcastMessageQueryFlags::NodeAnnouncementNode1),
+            16 => Ok(BroadcastMessageQueryFlags::NodeAnnouncementNode2),
+            _ => Err(Error::AnyHow(anyhow!(
+                "Invalid broadcast message query flags: {}",
+                value
+            ))),
+        }
     }
 }
 
@@ -2446,7 +2493,7 @@ impl From<BroadcastMessageQuery> for molecule_gossip::BroadcastMessageQuery {
     fn from(broadcast_message_query: BroadcastMessageQuery) -> Self {
         molecule_gossip::BroadcastMessageQuery::new_builder()
             .channel_outpoint(broadcast_message_query.channel_outpoint)
-            .flags(broadcast_message_query.flags.bits().into())
+            .flags(u8::from(broadcast_message_query.flags).into())
             .build()
     }
 }
@@ -2459,10 +2506,7 @@ impl TryFrom<molecule_gossip::BroadcastMessageQuery> for BroadcastMessageQuery {
     ) -> Result<Self, Self::Error> {
         Ok(BroadcastMessageQuery {
             channel_outpoint: broadcast_message_query.channel_outpoint(),
-            flags: BroadcastMessageQueryFlags::from_bits_truncate(
-                broadcast_message_query.flags().into(),
-            )
-            .into(),
+            flags: u8::from(broadcast_message_query.flags()).try_into()?,
         })
     }
 }
@@ -2470,7 +2514,9 @@ impl TryFrom<molecule_gossip::BroadcastMessageQuery> for BroadcastMessageQuery {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum BroadcastMessageId {
     ChannelAnnouncement(OutPoint),
-    ChannelUpdate(OutPoint),
+    // The channel outpoint is used as the message id for ChannelUpdate,
+    // The bool value represents whether the message is from node 1 (true) or node 2 (false).
+    ChannelUpdate(OutPoint, bool),
     NodeAnnouncement(Pubkey),
 }
 
@@ -2480,14 +2526,14 @@ const MESSAGE_ID_SIZE: usize = 1 + 36;
 pub(crate) const CURSOR_SIZE: usize = 8 + MESSAGE_ID_SIZE;
 
 impl BroadcastMessageId {
-    fn to_bytes(&self) -> [u8; MESSAGE_ID_SIZE] {
+    pub(crate) fn to_bytes(&self) -> [u8; MESSAGE_ID_SIZE] {
         let mut result = [0u8; MESSAGE_ID_SIZE];
         match self {
             BroadcastMessageId::ChannelAnnouncement(channel_outpoint) => {
                 result[0] = 0;
                 result[1..].copy_from_slice(&channel_outpoint.as_bytes());
             }
-            BroadcastMessageId::ChannelUpdate(channel_outpoint) => {
+            BroadcastMessageId::ChannelUpdate(channel_outpoint, _) => {
                 result[0] = 1;
                 result[1..].copy_from_slice(&channel_outpoint.as_bytes());
             }
@@ -2500,7 +2546,7 @@ impl BroadcastMessageId {
         result
     }
 
-    fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() != MESSAGE_ID_SIZE {
             return Err(Error::AnyHow(anyhow!(
                 "Invalid message id size: {}",
@@ -2511,9 +2557,11 @@ impl BroadcastMessageId {
             0 => Ok(BroadcastMessageId::ChannelAnnouncement(
                 OutPoint::from_slice(&bytes[1..])?,
             )),
-            1 => Ok(BroadcastMessageId::ChannelUpdate(OutPoint::from_slice(
-                &bytes[1..],
-            )?)),
+            1 => Ok(BroadcastMessageId::ChannelUpdate(
+                OutPoint::from_slice(&bytes[1..])?,
+                // TODO: per discussion, the cursor of channel update have no field to indicate the direction,
+                true,
+            )),
             2 => Ok(BroadcastMessageId::NodeAnnouncement(Pubkey::from_slice(
                 &bytes[1..1 + Pubkey::serialization_len()],
             )?)),
