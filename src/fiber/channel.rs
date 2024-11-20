@@ -68,10 +68,10 @@ use super::{
     network::FiberMessageWithPeerId,
     serde_utils::EntityHex,
     types::{
-        AcceptChannel, AddTlc, ChannelAnnouncement, ChannelReady, ClosingSigned, CommitmentSigned,
-        EcdsaSignature, FiberChannelMessage, FiberMessage, Hash256, OpenChannel, Privkey, Pubkey,
-        ReestablishChannel, RemoveTlc, RemoveTlcFulfill, RemoveTlcReason, RevokeAndAck,
-        TxCollaborationMsg, TxComplete, TxUpdate,
+        AcceptChannel, AddTlc, BroadcastMessageWithTimestamp, ChannelAnnouncement, ChannelReady,
+        ClosingSigned, CommitmentSigned, EcdsaSignature, FiberChannelMessage, FiberMessage,
+        Hash256, OpenChannel, Privkey, Pubkey, ReestablishChannel, RemoveTlc, RemoveTlcFulfill,
+        RemoveTlcReason, RevokeAndAck, TxCollaborationMsg, TxComplete, TxUpdate,
     },
     NetworkActorCommand, NetworkActorEvent, NetworkActorMessage, ASSUME_NETWORK_ACTOR_ALIVE,
 };
@@ -1478,9 +1478,9 @@ where
 
                 self.network
                     .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
-                            update,
-                        )),
+                        NetworkActorCommand::BroadcastMessage(
+                            BroadcastMessageWithTimestamp::ChannelUpdate(update),
+                        ),
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
@@ -2620,9 +2620,9 @@ impl ChannelActorState {
 
         network
             .send_message(NetworkActorMessage::new_command(
-                NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
-                    channel_update,
-                )),
+                NetworkActorCommand::BroadcastMessage(
+                    BroadcastMessageWithTimestamp::ChannelUpdate(channel_update),
+                ),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
     }
@@ -4625,7 +4625,8 @@ impl ChannelActorState {
             network
                 .send_message(NetworkActorMessage::new_command(
                     NetworkActorCommand::BroadcastMessage(
-                        crate::fiber::types::BroadcastMessage::ChannelAnnouncement(
+                        crate::fiber::types::BroadcastMessageWithTimestamp::ChannelAnnouncement(
+                            u64::MAX, // TODO: use the correct timestamp
                             channel_announcement,
                         ),
                     ),
@@ -4638,9 +4639,9 @@ impl ChannelActorState {
 
             network
                 .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
-                        channel_update,
-                    )),
+                    NetworkActorCommand::BroadcastMessage(
+                        BroadcastMessageWithTimestamp::ChannelUpdate(channel_update),
+                    ),
                 ))
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
         }

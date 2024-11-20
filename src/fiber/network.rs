@@ -59,9 +59,10 @@ use super::graph::{NetworkGraph, NetworkGraphStateStore};
 use super::graph_syncer::{GraphSyncer, GraphSyncerMessage};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
-    BroadcastMessage, BroadcastMessageQuery, ChannelAnnouncement, ChannelUpdate, EcdsaSignature,
-    FiberMessage, GossipMessage, Hash256, NodeAnnouncement, OpenChannel, Privkey, Pubkey,
-    RemoveTlc, RemoveTlcReason, TlcErr, TlcErrData, TlcErrPacket, TlcErrorCode,
+    BroadcastMessage, BroadcastMessageQuery, BroadcastMessageWithTimestamp, ChannelAnnouncement,
+    ChannelUpdate, EcdsaSignature, FiberMessage, GossipMessage, Hash256, NodeAnnouncement,
+    OpenChannel, Privkey, Pubkey, RemoveTlc, RemoveTlcReason, TlcErr, TlcErrData, TlcErrPacket,
+    TlcErrorCode,
 };
 use super::{FiberConfig, ASSUME_NETWORK_ACTOR_ALIVE};
 
@@ -211,7 +212,7 @@ pub enum NetworkActorCommand {
     ),
     UpdateChannelFunding(Hash256, Transaction, FundingRequest),
     SignTx(PeerId, Hash256, Transaction, Option<Vec<Vec<u8>>>),
-    BroadcastMessage(BroadcastMessage),
+    BroadcastMessage(BroadcastMessageWithTimestamp),
     // Broadcast local information to the network.
     BroadcastLocalInfo(LocalInfoKind),
     SignMessage([u8; 32], RpcReplyPort<EcdsaSignature>),
@@ -1212,7 +1213,7 @@ where
                     myself
                         .send_message(NetworkActorMessage::new_command(
                             NetworkActorCommand::BroadcastMessage(
-                                BroadcastMessage::NodeAnnouncement(message),
+                                BroadcastMessageWithTimestamp::NodeAnnouncement(message),
                             ),
                         ))
                         .expect(ASSUME_NETWORK_MYSELF_ALIVE);

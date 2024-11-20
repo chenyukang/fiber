@@ -5,9 +5,8 @@ use crate::{
         graph::{ChannelInfo, NetworkGraphStateStore, NodeInfo, PaymentSession},
         network::{NetworkActorStateStore, PersistentNetworkActorState},
         types::{
-            BroadcastMessage, BroadcastMessageId, BroadcastMessageQuery,
-            BroadcastMessageQueryFlags, BroadcastMessageWithTimestamp, Cursor, Hash256, Pubkey,
-            CURSOR_SIZE,
+            BroadcastMessage, BroadcastMessageID, BroadcastMessageWithTimestamp, Cursor, Hash256,
+            Pubkey, CURSOR_SIZE,
         },
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceError, InvoiceStore},
@@ -16,7 +15,6 @@ use crate::{
 use ckb_jsonrpc_types::JsonBytes;
 use ckb_types::packed::{OutPoint, Script};
 use ckb_types::prelude::Entity;
-use core::time;
 use rocksdb::{prelude::*, DBIterator, Direction, IteratorMode, WriteBatch, DB};
 use serde_json;
 use std::{path::Path, sync::Arc};
@@ -411,20 +409,6 @@ impl InvoiceStore for Store {
     }
 }
 
-fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
-    todo!()
-}
-
-fn get_broadcast_message_timestamp(&self, id: &BroadcastMessageId) -> Option<u64> {
-    let key = [
-        &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
-        id.to_bytes().as_slice(),
-    ]
-    .concat();
-    self.get(key)
-        .map(|v| u64::from_be_bytes(v.try_into().expect("Timestamp saved in 8 bytes")))
-}
-
 impl GossipMessageStore for Store {
     fn get_broadcast_messages(
         &self,
@@ -455,22 +439,170 @@ impl GossipMessageStore for Store {
     }
 
     fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
-        todo!()
+        let mut batch = self.batch();
+        let cursor = message.cursor();
+        match &message {
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, message) => {
+                if let Some(_old_timestamp) =
+                    self.get_latest_channel_announcement_timestamp(&message.channel_outpoint)
+                {
+                    // Channel announcement is immutable. If we have already saved one channel announcement,
+                    // we can early return now.
+                    return;
+                }
+
+                // Update the timestamps of the channel
+                let timestamp_key = [
+                    &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+                    cursor.message_id.to_bytes().as_slice(),
+                ]
+                .concat();
+                let mut timestamps = self
+                    .get(&timestamp_key)
+                    .map(|v| v.try_into().expect("Invalid timestamp value length"))
+                    .unwrap_or([0u8; 24]);
+                timestamps[..8].copy_from_slice(&timestamp.to_le_bytes());
+                batch.put(timestamp_key, timestamps);
+            }
+
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                if let Some(old_timestamp) = self.get_latest_channel_update_timestamp(
+                    &channel_update.channel_outpoint,
+                    channel_update.is_update_of_node_1(),
+                ) {
+                    if channel_update.version <= old_timestamp {
+                        return;
+                    }
+
+                    batch.delete(
+                        [
+                            &[BROADCAST_MESSAGE_PREFIX],
+                            Cursor::new(old_timestamp, cursor.message_id.clone())
+                                .to_bytes()
+                                .as_slice(),
+                        ]
+                        .concat(),
+                    );
+
+                    // Update the timestamps of the channel
+                    let timestamp_key = [
+                        &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+                        cursor.message_id.to_bytes().as_slice(),
+                    ]
+                    .concat();
+                    let mut timestamps = self
+                        .get(&timestamp_key)
+                        .map(|v| v.try_into().expect("Invalid timestamp value length"))
+                        .unwrap_or([0u8; 24]);
+                    let start_index = if channel_update.is_update_of_node_1() {
+                        8
+                    } else {
+                        16
+                    };
+                    timestamps[start_index..start_index + 8]
+                        .copy_from_slice(&channel_update.version.to_le_bytes());
+                    batch.put(timestamp_key, timestamps);
+                }
+            }
+
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+                if let Some(old_timestamp) =
+                    self.get_lastest_node_announcement_timestamp(&node_announcement.node_id)
+                {
+                    if node_announcement.version <= old_timestamp {
+                        return;
+                    }
+
+                    batch.delete(
+                        [
+                            &[BROADCAST_MESSAGE_PREFIX],
+                            Cursor::new(old_timestamp, cursor.message_id.clone())
+                                .to_bytes()
+                                .as_slice(),
+                        ]
+                        .concat(),
+                    );
+                    batch.put(
+                        [
+                            &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+                            cursor.message_id.to_bytes().as_slice(),
+                        ]
+                        .concat(),
+                        node_announcement.version.to_le_bytes(),
+                    )
+                }
+            }
+        }
+
+        let message = BroadcastMessage::from(message);
+        batch.put(
+            [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
+            serde_json::to_vec(&message).expect("serialize BroadcastMessage should be OK"),
+        );
     }
 
     fn get_broadcast_message_with_cursor(
         &self,
         cursor: &Cursor,
     ) -> Option<BroadcastMessageWithTimestamp> {
-        todo!()
+        let timestamp = cursor.timestamp;
+        let key = [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat();
+        self.get(key).map(|v| {
+            BroadcastMessageWithTimestamp::from((
+                serde_json::from_slice(v.as_ref()).expect("deserialize Hash256 should be OK"),
+                timestamp,
+            ))
+        })
     }
 
-    fn get_latest_channel_timestamps(&self, outpoint: &OutPoint) -> Option<[u64; 3]> {
-        todo!()
+    fn get_latest_channel_announcement_timestamp(&self, outpoint: &OutPoint) -> Option<u64> {
+        let message_id = BroadcastMessageID::ChannelAnnouncement(outpoint.clone());
+        let timestamp_key = [
+            &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+            message_id.to_bytes().as_slice(),
+        ]
+        .concat();
+        self.get(&timestamp_key).map(|v| {
+            let v: [u8; 32] = v.try_into().expect("Invalid timestamp value length");
+            u64::from_le_bytes(
+                v[..8]
+                    .try_into()
+                    .expect("timestamp length valid, shown above"),
+            )
+        })
     }
 
-    fn get_latest_node_timestamp(&self, pk: &Pubkey) -> Option<u64> {
-        todo!()
+    fn get_latest_channel_update_timestamp(
+        &self,
+        outpoint: &OutPoint,
+        is_node1: bool,
+    ) -> Option<u64> {
+        let message_id = BroadcastMessageID::ChannelUpdate(outpoint.clone());
+        let timestamp_key = [
+            &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+            message_id.to_bytes().as_slice(),
+        ]
+        .concat();
+        self.get(&timestamp_key).map(|v| {
+            let v: [u8; 32] = v.try_into().expect("Invalid timestamp value length");
+            let start_index = if is_node1 { 8 } else { 16 };
+            u64::from_le_bytes(
+                v[start_index..start_index + 8]
+                    .try_into()
+                    .expect("timestamp length valid, shown above"),
+            )
+        })
+    }
+
+    fn get_lastest_node_announcement_timestamp(&self, pk: &Pubkey) -> Option<u64> {
+        let message_id = BroadcastMessageID::NodeAnnouncement(pk.clone());
+        let timestamp_key = [
+            &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+            message_id.to_bytes().as_slice(),
+        ]
+        .concat();
+        self.get(&timestamp_key)
+            .map(|v| u64::from_le_bytes(v.try_into().expect("Invalid timestamp value length")))
     }
 }
 

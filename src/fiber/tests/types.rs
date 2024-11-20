@@ -4,7 +4,7 @@ use crate::fiber::{
     hash_algorithm::HashAlgorithm,
     tests::test_utils::generate_pubkey,
     types::{
-        secp256k1_instance, AddTlc, BroadcastMessageId, Cursor, PaymentHopData, PeeledOnionPacket,
+        secp256k1_instance, AddTlc, BroadcastMessageID, Cursor, PaymentHopData, PeeledOnionPacket,
         Privkey, Pubkey, TlcErr, TlcErrPacket, TlcErrorCode,
     },
 };
@@ -41,7 +41,7 @@ fn test_serde_public_key() {
 fn test_serde_cursor_node_announcement() {
     let now = 0u64;
     let node_id = gen_rand_public_key();
-    let cursor = Cursor::new(now, BroadcastMessageId::NodeAnnouncement(node_id));
+    let cursor = Cursor::new(now, BroadcastMessageID::NodeAnnouncement(node_id));
     let moleculed_cursor: gossip::Cursor = cursor.clone().into();
     let unmoleculed_cursor: Cursor = moleculed_cursor.try_into().expect("decode");
     assert_eq!(cursor, unmoleculed_cursor);
@@ -53,7 +53,7 @@ fn test_serde_cursor_channel_announcement() {
     let channel_announcement_id = gen_random_channel_outpoint();
     let cursor = Cursor::new(
         now,
-        BroadcastMessageId::ChannelAnnouncement(channel_announcement_id),
+        BroadcastMessageID::ChannelAnnouncement(channel_announcement_id),
     );
     let moleculed_cursor: gossip::Cursor = cursor.clone().into();
     let unmoleculed_cursor: Cursor = moleculed_cursor.try_into().expect("decode");
@@ -64,7 +64,7 @@ fn test_serde_cursor_channel_announcement() {
 fn test_serde_cursor_channel_update() {
     let now = 0u64;
     let channel_update_id = gen_random_channel_outpoint();
-    let cursor = Cursor::new(now, BroadcastMessageId::ChannelUpdate(channel_update_id));
+    let cursor = Cursor::new(now, BroadcastMessageID::ChannelUpdate(channel_update_id));
     let moleculed_cursor: gossip::Cursor = cursor.clone().into();
     let unmoleculed_cursor: Cursor = moleculed_cursor.try_into().expect("decode");
     assert_eq!(cursor, unmoleculed_cursor);

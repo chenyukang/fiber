@@ -1944,6 +1944,14 @@ impl ChannelUpdate {
         };
         deterministically_hash(&unsigned_update)
     }
+
+    pub fn is_update_of_node_1(&self) -> bool {
+        self.channel_flags & 1 == 0
+    }
+
+    pub fn is_update_of_node_2(&self) -> bool {
+        !self.is_update_of_node_1()
+    }
 }
 
 impl From<ChannelUpdate> for molecule_gossip::ChannelUpdate {
@@ -2281,25 +2289,41 @@ pub enum BroadcastMessageWithTimestamp {
     ChannelUpdate(ChannelUpdate),
 }
 
-impl From<BroadcastMessageWithTimestamp> for Cursor {
-    fn from(broadcast_message_with_timestamp: BroadcastMessageWithTimestamp) -> Self {
-        match broadcast_message_with_timestamp {
+impl BroadcastMessageWithTimestamp {
+    pub fn cursor(&self) -> Cursor {
+        match self {
             BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => Cursor::new(
                 node_announcement.version,
-                BroadcastMessageId::NodeAnnouncement(node_announcement.node_id),
+                BroadcastMessageID::NodeAnnouncement(node_announcement.node_id),
             ),
             BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement) => {
                 Cursor::new(
-                    timestamp,
-                    BroadcastMessageId::ChannelAnnouncement(
+                    *timestamp,
+                    BroadcastMessageID::ChannelAnnouncement(
                         channel_announcement.channel_outpoint.clone(),
                     ),
                 )
             }
             BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => Cursor::new(
                 channel_update.version,
-                BroadcastMessageId::ChannelUpdate(channel_update.channel_outpoint.clone()),
+                BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone()),
             ),
+        }
+    }
+
+    pub fn timestamp(&self) -> u64 {
+        match self {
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+                node_announcement.version
+            }
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, _) => *timestamp,
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => channel_update.version,
+        }
+    }
+
+    pub fn create_broadcast_messages_filter_result(&self) -> BroadcastMessagesFilterResult {
+        BroadcastMessagesFilterResult {
+            messages: vec![BroadcastMessage::from(self.clone())],
         }
     }
 }
@@ -2334,14 +2358,6 @@ impl From<(BroadcastMessage, u64)> for BroadcastMessageWithTimestamp {
                 debug_assert_eq!(timestamp, channel_update.version);
                 BroadcastMessageWithTimestamp::ChannelUpdate(channel_update)
             }
-        }
-    }
-}
-
-impl BroadcastMessage {
-    pub fn create_broadcast_messages_filter_result(&self) -> BroadcastMessagesFilterResult {
-        BroadcastMessagesFilterResult {
-            messages: vec![self.clone()],
         }
     }
 }
@@ -2418,27 +2434,6 @@ impl BroadcastMessage {
             }
         }
     }
-
-    pub fn cursor(&self) -> Cursor {
-        match self {
-            BroadcastMessage::NodeAnnouncement(node_announcement) => Cursor::new(
-                node_announcement.version,
-                BroadcastMessageId::NodeAnnouncement(node_announcement.node_id),
-            ),
-            BroadcastMessage::ChannelAnnouncement(channel_announcement) => Cursor::new(
-                // TODO: Correctly set channel announcement timestamp
-                // 由于 ChannelAnnouncement 消息没有自带 timestamp, 以 channel outpoint 所在的 block header 中的 timestamp 作为该值
-                u64::MAX,
-                BroadcastMessageId::ChannelAnnouncement(
-                    channel_announcement.channel_outpoint.clone(),
-                ),
-            ),
-            BroadcastMessage::ChannelUpdate(channel_update) => Cursor::new(
-                channel_update.version,
-                BroadcastMessageId::ChannelUpdate(channel_update.channel_outpoint.clone()),
-            ),
-        }
-    }
 }
 
 /// Note that currently we only allow querying for one type of broadcast message at a time.
@@ -2512,11 +2507,9 @@ impl TryFrom<molecule_gossip::BroadcastMessageQuery> for BroadcastMessageQuery {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub enum BroadcastMessageId {
+pub enum BroadcastMessageID {
     ChannelAnnouncement(OutPoint),
-    // The channel outpoint is used as the message id for ChannelUpdate,
-    // The bool value represents whether the message is from node 1 (true) or node 2 (false).
-    ChannelUpdate(OutPoint, bool),
+    ChannelUpdate(OutPoint),
     NodeAnnouncement(Pubkey),
 }
 
@@ -2525,19 +2518,19 @@ const MESSAGE_ID_SIZE: usize = 1 + 36;
 // 8 bytes for timestamp, MESSAGE_ID_SIZE bytes for message id
 pub(crate) const CURSOR_SIZE: usize = 8 + MESSAGE_ID_SIZE;
 
-impl BroadcastMessageId {
+impl BroadcastMessageID {
     pub(crate) fn to_bytes(&self) -> [u8; MESSAGE_ID_SIZE] {
         let mut result = [0u8; MESSAGE_ID_SIZE];
         match self {
-            BroadcastMessageId::ChannelAnnouncement(channel_outpoint) => {
+            BroadcastMessageID::ChannelAnnouncement(channel_outpoint) => {
                 result[0] = 0;
                 result[1..].copy_from_slice(&channel_outpoint.as_bytes());
             }
-            BroadcastMessageId::ChannelUpdate(channel_outpoint, _) => {
+            BroadcastMessageID::ChannelUpdate(channel_outpoint) => {
                 result[0] = 1;
                 result[1..].copy_from_slice(&channel_outpoint.as_bytes());
             }
-            BroadcastMessageId::NodeAnnouncement(node_id) => {
+            BroadcastMessageID::NodeAnnouncement(node_id) => {
                 result[0] = 2;
                 let node_id = node_id.serialize();
                 result[1..1 + node_id.len()].copy_from_slice(&node_id);
@@ -2554,15 +2547,13 @@ impl BroadcastMessageId {
             )));
         }
         match bytes[0] {
-            0 => Ok(BroadcastMessageId::ChannelAnnouncement(
+            0 => Ok(BroadcastMessageID::ChannelAnnouncement(
                 OutPoint::from_slice(&bytes[1..])?,
             )),
-            1 => Ok(BroadcastMessageId::ChannelUpdate(
-                OutPoint::from_slice(&bytes[1..])?,
-                // TODO: per discussion, the cursor of channel update have no field to indicate the direction,
-                true,
-            )),
-            2 => Ok(BroadcastMessageId::NodeAnnouncement(Pubkey::from_slice(
+            1 => Ok(BroadcastMessageID::ChannelUpdate(OutPoint::from_slice(
+                &bytes[1..],
+            )?)),
+            2 => Ok(BroadcastMessageID::NodeAnnouncement(Pubkey::from_slice(
                 &bytes[1..1 + Pubkey::serialization_len()],
             )?)),
             _ => Err(Error::AnyHow(anyhow!(
@@ -2575,12 +2566,12 @@ impl BroadcastMessageId {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Cursor {
-    timestamp: u64,
-    message_id: BroadcastMessageId,
+    pub(crate) timestamp: u64,
+    pub(crate) message_id: BroadcastMessageID,
 }
 
 impl Cursor {
-    pub fn new(timestamp: u64, message_id: BroadcastMessageId) -> Self {
+    pub fn new(timestamp: u64, message_id: BroadcastMessageID) -> Self {
         Self {
             timestamp,
             message_id,
@@ -2641,7 +2632,7 @@ impl TryFrom<molecule_gossip::Cursor> for Cursor {
             )));
         }
         let timestamp = u64::from_le_bytes(slice[..8].try_into().expect("Cursor timestamp to u64"));
-        let message_id = BroadcastMessageId::from_bytes(&slice[8..])?;
+        let message_id = BroadcastMessageID::from_bytes(&slice[8..])?;
         Ok(Cursor {
             timestamp,
             message_id,
