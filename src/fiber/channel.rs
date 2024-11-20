@@ -396,6 +396,7 @@ where
                             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                     }
                 }
+                self.try_to_forward_pending_tlc(state).await;
                 self.try_to_settle_down_tlc(state);
                 Ok(())
             }
@@ -479,17 +480,18 @@ where
                     .handle_add_tlc_peer_message(state, add_tlc.clone())
                     .await
                 {
-                    Ok((added_tlc_id, peeled_packet_bytes)) => {
-                        if let Some(forward_packet_bytes) = peeled_packet_bytes {
-                            // `handle_forward_onion_packet` will handle the case where forwarding TLC fails
-                            // `remove_tlc` will be sent to the peer and proper error handling will be done
-                            self.handle_forward_onion_packet(
-                                state,
-                                forward_packet_bytes,
-                                added_tlc_id.into(),
-                            )
-                            .await?;
-                        }
+                    Ok((_added_tlc_id, _peeled_packet_bytes)) => {
+                        // if let Some(forward_packet_bytes) = peeled_packet_bytes {
+                        //     // `handle_forward_onion_packet` will handle the case where forwarding TLC fails
+                        //     // `remove_tlc` will be sent to the peer and proper error handling will be done
+                        //     self.handle_forward_onion_packet(
+                        //         state,
+                        //         forward_packet_bytes,
+                        //         added_tlc_id.into(),
+                        //     )
+                        //     .await?;
+                        // }
+                        // try_to_forward_pending_tlc will try to forward all pending tlcs
                         Ok(())
                     }
                     Err(e) => {
@@ -742,6 +744,16 @@ where
         )
     }
 
+    async fn try_to_forward_pending_tlc(&self, state: &mut ChannelActorState) {
+        let tlcs = state.get_tlcs_for_forwarding();
+        for tlc in tlcs {
+            let onion_packet = tlc.tlc.onion_packet.clone();
+            let _ = self
+                .handle_forward_onion_packet(state, onion_packet, tlc.tlc.id.into())
+                .await;
+        }
+    }
+
     fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState) {
         let tlcs = state.get_tlcs_for_settle_down();
         let mut update_invoice_payment_hash = false;
@@ -900,7 +912,8 @@ where
             }
         }
 
-        let tlc = state.create_inbounding_tlc(add_tlc.clone(), preimage)?;
+        let tlc =
+            state.create_inbounding_tlc(add_tlc.clone(), preimage, peeled_packet_bytes.clone())?;
         state.insert_tlc(tlc.clone())?;
         if let Some(payment_hash) = update_invoice_payment_hash {
             self.store
@@ -966,6 +979,7 @@ where
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
             let _ = recv.await.expect("RemoveTlc command replied");
         }
+        state.set_received_tlc_forwarded(added_tlc_id);
         Ok(())
     }
 
@@ -3288,7 +3302,25 @@ impl ChannelActorState {
         self.tlcs
             .values()
             .filter(|tlc| {
-                !tlc.is_offered() && tlc.creation_confirmed_at.is_some() && tlc.removed_at.is_none()
+                tlc.is_received()
+                    && tlc.creation_confirmed_at.is_some()
+                    && tlc.removed_at.is_none()
+                    && tlc.tlc.onion_packet.len() == 0
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn get_tlcs_for_forwarding(&self) -> Vec<DetailedTLCInfo> {
+        self.tlcs
+            .values()
+            .filter(|tlc| {
+                tlc.is_received()
+                    && tlc.creation_confirmed_at.is_some()
+                    && tlc.removed_at.is_none()
+                    && tlc.tlc.previous_tlc.is_none()
+                    && !tlc.forwarded
+                    && tlc.tlc.onion_packet.len() > 0
             })
             .cloned()
             .collect()
@@ -3491,6 +3523,12 @@ impl ChannelActorState {
         self.tlcs.get(&TLCId::Received(tlc_id))
     }
 
+    pub fn set_received_tlc_forwarded(&mut self, tlc_id: u64) {
+        if let Some(tlc) = self.tlcs.get_mut(&TLCId::Received(tlc_id)) {
+            tlc.forwarded = true;
+        }
+    }
+
     pub fn insert_tlc(&mut self, tlc: TLC) -> Result<DetailedTLCInfo, ProcessingChannelError> {
         let payment_hash = tlc.payment_hash;
         if let Some(tlc) = self
@@ -3564,6 +3602,7 @@ impl ChannelActorState {
             creation_confirmed_at: None,
             removed_at: None,
             removal_confirmed_at: None,
+            forwarded: false,
         };
         self.tlcs.insert(tlc.id, detailed_tlc.clone());
         if tlc.is_offered() {
@@ -4073,6 +4112,7 @@ impl ChannelActorState {
         &self,
         message: AddTlc,
         payment_preimage: Option<Hash256>,
+        onion_packet: Option<Vec<u8>>,
     ) -> Result<TLC, ProcessingChannelError> {
         if self.get_received_tlc(message.tlc_id).is_some() {
             return Err(ProcessingChannelError::InvalidParameter(format!(
@@ -4094,7 +4134,7 @@ impl ChannelActorState {
             expiry: message.expiry,
             payment_preimage,
             hash_algorithm: message.hash_algorithm,
-            onion_packet: message.onion_packet,
+            onion_packet: onion_packet.unwrap_or_default(),
             previous_tlc: None,
         })
     }
@@ -5773,11 +5813,17 @@ pub struct DetailedTLCInfo {
     // The initial commitment number of the party (the offerer) that
     // has confirmed the removal of this tlc.
     removal_confirmed_at: Option<CommitmentNumbers>,
+    // whether this tlc is forwarded to next hop
+    forwarded: bool,
 }
 
 impl DetailedTLCInfo {
     fn is_offered(&self) -> bool {
         self.tlc.is_offered()
+    }
+
+    fn is_received(&self) -> bool {
+        self.tlc.is_received()
     }
 
     fn get_commitment_numbers(&self, local: bool) -> CommitmentNumbers {
