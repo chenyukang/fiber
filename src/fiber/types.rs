@@ -2467,11 +2467,11 @@ impl From<BroadcastMessageQueryFlags> for u8 {
         match value {
             // The numbers are chosen to be powers of 2 so that they can be combined using bitwise OR.
             // But we disallow querying for multiple types of broadcast messages at a time for now.
-            BroadcastMessageQueryFlags::ChannelAnnouncement => 1,
-            BroadcastMessageQueryFlags::ChannelUpdateNode1 => 2,
-            BroadcastMessageQueryFlags::ChannelUpdateNode2 => 4,
-            BroadcastMessageQueryFlags::NodeAnnouncementNode1 => 8,
-            BroadcastMessageQueryFlags::NodeAnnouncementNode2 => 16,
+            BroadcastMessageQueryFlags::ChannelAnnouncement => 0,
+            BroadcastMessageQueryFlags::ChannelUpdateNode1 => 1,
+            BroadcastMessageQueryFlags::ChannelUpdateNode2 => 2,
+            BroadcastMessageQueryFlags::NodeAnnouncementNode1 => 4,
+            BroadcastMessageQueryFlags::NodeAnnouncementNode2 => 8,
         }
     }
 }
@@ -2481,11 +2481,11 @@ impl TryFrom<u8> for BroadcastMessageQueryFlags {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            1 => Ok(BroadcastMessageQueryFlags::ChannelAnnouncement),
-            2 => Ok(BroadcastMessageQueryFlags::ChannelUpdateNode1),
-            4 => Ok(BroadcastMessageQueryFlags::ChannelUpdateNode2),
-            8 => Ok(BroadcastMessageQueryFlags::NodeAnnouncementNode1),
-            16 => Ok(BroadcastMessageQueryFlags::NodeAnnouncementNode2),
+            0 => Ok(BroadcastMessageQueryFlags::ChannelAnnouncement),
+            1 => Ok(BroadcastMessageQueryFlags::ChannelUpdateNode1),
+            2 => Ok(BroadcastMessageQueryFlags::ChannelUpdateNode2),
+            4 => Ok(BroadcastMessageQueryFlags::NodeAnnouncementNode1),
+            8 => Ok(BroadcastMessageQueryFlags::NodeAnnouncementNode2),
             _ => Err(Error::AnyHow(anyhow!(
                 "Invalid broadcast message query flags: {}",
                 value
