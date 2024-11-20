@@ -598,7 +598,7 @@ where
                 (0, 0)
             } else {
                 let channel_info = self
-                    .get_channel(&route[i].channel_outpoint)
+                    .get_channel(&route[i + 1].channel_outpoint)
                     .expect("channel not found");
                 eprintln!("now use channel_info: {:?}", channel_info);
                 let channel_update = channel_info
