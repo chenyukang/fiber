@@ -502,7 +502,11 @@ pub struct MemoryStore {
     channel_actor_state_map: Arc<RwLock<HashMap<Hash256, ChannelActorState>>>,
     channels_map: Arc<RwLock<HashMap<OutPoint, ChannelInfo>>>,
     nodes_map: Arc<RwLock<HashMap<Pubkey, NodeInfo>>>,
-    gossip_messages_map: Arc<RwLock<HashMap<BroadcastMessageID, BroadcastMessageWithTimestamp>>>,
+    // The bool value in the key is to distinguish between channel updates of node1 or node2.
+    // It always is set to true for all other messages.
+    // This is to avoid overwriting the channel update of node2 with the channel update of node1.
+    gossip_messages_map:
+        Arc<RwLock<HashMap<(BroadcastMessageID, bool), BroadcastMessageWithTimestamp>>>,
     payment_sessions: Arc<RwLock<HashMap<Hash256, PaymentSession>>>,
     invoice_store: Arc<RwLock<HashMap<Hash256, CkbInvoice>>>,
     invoice_hash_to_preimage: Arc<RwLock<HashMap<Hash256, Hash256>>>,
@@ -537,12 +541,12 @@ impl GossipMessageStore for MemoryStore {
     }
 
     fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
-        match self
-            .gossip_messages_map
-            .read()
-            .unwrap()
-            .get(&message.message_id())
-        {
+        let is_node_1 = match &message {
+            BroadcastMessageWithTimestamp::ChannelUpdate(msg) if msg.is_update_of_node_2() => false,
+            _ => true,
+        };
+        let key = (message.message_id(), is_node_1);
+        match self.gossip_messages_map.read().unwrap().get(&key) {
             Some(old) if old.timestamp() > message.timestamp() => {
                 return;
             }
@@ -551,25 +555,28 @@ impl GossipMessageStore for MemoryStore {
         self.gossip_messages_map
             .write()
             .unwrap()
-            .insert(message.message_id(), message);
+            .insert(key, message);
     }
 
     fn get_broadcast_message_with_cursor(
         &self,
         cursor: &Cursor,
     ) -> Option<BroadcastMessageWithTimestamp> {
-        self.gossip_messages_map
-            .read()
-            .unwrap()
-            .get(&cursor.message_id)
-            .cloned()
+        let map = self.gossip_messages_map.read().unwrap();
+        // It is possible that the cursor is for a channel update of node2.
+        let key1 = (cursor.message_id.clone(), true);
+        let key2 = (cursor.message_id.clone(), false);
+        map.get(&key1).or_else(|| map.get(&key2)).cloned()
     }
 
     fn get_latest_channel_announcement_timestamp(&self, outpoint: &OutPoint) -> Option<u64> {
         self.gossip_messages_map
             .read()
             .unwrap()
-            .get(&BroadcastMessageID::ChannelAnnouncement(outpoint.clone()))
+            .get(&(
+                BroadcastMessageID::ChannelAnnouncement(outpoint.clone()),
+                true,
+            ))
             .map(|msg| msg.timestamp())
     }
 
@@ -581,7 +588,10 @@ impl GossipMessageStore for MemoryStore {
         self.gossip_messages_map
             .read()
             .unwrap()
-            .get(&BroadcastMessageID::ChannelUpdate(outpoint.clone()))
+            .get(&(
+                BroadcastMessageID::ChannelUpdate(outpoint.clone()),
+                is_node1,
+            ))
             .map(|msg| msg.timestamp())
     }
 
@@ -589,7 +599,7 @@ impl GossipMessageStore for MemoryStore {
         self.gossip_messages_map
             .read()
             .unwrap()
-            .get(&BroadcastMessageID::NodeAnnouncement(pk.clone()))
+            .get(&(BroadcastMessageID::NodeAnnouncement(pk.clone()), true))
             .map(|msg| msg.timestamp())
     }
 }
