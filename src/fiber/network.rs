@@ -168,7 +168,6 @@ pub struct NodeInfoResponse {
     pub channel_count: u32,
     pub pending_channel_count: u32,
     pub peers_count: u32,
-    pub network_sync_status: String,
     pub udt_cfg_infos: UdtCfgInfos,
 }
 
@@ -228,9 +227,7 @@ pub enum NetworkActorCommand {
     ),
     // Get Payment Session for query payment status and errors
     GetPayment(Hash256, RpcReplyPort<Result<SendPaymentResponse, String>>),
-    StartSyncing,
-    StopSyncing,
-    MarkSyncingDone,
+
     NodeInfo((), RpcReplyPort<Result<NodeInfoResponse, String>>),
 }
 
@@ -1189,53 +1186,6 @@ where
                         .expect(ASSUME_NETWORK_MYSELF_ALIVE);
                 }
             },
-            NetworkActorCommand::MarkSyncingDone => {
-                info!("Syncing network information finished");
-                state.sync_status = NetworkSyncStatus::Done;
-                // Send a service event that manifests the syncing is done.
-                myself
-                    .send_message(NetworkActorMessage::new_event(
-                        NetworkActorEvent::NetworkServiceEvent(
-                            NetworkServiceEvent::SyncingCompleted,
-                        ),
-                    ))
-                    .expect(ASSUME_NETWORK_MYSELF_ALIVE);
-            }
-            NetworkActorCommand::StartSyncing => match &mut state.sync_status {
-                NetworkSyncStatus::NotRunning(ref sync_state) => {
-                    debug!(
-                        "Starting syncing network information from state {:?}",
-                        sync_state
-                    );
-                    let sync_state = sync_state.refresh(self.chain_actor.clone()).await;
-                    state.sync_status = NetworkSyncStatus::Running(sync_state);
-                    let peers: Vec<_> = state.peer_session_map.keys().cloned().collect();
-                    debug!(
-                        "Trying to sync network information from peers: {:?}, sync parameters: {:?}",
-                        &peers, &state.sync_status
-                    );
-                }
-                _ => {
-                    error!(
-                        "Syncing is already started or is done: {:?}",
-                        &state.sync_status
-                    );
-                }
-            },
-            NetworkActorCommand::StopSyncing => match &mut state.sync_status {
-                NetworkSyncStatus::Running(s) => {
-                    debug!("Stopping syncing network information");
-                    let mut s = s.clone();
-                    state.sync_status = NetworkSyncStatus::NotRunning(s);
-                }
-                _ => {
-                    error!(
-                        "Syncing is not running or is already done: {:?}",
-                        &state.sync_status
-                    );
-                }
-            },
-
             NetworkActorCommand::NodeInfo(_, rpc) => {
                 let response = NodeInfoResponse {
                     node_name: state.node_name.clone(),
@@ -1254,7 +1204,6 @@ where
                     channel_count: state.channels.len() as u32,
                     pending_channel_count: state.pending_channels.len() as u32,
                     peers_count: state.peer_session_map.len() as u32,
-                    network_sync_status: state.sync_status.as_str().to_string(),
                     udt_cfg_infos: get_udt_whitelist(),
                 };
                 let _ = rpc.send(Ok(response));
@@ -1566,63 +1515,6 @@ impl NetworkSyncState {
     }
 }
 
-#[derive(Debug, Clone)]
-enum NetworkSyncStatus {
-    // The syncing is not running, but we have all the information to start syncing.
-    NotRunning(NetworkSyncState),
-    // We should start running the syncing immediately or the syncing is already in progress.
-    Running(NetworkSyncState),
-    // Syncing done, unless we restart the node, we don't have to sync again
-    // (we will automatically process the newest broadcasted network messages).
-    Done,
-}
-
-impl NetworkSyncStatus {
-    fn new(
-        start_immediately: bool,
-        starting_height: u64,
-        ending_height: u64,
-        starting_time: u64,
-        pinned_syncing_peers: Vec<(PeerId, Multiaddr)>,
-    ) -> Self {
-        let state = NetworkSyncState {
-            starting_height,
-            ending_height,
-            starting_time,
-            pinned_syncing_peers,
-            succeeded: 0,
-            failed: 0,
-        };
-        if start_immediately {
-            NetworkSyncStatus::Running(state)
-        } else {
-            NetworkSyncStatus::NotRunning(state)
-        }
-    }
-
-    fn is_syncing(&self) -> bool {
-        match self {
-            NetworkSyncStatus::NotRunning(_) => false,
-            NetworkSyncStatus::Running(_) => true,
-            NetworkSyncStatus::Done => false,
-        }
-    }
-
-    fn as_str(&self) -> &'static str {
-        match self {
-            NetworkSyncStatus::NotRunning(_) => "NotRunning",
-            NetworkSyncStatus::Running(_) => "Running",
-            NetworkSyncStatus::Done => "Done",
-        }
-    }
-}
-
-#[derive(Debug)]
-enum RequestState {
-    RequestSent,
-    RequestReturned(u64, bool),
-}
-
 pub struct NetworkActorState<S> {
     store: S,
     state_to_be_persisted: PersistentNetworkActorState,
@@ -1685,16 +1577,6 @@ pub struct NetworkActorState<S> {
     // message of the same type.
     broadcasted_messages: HashSet<Hash256>,
     channel_subscribers: ChannelSubscribers,
-    // Request id for the next request.
-    next_request_id: u64,
-    // The response of these broadcast messages will be sent to the corresponding channel.
-    // The first parameter is the next offset of the request, and the second parameter
-    // indicates whether the previous query is already fulfilled without additional results.
-    broadcast_message_responses:
-        HashMap<(PeerId, u64), (RequestState, RpcReplyPort<Result<(u64, bool), Error>>)>,
-    original_requests: HashMap<(PeerId, u64), u64>,
-    // This field holds the information about our syncing status.
-    sync_status: NetworkSyncStatus,
 }
 
 #[serde_as]
@@ -1872,90 +1754,6 @@ where
         let result = blake2b_hash_with_salt(&seed, b"FIBER_CHANNEL_SEED");
         self.entropy = blake2b_hash_with_salt(&result, b"FIBER_NETWORK_ENTROPY_UPDATE");
         result
-    }
-
-    // Create a channel which will receive the response from the peer.
-    // The channel will be closed after the response is received.
-    pub fn create_request_id_for_reply_port(
-        &mut self,
-        peer_id: &PeerId,
-        reply_port: RpcReplyPort<Result<(u64, bool), Error>>,
-    ) -> u64 {
-        let id = self.next_request_id;
-        self.next_request_id += 1;
-        self.broadcast_message_responses.insert(
-            (peer_id.clone(), id),
-            (RequestState::RequestSent, reply_port),
-        );
-        id
-    }
-
-    pub fn mark_request_finished(&mut self, peer_id: &PeerId, id: u64) {
-        match self
-            .broadcast_message_responses
-            .remove(&(peer_id.clone(), id))
-        {
-            None => {
-                error!(
-                    "Invalid request id {} for peer {:?}, original request not found",
-                    id, peer_id
-                );
-            }
-            Some((RequestState::RequestReturned(next_offset, is_finished), reply)) => {
-                let _ = reply.send(Ok((next_offset, is_finished)));
-            }
-            Some(state) => {
-                error!(
-                    "Invalid state for request id {} from peer {}: {:?}",
-                    id, peer_id, &state
-                );
-            }
-        }
-    }
-
-    pub fn mark_request_failed(&mut self, peer_id: &PeerId, id: u64, error: Error) {
-        match self
-            .broadcast_message_responses
-            .remove(&(peer_id.clone(), id))
-        {
-            None => {
-                error!(
-                    "Invalid request id {} for peer {:?}, original request not found",
-                    id, peer_id
-                );
-            }
-            Some((_state, reply)) => {
-                let _ = reply.send(Err(error));
-            }
-        }
-    }
-
-    pub fn get_original_request_id(&mut self, peer_id: &PeerId, request_id: u64) -> Option<u64> {
-        self.original_requests
-            .remove(&(peer_id.clone(), request_id))
-    }
-
-    fn record_request_result(
-        &mut self,
-        peer_id: &PeerId,
-        old_id: u64,
-        next_offset: u64,
-        is_finished: bool,
-    ) -> Option<u64> {
-        if !self
-            .broadcast_message_responses
-            .contains_key(&(peer_id.clone(), old_id))
-        {
-            return None;
-        }
-        self.broadcast_message_responses
-            .get_mut(&(peer_id.clone(), old_id))
-            .expect("key must exist in the hash map")
-            .0 = RequestState::RequestReturned(next_offset, is_finished);
-        let id = self.next_request_id;
-        self.next_request_id += 1;
-        self.original_requests.insert((peer_id.clone(), id), old_id);
-        Some(id)
     }
 
     pub async fn create_outbound_channel(
@@ -2989,13 +2787,6 @@ where
         let current_block_number = call!(chain_actor, CkbChainMessage::GetCurrentBlockNumber, ())
             .expect(ASSUME_CHAIN_ACTOR_ALWAYS_ALIVE_FOR_NOW)
             .expect("Get current block number from chain");
-        let sync_status = NetworkSyncStatus::new(
-            config.sync_network_graph(),
-            height,
-            current_block_number,
-            last_update,
-            vec![],
-        );
 
         let mut state = NetworkActorState {
             store: self.store.clone(),
@@ -3028,10 +2819,6 @@ where
             gossip_actor,
             broadcasted_messages: Default::default(),
             channel_subscribers,
-            next_request_id: Default::default(),
-            broadcast_message_responses: Default::default(),
-            original_requests: Default::default(),
-            sync_status,
         };
 
         // Save our own NodeInfo to the network graph.

@@ -118,25 +118,11 @@ fn create_fake_node_announcement_mesage_version3() -> NodeAnnouncement {
     NodeAnnouncement::new(node_name.into(), addresses, &priv_key, version, 0)
 }
 
-// Manually mark syncing done to avoid waiting for the syncing process.
-async fn new_synced_node(name: &str) -> NetworkNode {
-    let mut node = NetworkNode::new_with_node_name(name).await;
-    node.network_actor
-        .send_message(NetworkActorMessage::Command(
-            NetworkActorCommand::MarkSyncingDone,
-        ))
-        .expect("send message to network actor");
-
-    node.expect_event(|c| matches!(c, NetworkServiceEvent::SyncingCompleted))
-        .await;
-    node
-}
-
 #[tokio::test]
 async fn test_sync_channel_announcement_on_startup() {
     init_tracing();
 
-    let mut node1 = new_synced_node("node1").await;
+    let mut node1 = NetworkNode::new_with_node_name("node1").await;
     let mut node2 = NetworkNode::new_with_node_name("node2").await;
 
     let capacity = 42;
@@ -183,7 +169,7 @@ async fn test_sync_channel_announcement_on_startup() {
 async fn create_a_channel() -> (NetworkNode, ChannelInfo, Privkey, Privkey, Privkey) {
     init_tracing();
 
-    let mut node1 = new_synced_node("node1").await;
+    let mut node1 = NetworkNode::new_with_node_name("node1").await;
     let capacity = 42;
     let priv_key: Privkey = get_test_priv_key();
     let pubkey = priv_key.x_only_pub_key().serialize();
@@ -389,7 +375,7 @@ async fn test_channel_update_version() {
 async fn test_sync_node_announcement_version() {
     init_tracing();
 
-    let node = new_synced_node("node").await;
+    let node = NetworkNode::new_with_node_name("node").await;
     let test_pub_key = get_test_pub_key();
     let test_peer_id = get_test_peer_id();
 
@@ -461,7 +447,7 @@ async fn test_sync_node_announcement_version() {
 async fn test_sync_node_announcement_on_startup() {
     init_tracing();
 
-    let mut node1 = new_synced_node("node1").await;
+    let mut node1 = NetworkNode::new_with_node_name("node1").await;
     let mut node2 = NetworkNode::new_with_node_name("node2").await;
     let test_pub_key = get_test_pub_key();
     let test_peer_id = get_test_peer_id();
@@ -571,7 +557,7 @@ async fn test_persisting_bootnode() {
 
 #[tokio::test]
 async fn test_persisting_announced_nodes() {
-    let mut node = new_synced_node("test").await;
+    let mut node = NetworkNode::new_with_node_name("test").await;
 
     let announcement = create_fake_node_announcement_mesage_version1();
     let node_pk = announcement.node_id;
