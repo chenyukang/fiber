@@ -11,7 +11,7 @@ use ractor::{
     RactorErr, RpcReplyPort, SupervisionEvent,
 };
 use rand::Rng;
-use secp256k1::{Message, Secp256k1};
+use secp256k1::Secp256k1;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 use std::borrow::Cow;
@@ -56,13 +56,11 @@ use super::config::AnnouncedNodeName;
 use super::fee::{calculate_commitment_tx_fee, default_minimal_ckb_amount};
 use super::gossip::{GossipActorMessage, GossipMessageStore};
 use super::graph::{NetworkGraph, NetworkGraphStateStore};
-use super::graph_syncer::{GraphSyncer, GraphSyncerMessage};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
-    BroadcastMessage, BroadcastMessageQuery, BroadcastMessageWithTimestamp, ChannelAnnouncement,
-    ChannelUpdate, EcdsaSignature, FiberMessage, GossipMessage, Hash256, NodeAnnouncement,
-    OpenChannel, Privkey, Pubkey, RemoveTlc, RemoveTlcReason, TlcErr, TlcErrData, TlcErrPacket,
-    TlcErrorCode,
+    BroadcastMessage, BroadcastMessageWithTimestamp, EcdsaSignature, FiberMessage, GossipMessage,
+    Hash256, NodeAnnouncement, OpenChannel, Privkey, Pubkey, RemoveTlc, RemoveTlcReason, TlcErr,
+    TlcErrData, TlcErrPacket, TlcErrorCode,
 };
 use super::{FiberConfig, ASSUME_NETWORK_ACTOR_ALIVE};
 
@@ -73,11 +71,10 @@ use crate::fiber::channel::{
     AddTlcCommand, AddTlcResponse, TxCollaborationCommand, TxUpdateCommand,
 };
 use crate::fiber::gossip::GossipProtocolHandle;
-use crate::fiber::graph::{ChannelInfo, PaymentSession, PaymentSessionStatus};
+use crate::fiber::graph::{PaymentSession, PaymentSessionStatus};
 use crate::fiber::serde_utils::EntityHex;
 use crate::fiber::types::{
-    secp256k1_instance, FiberChannelMessage, PaymentOnionPacket, PeeledPaymentOnionPacket,
-    TxSignatures,
+    FiberChannelMessage, PaymentOnionPacket, PeeledPaymentOnionPacket, TxSignatures,
 };
 use crate::fiber::KeyPair;
 use crate::invoice::{CkbInvoice, InvoiceStore};
@@ -542,9 +539,6 @@ pub enum NetworkActorEvent {
     /// A closing transaction has failed (either because of invalid transaction or timeout)
     ClosingTransactionFailed(PeerId, Hash256, Byte32),
 
-    // The graph syncer to the peer has exited with some reason.
-    GraphSyncerExited(PeerId, GraphSyncerExitStatus),
-
     // A tlc remove message is received. (payment_hash, remove_tlc)
     TlcRemoveReceived(Hash256, RemoveTlc),
 
@@ -555,18 +549,6 @@ pub enum NetworkActorEvent {
     /// and they are also interesting to outside observers.
     /// Once we processed these events, we will send them to outside observers.
     NetworkServiceEvent(NetworkServiceEvent),
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum GraphSyncerExitStatus {
-    Succeeded,
-    Failed,
-}
-
-impl Default for GraphSyncerExitStatus {
-    fn default() -> Self {
-        Self::Failed
-    }
 }
 
 #[derive(Debug)]
@@ -708,7 +690,6 @@ where
                         error,
                     }) => {
                         error!("Dialer error: {:?} -> {:?}", address, error);
-                        state.maybe_tell_syncer_peer_disconnected_multiaddr(address)
                     }
                     _ => {}
                 }
@@ -869,25 +850,6 @@ where
                         ),
                     ))
                     .expect("myself alive");
-            }
-            NetworkActorEvent::GraphSyncerExited(peer_id, reason) => {
-                debug!(
-                    "Graph syncer to peer {:?} has exited with reason {:?}",
-                    &peer_id, &reason
-                );
-                if let NetworkSyncStatus::Running(state) = &mut state.sync_status {
-                    if let Some(actor) = state.active_syncers.remove(&peer_id) {
-                        actor
-                            .get_cell()
-                            .stop(Some("stopping syncer normally".to_string()));
-                    }
-                    debug!("Changing sync succeeded/failed counter");
-                    match reason {
-                        GraphSyncerExitStatus::Succeeded => state.succeeded += 1,
-                        GraphSyncerExitStatus::Failed => state.failed += 1,
-                    }
-                }
-                state.maybe_finish_sync();
             }
             NetworkActorEvent::TlcRemoveReceived(payment_hash, remove_tlc) => {
                 // When a node is restarted, RemoveTLC will also be resent if necessary
@@ -1252,9 +1214,6 @@ where
                         "Trying to sync network information from peers: {:?}, sync parameters: {:?}",
                         &peers, &state.sync_status
                     );
-                    for peer_id in peers {
-                        state.maybe_sync_network_graph(&peer_id).await;
-                    }
                 }
                 _ => {
                     error!(
@@ -1267,12 +1226,6 @@ where
                 NetworkSyncStatus::Running(s) => {
                     debug!("Stopping syncing network information");
                     let mut s = s.clone();
-                    for syncer in s.active_syncers.values() {
-                        syncer
-                            .get_cell()
-                            .stop(Some("stopping syncer on request".to_string()));
-                    }
-                    s.active_syncers.clear();
                     state.sync_status = NetworkSyncStatus::NotRunning(s);
                 }
                 _ => {
@@ -1593,7 +1546,6 @@ struct NetworkSyncState {
     // to random peers. If this functionality is desired, we should make a config option for it.
     // Otherwise, remove this completely.
     pinned_syncing_peers: Vec<(PeerId, Multiaddr)>,
-    active_syncers: HashMap<PeerId, ActorRef<GraphSyncerMessage>>,
     // Number of peers with whom we succeeded to sync.
     succeeded: usize,
     // Number of peers with whom we failed to sync.
@@ -1603,7 +1555,6 @@ struct NetworkSyncState {
 impl NetworkSyncState {
     async fn refresh(&self, chain_actor: ActorRef<CkbChainMessage>) -> Self {
         let mut cloned = self.clone();
-        cloned.active_syncers.clear();
         cloned.succeeded = 0;
         cloned.failed = 0;
         // TODO: The calling to chain actor will block the calling actor from handling other messages.
@@ -1612,70 +1563,6 @@ impl NetworkSyncState {
             .expect("Get current block number from chain");
         cloned.ending_height = current_block_number;
         cloned
-    }
-
-    // Note that this function may actually change the state, this is because,
-    // when the sync to all peers failed, we actually want to start a new syncer,
-    // and we want to track this syncer.
-    async fn maybe_create_graph_syncer(
-        &mut self,
-        peer_id: &PeerId,
-        network: ActorRef<NetworkActorMessage>,
-    ) -> Option<ActorRef<GraphSyncerMessage>> {
-        let should_create = !self.active_syncers.contains_key(peer_id)
-            && if self.failed >= self.pinned_syncing_peers.len() {
-                // There are two possibility for the above condition to be true:
-                // 1) we don't have any pinned syncing peers.
-                // 2) we have some pinned syncing peers, and all of them failed to sync.
-                // In the first case, both self.pinned_syncing_peers.len() is always 0,
-                // and self.failed is alway greater or equal 0, so the condition is always true.
-                // In the second case, if self.failed is larger than the length of pinned_syncing_peers,
-                // then all of pinned sync peers failed to sync. This is because
-                // we will always try to sync with all the pinned syncing peers first.
-                if self.succeeded != 0 {
-                    // TODO: we may want more than one successful syncing.
-                    false
-                } else {
-                    debug!("Adding peer to dynamic syncing peers list: peer {:?}, succeeded syncing {}, failed syncing {}, pinned syncing peers {}",
-                            peer_id, self.succeeded, self.failed, self.pinned_syncing_peers.len());
-                    true
-                }
-            } else {
-                self.pinned_syncing_peers
-                    .iter()
-                    .any(|(id, _)| id == peer_id)
-            };
-
-        if should_create {
-            let graph_syncer = Actor::spawn_linked(
-                Some(format!(
-                    "Graph syncer to {} started at {:?}",
-                    peer_id,
-                    SystemTime::now()
-                )),
-                GraphSyncer::new(
-                    network.clone(),
-                    peer_id.clone(),
-                    self.starting_height,
-                    self.ending_height,
-                    self.starting_time,
-                ),
-                (),
-                network.get_cell(),
-            )
-            .await
-            .expect("Failed to start graph syncer actor")
-            .0;
-            self.active_syncers
-                .insert(peer_id.clone(), graph_syncer.clone());
-            Some(graph_syncer)
-        } else {
-            None
-        }
-    }
-
-    fn get_graph_syncer(&self, peer_id: &PeerId) -> Option<&ActorRef<GraphSyncerMessage>> {
-        self.active_syncers.get(peer_id)
     }
 }
 
@@ -1703,7 +1590,6 @@ impl NetworkSyncStatus {
             ending_height,
             starting_time,
             pinned_syncing_peers,
-            active_syncers: Default::default(),
             succeeded: 0,
             failed: 0,
         };
@@ -2580,7 +2466,6 @@ where
                 error!("Failed to reestablish channel {:x}: {:?}", &channel_id, &e);
             }
         }
-        self.maybe_sync_network_graph(remote_peer_id).await;
     }
 
     fn remove_channel(&mut self, channel_id: &Hash256) -> Option<ActorRef<ChannelActorMessage>> {
@@ -2602,7 +2487,6 @@ where
                 }
             }
         }
-        self.maybe_tell_syncer_peer_disconnected(id);
     }
 
     pub(crate) fn get_peer_addresses(&self, peer_id: &PeerId) -> HashSet<Multiaddr> {
@@ -2637,57 +2521,6 @@ where
     fn persist_state(&self) {
         self.store
             .insert_network_actor_state(&self.peer_id, self.state_to_be_persisted.clone());
-    }
-
-    async fn maybe_sync_network_graph(&mut self, peer_id: &PeerId) {
-        if let NetworkSyncStatus::Running(state) = &mut self.sync_status {
-            if let Some(_) = state
-                .maybe_create_graph_syncer(peer_id, self.network.clone())
-                .await
-            {
-                debug!("Created graph syncer to peer {:?}", peer_id);
-            }
-        }
-    }
-
-    fn maybe_tell_syncer_peer_disconnected(&self, peer_id: &PeerId) {
-        if let NetworkSyncStatus::Running(ref state) = self.sync_status {
-            if let Some(syncer) = state.get_graph_syncer(peer_id) {
-                syncer.stop(Some("Peer disconnected".to_string()));
-            }
-        }
-    }
-
-    fn maybe_tell_syncer_peer_disconnected_multiaddr(&self, multiaddr: &Multiaddr) {
-        if let NetworkSyncStatus::Running(ref state) = self.sync_status {
-            if let Some(peer_id) = state
-                .pinned_syncing_peers
-                .iter()
-                .find(|(_p, a)| a == multiaddr)
-                .map(|x| &x.0)
-            {
-                self.maybe_tell_syncer_peer_disconnected(peer_id);
-            }
-        }
-    }
-
-    fn maybe_finish_sync(&mut self) {
-        if let NetworkSyncStatus::Running(state) = &self.sync_status {
-            // TODO: It is better to sync with a few more peers to make sure we have the latest data.
-            // But we may only be connected just one node.
-            if state.succeeded >= 1 {
-                debug!(
-                    "All peers finished syncing, starting time {:?}, finishing time {:?}",
-                    state.starting_time,
-                    SystemTime::now()
-                );
-                self.network
-                    .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::MarkSyncingDone,
-                    ))
-                    .expect(ASSUME_NETWORK_MYSELF_ALIVE);
-            }
-        }
     }
 
     fn on_channel_created(

@@ -1,4 +1,3 @@
-use ckb_jsonrpc_types::BlockView;
 use ckb_sdk::{rpc::ResponseFormatGetter, CkbRpcClient, RpcError};
 use ckb_types::{core::TransactionView, packed, prelude::*, H256};
 use ractor::{

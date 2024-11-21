@@ -24,8 +24,6 @@ pub mod hash_algorithm;
 
 pub mod serde_utils;
 
-mod graph_syncer;
-
 pub(crate) mod gossip;
 
 #[cfg(test)]
