@@ -5,8 +5,7 @@ use crate::{
         network::{get_chain_hash, NetworkActorStateStore},
         tests::test_utils::NetworkNodeConfigBuilder,
         types::{
-            BroadcastMessage, ChannelAnnouncement, ChannelUpdate, FiberMessage, GossipMessage,
-            NodeAnnouncement, Privkey, Pubkey,
+            BroadcastMessage, ChannelAnnouncement, ChannelUpdate, NodeAnnouncement, Privkey, Pubkey,
         },
         NetworkActorCommand, NetworkActorEvent, NetworkActorMessage,
     },

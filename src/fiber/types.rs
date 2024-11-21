@@ -2586,6 +2586,22 @@ impl Cursor {
             .try_into()
             .expect("Must serialize cursor to 45 bytes")
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        if bytes.len() != CURSOR_SIZE {
+            return Err(Error::AnyHow(anyhow!(
+                "Invalid cursor size: {}, want {}",
+                bytes.len(),
+                CURSOR_SIZE
+            )));
+        }
+        let timestamp = u64::from_le_bytes(bytes[..8].try_into().expect("Cursor timestamp to u64"));
+        let message_id = BroadcastMessageID::from_bytes(&bytes[8..])?;
+        Ok(Cursor {
+            timestamp,
+            message_id,
+        })
+    }
 }
 
 impl Ord for Cursor {
@@ -2597,6 +2613,16 @@ impl Ord for Cursor {
 impl PartialOrd for Cursor {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.to_bytes().partial_cmp(&other.to_bytes())
+    }
+}
+
+impl Default for Cursor {
+    fn default() -> Self {
+        molecule_gossip::Cursor::new_builder()
+            .set([Byte::new(0); CURSOR_SIZE])
+            .build()
+            .try_into()
+            .expect("Default cursor")
     }
 }
 

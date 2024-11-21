@@ -490,7 +490,7 @@ impl Actor for MockChainActor {
                     }
                 };
             }
-            GetBlockTimestamp(get_block_timestamp_request, rpc_reply_port) => {
+            GetBlockTimestamp(_, rpc_reply_port) => {
                 let _ = rpc_reply_port.send(Ok(Some(now_timestamp())));
             }
         }

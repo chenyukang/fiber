@@ -298,7 +298,7 @@ async fn test_stash_broadcast_messages() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (node_a, _node_b, _new_channel_id) =
+    let (_node_a, _node_b, _new_channel_id) =
         create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, true)
             .await;
 

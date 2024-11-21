@@ -22,10 +22,8 @@ use tokio::{
     time::sleep,
 };
 
-use crate::fiber::gossip::GossipMessageStore;
-use crate::fiber::types::{
-    BroadcastMessage, BroadcastMessageID, BroadcastMessageWithTimestamp, Cursor,
-};
+use crate::fiber::gossip::{GossipMessageStore, DEFAULT_NUM_OF_BROADCAST_MESSAGE};
+use crate::fiber::types::{BroadcastMessageID, BroadcastMessageWithTimestamp, Cursor};
 use crate::{
     actors::{RootActor, RootActorMessage},
     ckb::tests::test_utils::{
@@ -531,13 +529,13 @@ impl GossipMessageStore for MemoryStore {
         after_cursor: &Cursor,
         count: Option<u16>,
     ) -> Vec<BroadcastMessageWithTimestamp> {
-        let mut res = vec![];
-        for message in self.gossip_messages_map.read().unwrap().values() {
-            if after_cursor < &message.cursor() {
-                res.push(message.clone());
-            }
-        }
-        res
+        self.gossip_messages_map
+            .read()
+            .unwrap()
+            .values()
+            .filter_map(|msg| (after_cursor < &msg.cursor()).then_some(msg.clone()))
+            .take(count.unwrap_or(DEFAULT_NUM_OF_BROADCAST_MESSAGE as u16) as usize)
+            .collect()
     }
 
     fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
@@ -567,6 +565,13 @@ impl GossipMessageStore for MemoryStore {
         let key1 = (cursor.message_id.clone(), true);
         let key2 = (cursor.message_id.clone(), false);
         map.get(&key1).or_else(|| map.get(&key2)).cloned()
+    }
+
+    fn get_latest_broadcast_message_cursor(&self) -> Option<Cursor> {
+        let map = self.gossip_messages_map.read().unwrap();
+        map.iter()
+            .map(|((k, _), v)| Cursor::new(v.timestamp(), k.clone()))
+            .max()
     }
 
     fn get_latest_channel_announcement_timestamp(&self, outpoint: &OutPoint) -> Option<u64> {

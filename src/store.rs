@@ -555,6 +555,19 @@ impl GossipMessageStore for Store {
         })
     }
 
+    fn get_latest_broadcast_message_cursor(&self) -> Option<Cursor> {
+        let prefix = vec![BROADCAST_MESSAGE_PREFIX];
+        let mode = IteratorMode::End;
+        self.db
+            .iterator(mode)
+            .take_while(|(key, _)| key.starts_with(&prefix))
+            .last()
+            .map(|(key, _)| {
+                let last_key = key.to_vec();
+                Cursor::from_bytes(&last_key[1..]).expect("deserialize Cursor should be OK")
+            })
+    }
+
     fn get_latest_channel_announcement_timestamp(&self, outpoint: &OutPoint) -> Option<u64> {
         let message_id = BroadcastMessageID::ChannelAnnouncement(outpoint.clone());
         let timestamp_key = [
