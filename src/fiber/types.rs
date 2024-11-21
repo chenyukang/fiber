@@ -29,7 +29,6 @@ use secp256k1::{
 use secp256k1::{Verification, XOnlyPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
-use std::io::Write;
 use std::marker::PhantomData;
 use std::str::FromStr;
 use strum::{AsRefStr, EnumString};

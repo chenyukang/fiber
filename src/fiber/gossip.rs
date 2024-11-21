@@ -40,7 +40,7 @@ use super::{
 
 const MAX_NUM_OF_BROADCAST_MESSAGES: u16 = 1000;
 
-pub(crate) trait GossipMessageStore {
+pub trait GossipMessageStore {
     fn get_broadcast_messages(
         &self,
         after_cursor: &Cursor,

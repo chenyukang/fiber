@@ -1478,43 +1478,6 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
-struct NetworkSyncState {
-    // The block number we are syncing from.
-    starting_height: u64,
-    // The block number we are syncing up to.
-    // This is normally the tip block number when we startup. We will only actively sync
-    // channel announcement up to this number (other info will be broadcasted by peers).
-    ending_height: u64,
-    // The timestamp we started syncing.
-    starting_time: u64,
-    // All the pinned peers that we are going to sync with.
-    // TODO: the intention of passing a few peer addresses to the sync status was to let the user
-    // select a few peers to sync network graph (these peers may have faster connection to the node).
-    // After some refactoring, the code below is a little bit clouded. We are currently only connecting
-    // to random peers. If this functionality is desired, we should make a config option for it.
-    // Otherwise, remove this completely.
-    pinned_syncing_peers: Vec<(PeerId, Multiaddr)>,
-    // Number of peers with whom we succeeded to sync.
-    succeeded: usize,
-    // Number of peers with whom we failed to sync.
-    failed: usize,
-}
-
-impl NetworkSyncState {
-    async fn refresh(&self, chain_actor: ActorRef<CkbChainMessage>) -> Self {
-        let mut cloned = self.clone();
-        cloned.succeeded = 0;
-        cloned.failed = 0;
-        // TODO: The calling to chain actor will block the calling actor from handling other messages.
-        let current_block_number = call!(chain_actor, CkbChainMessage::GetCurrentBlockNumber, ())
-            .expect(ASSUME_CHAIN_ACTOR_ALWAYS_ALIVE_FOR_NOW)
-            .expect("Get current block number from chain");
-        cloned.ending_height = current_block_number;
-        cloned
-    }
-}
-
 pub struct NetworkActorState<S> {
     store: S,
     state_to_be_persisted: PersistentNetworkActorState,
@@ -2780,13 +2743,7 @@ where
             state_to_be_persisted.save_peer_address(peer_id, addr);
         }
 
-        let height = graph.get_best_height();
-        let last_update = graph.get_last_update_timestamp();
-
         let chain_actor = self.chain_actor.clone();
-        let current_block_number = call!(chain_actor, CkbChainMessage::GetCurrentBlockNumber, ())
-            .expect(ASSUME_CHAIN_ACTOR_ALWAYS_ALIVE_FOR_NOW)
-            .expect("Get current block number from chain");
 
         let mut state = NetworkActorState {
             store: self.store.clone(),

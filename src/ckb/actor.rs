@@ -67,7 +67,6 @@ pub enum CkbChainMessage {
         GetBlockTimestampRequest,
         RpcReplyPort<Result<Option<GetBlockTimestampResponse>, RpcError>>,
     ),
-    GetCurrentBlockNumber((), RpcReplyPort<Result<u64, RpcError>>),
 }
 
 #[ractor::async_trait]
@@ -106,17 +105,8 @@ impl Actor for CkbChainActor {
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        use CkbChainMessage::{Fund, GetCurrentBlockNumber, SendTx, Sign, TraceTx};
+        use CkbChainMessage::{Fund, SendTx, Sign, TraceTx};
         match message {
-            GetCurrentBlockNumber(_, reply) => {
-                // Have to use block_in_place here, see https://github.com/seanmonstar/reqwest/issues/1017.
-                let result = tokio::task::block_in_place(move || {
-                    CkbRpcClient::new(&state.config.rpc_url)
-                        .get_tip_block_number()
-                        .map(|x| x.value())
-                });
-                let _ = reply.send(result);
-            }
             Fund(tx, request, reply_port) => {
                 let context = state.build_funding_context(&request);
                 if !reply_port.is_closed() {

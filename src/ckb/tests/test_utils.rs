@@ -311,9 +311,6 @@ impl Actor for MockChainActor {
         debug!("MockChainActor received message: {:?}", message);
         use CkbChainMessage::*;
         match message {
-            GetCurrentBlockNumber(_, reply) => {
-                let _ = reply.send(Ok(0));
-            }
             Fund(tx, request, reply_port) => {
                 let mut fulfilled_tx = tx.clone();
                 let outputs = fulfilled_tx
