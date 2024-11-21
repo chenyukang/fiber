@@ -3,7 +3,8 @@ use crate::fiber::types::Pubkey;
 use crate::{
     fiber::{
         graph::{ChannelInfo, NetworkGraph, NodeInfo, PathEdge},
-        network::{get_chain_hash, SendPaymentCommand, SendPaymentData},
+        network::{get_chain_hash, SendPaymentCommand},
+        payment::SendPaymentData,
         types::{ChannelAnnouncement, ChannelUpdate, Hash256, NodeAnnouncement},
     },
     store::Store,

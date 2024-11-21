@@ -6,7 +6,7 @@ use tracing::{debug, error, info, trace, warn};
 use crate::{
     fiber::{
         fee::calculate_tlc_forward_fee,
-        network::{get_chain_hash, SendOnionPacketCommand},
+        network::get_chain_hash,
         types::{ChannelUpdate, TlcErr, TlcErrPacket, TlcErrorCode},
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceStore},
@@ -66,6 +66,7 @@ use super::{
     hash_algorithm::HashAlgorithm,
     key::blake2b_hash_with_salt,
     network::FiberMessageWithPeerId,
+    payment::SendOnionPacketCommand,
     serde_utils::EntityHex,
     types::{
         AcceptChannel, AddTlc, ChannelAnnouncement, ChannelReady, ClosingSigned, CommitmentSigned,
@@ -824,12 +825,12 @@ where
             let peeled_packet = call!(self.network, |tx| NetworkActorMessage::Command(
                 NetworkActorCommand::PeelPaymentOnionPacket(
                     add_tlc.onion_packet.clone(),
-                    add_tlc.payment_hash.clone(),
+                    add_tlc.payment_hash,
                     tx
                 )
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE)
-            .map_err(|err| ProcessingChannelError::PeelingOnionPacketError(err))?;
+            .map_err(ProcessingChannelError::PeelingOnionPacketError)?;
 
             // check the payment hash and amount
             if peeled_packet.current.payment_hash != add_tlc.payment_hash {
@@ -1523,7 +1524,7 @@ where
     fn get_invoice_status(&self, invoice: &CkbInvoice) -> CkbInvoiceStatus {
         match self
             .store
-            .get_invoice_status(&invoice.payment_hash())
+            .get_invoice_status(invoice.payment_hash())
             .expect("no invoice status found")
         {
             CkbInvoiceStatus::Open if invoice.is_expired() => CkbInvoiceStatus::Expired,
@@ -3604,12 +3605,10 @@ impl ChannelActorState {
         let relay_status = if !tlc.onion_packet.is_empty() {
             if tlc.is_received() {
                 TlcRelayStatus::WaitingForward
+            } else if tlc.previous_tlc.is_none() {
+                TlcRelayStatus::NoForward
             } else {
-                if tlc.previous_tlc.is_none() {
-                    TlcRelayStatus::NoForward
-                } else {
-                    TlcRelayStatus::WaitingRemove
-                }
+                TlcRelayStatus::WaitingRemove
             }
         } else {
             TlcRelayStatus::NoForward

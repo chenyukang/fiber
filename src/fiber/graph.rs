@@ -1,10 +1,12 @@
 use super::history::{InternalResult, PaymentHistory, TimedResult};
-use super::network::{get_chain_hash, SendPaymentData, SendPaymentResponse};
+use super::network::get_chain_hash;
 use super::path::NodeHeap;
+use super::payment::SendPaymentData;
 use super::types::{ChannelAnnouncement, ChannelUpdate, Hash256, NodeAnnouncement};
 use super::types::{Pubkey, TlcErr};
 use crate::fiber::channel::CHANNEL_DISABLED_FLAG;
 use crate::fiber::fee::calculate_tlc_forward_fee;
+use crate::fiber::network::SendPaymentResponse;
 use crate::fiber::path::NodeHeapElement;
 use crate::fiber::serde_utils::EntityHex;
 use crate::fiber::types::PaymentHopData;
@@ -494,10 +496,8 @@ where
                 if let Some(info) = channel.node1_to_node2.as_mut() {
                     info.enabled = false;
                 }
-            } else {
-                if let Some(info) = channel.node2_to_node1.as_mut() {
-                    info.enabled = false;
-                }
+            } else if let Some(info) = channel.node2_to_node1.as_mut() {
+                info.enabled = false;
             }
         }
     }
@@ -904,7 +904,7 @@ impl SessionRoute {
             .chain(
                 payment_hops
                     .iter()
-                    .map(|hop| hop.next_hop.clone().unwrap_or(target)),
+                    .map(|hop| hop.next_hop.unwrap_or(target)),
             )
             .zip(payment_hops)
             .map(|(pubkey, hop)| SessionRouteNode {

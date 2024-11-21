@@ -8,6 +8,7 @@ pub use network::{
 };
 pub mod graph;
 pub mod history;
+pub mod payment;
 
 mod fee;
 mod graph_syncer;

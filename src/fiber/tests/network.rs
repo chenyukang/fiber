@@ -1,5 +1,5 @@
 use super::test_utils::{init_tracing, NetworkNode};
-use crate::fiber::network::SendPaymentData;
+use crate::fiber::payment::SendPaymentData;
 use crate::fiber::tests::test_utils::gen_rand_keypair;
 use crate::fiber::tests::test_utils::generate_pubkey;
 use crate::invoice::InvoiceBuilder;

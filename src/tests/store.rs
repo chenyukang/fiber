@@ -5,7 +5,7 @@ use crate::fiber::graph::NodeInfo;
 use crate::fiber::graph::PaymentSession;
 use crate::fiber::graph::PaymentSessionStatus;
 use crate::fiber::history::TimedResult;
-use crate::fiber::network::SendPaymentData;
+use crate::fiber::payment::SendPaymentData;
 use crate::fiber::tests::test_utils::gen_rand_public_key;
 use crate::fiber::tests::test_utils::gen_sha256_hash;
 use crate::fiber::types::ChannelAnnouncement;
