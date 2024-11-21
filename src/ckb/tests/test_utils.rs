@@ -10,10 +10,13 @@ use ckb_types::{
 use once_cell::sync::Lazy;
 use std::{collections::HashMap, sync::Arc, sync::RwLock};
 
-use crate::ckb::{
-    config::UdtCfgInfos,
-    contracts::{Contract, ContractsContext, ContractsInfo},
-    TraceTxRequest, TraceTxResponse,
+use crate::{
+    ckb::{
+        config::UdtCfgInfos,
+        contracts::{Contract, ContractsContext, ContractsInfo},
+        TraceTxRequest, TraceTxResponse,
+    },
+    now_timestamp,
 };
 
 use crate::ckb::CkbChainMessage;
@@ -489,6 +492,9 @@ impl Actor for MockChainActor {
                         .await;
                     }
                 };
+            }
+            GetBlockTimestamp(get_block_timestamp_request, rpc_reply_port) => {
+                let _ = rpc_reply_port.send(Ok(Some(now_timestamp())));
             }
         }
         Ok(())

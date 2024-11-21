@@ -1,3 +1,4 @@
+use ckb_sdk::RpcError;
 use ractor::{MessagingErr, SpawnErr};
 use tentacle::{error::SendErrorKind, secio::PeerId};
 use thiserror::Error;
@@ -46,6 +47,10 @@ pub enum Error {
     InvalidPeerMessage(String),
     #[error("Onion packet error: {0}")]
     InvalidOnionPacket(crate::fiber::types::Error),
+    #[error("Ckb Rpc error: {0}")]
+    CkbRpcError(RpcError),
+    #[error("Internal error: {0}")]
+    InternalError(anyhow::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
