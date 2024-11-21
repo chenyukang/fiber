@@ -483,6 +483,8 @@ pub enum NetworkActorEvent {
     PeerConnected(PeerId, Pubkey, SessionContext),
     PeerDisconnected(PeerId, SessionContext),
     FiberMessage(PeerId, FiberMessage),
+    // Mock that a gossip message is received, used for testing.
+    #[cfg(test)]
     GossipMessage(PeerId, GossipMessage),
 
     /// Channel related events.
@@ -853,7 +855,15 @@ where
                 self.on_tlc_remove_received(state, payment_hash, remove_tlc.reason)
                     .await;
             }
-            NetworkActorEvent::GossipMessage(peer_id, gossip_message) => todo!(),
+            #[cfg(test)]
+            NetworkActorEvent::GossipMessage(peer_id, message) => {
+                let _ = state
+                    .gossip_actor
+                    .send_message(GossipActorMessage::GossipMessage(GossipMessageWithPeerId {
+                        peer_id,
+                        message,
+                    }));
+            }
         }
         Ok(())
     }

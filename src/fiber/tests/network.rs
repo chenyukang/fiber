@@ -149,7 +149,8 @@ async fn test_sync_channel_announcement_on_startup() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 get_test_peer_id(),
-                GossipMessage::channel_announcement(channel_announcement.clone()),
+                BroadcastMessage::ChannelAnnouncement(channel_announcement)
+                    .create_broadcast_messages_filter_result(),
             ),
         ))
         .expect("send message to network actor");
@@ -209,7 +210,8 @@ async fn create_a_channel() -> (NetworkNode, ChannelInfo, Privkey, Privkey, Priv
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 get_test_peer_id(),
-                GossipMessage::channel_announcement(channel_announcement.clone()),
+                BroadcastMessage::ChannelAnnouncement(channel_announcement.clone())
+                    .create_broadcast_messages_filter_result(),
             ),
         ))
         .expect("send message to network actor");
@@ -247,7 +249,8 @@ async fn test_node1_node2_channel_update() {
             .send_message(NetworkActorMessage::Event(
                 NetworkActorEvent::GossipMessage(
                     get_test_peer_id(),
-                    GossipMessage::channel_update(channel_update.clone()),
+                    BroadcastMessage::ChannelUpdate(channel_update.clone())
+                        .create_broadcast_messages_filter_result(),
                 ),
             ))
             .expect("send message to network actor");
@@ -316,7 +319,8 @@ async fn test_channel_update_version() {
             .send_message(NetworkActorMessage::Event(
                 NetworkActorEvent::GossipMessage(
                     get_test_peer_id(),
-                    GossipMessage::channel_update(channel_update.clone()),
+                    BroadcastMessage::ChannelUpdate(channel_update.clone())
+                        .create_broadcast_messages_filter_result(),
                 ),
             ))
             .expect("send message to network actor");
@@ -383,7 +387,8 @@ async fn test_sync_node_announcement_version() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version2()),
+                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version2())
+                    .create_broadcast_messages_filter_result(),
             ),
         ))
         .expect("send message to network actor");
@@ -403,7 +408,8 @@ async fn test_sync_node_announcement_version() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version1()),
+                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version1())
+                    .create_broadcast_messages_filter_result(),
             ),
         ))
         .expect("send message to network actor");
@@ -423,7 +429,8 @@ async fn test_sync_node_announcement_version() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version3()),
+                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version3())
+                    .create_broadcast_messages_filter_result(),
             ),
         ))
         .expect("send message to network actor");
@@ -457,7 +464,8 @@ async fn test_sync_node_announcement_on_startup() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version1()),
+                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version1())
+                    .create_broadcast_messages_filter_result(),
             ),
         ))
         .expect("send message to network actor");
@@ -504,7 +512,8 @@ async fn test_sync_node_announcement_after_restart() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version1()),
+                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version1())
+                    .create_broadcast_messages_filter_result(),
             ),
         ))
         .expect("send message to network actor");
@@ -567,7 +576,8 @@ async fn test_persisting_announced_nodes() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 peer_id.clone(),
-                GossipMessage::node_announcement(create_fake_node_announcement_mesage_version1()),
+                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version1())
+                    .create_broadcast_messages_filter_result(),
             ),
         ))
         .expect("send message to network actor");

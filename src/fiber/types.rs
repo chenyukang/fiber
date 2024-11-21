@@ -2157,30 +2157,6 @@ impl GossipMessage {
             .map_err(Into::into)
             .and_then(TryInto::try_into)
     }
-
-    // A helper function to create a GossipMessage::BroadcastMessagesFilter with a single
-    // BroadcastMessage::ChannelAnnouncement.
-    pub(crate) fn channel_announcement(message: ChannelAnnouncement) -> Self {
-        Self::BroadcastMessagesFilterResult(BroadcastMessagesFilterResult::new(vec![
-            BroadcastMessage::ChannelAnnouncement(message),
-        ]))
-    }
-
-    // A helper function to create a GossipMessage::BroadcastMessagesFilter with a single
-    // BroadcastMessage::ChannelUpdate.
-    pub(crate) fn channel_update(message: ChannelUpdate) -> Self {
-        Self::BroadcastMessagesFilterResult(BroadcastMessagesFilterResult::new(vec![
-            BroadcastMessage::ChannelUpdate(message),
-        ]))
-    }
-
-    // A helper function to create a GossipMessage::BroadcastMessagesFilter with a single
-    // BroadcastMessage::NodeAnnouncement.
-    pub(crate) fn node_announcement(message: NodeAnnouncement) -> Self {
-        Self::BroadcastMessagesFilterResult(BroadcastMessagesFilterResult::new(vec![
-            BroadcastMessage::NodeAnnouncement(message),
-        ]))
-    }
 }
 
 impl From<GossipMessage> for molecule_gossip::GossipMessageUnion {
@@ -2279,6 +2255,14 @@ pub enum BroadcastMessage {
     NodeAnnouncement(NodeAnnouncement),
     ChannelAnnouncement(ChannelAnnouncement),
     ChannelUpdate(ChannelUpdate),
+}
+
+impl BroadcastMessage {
+    pub fn create_broadcast_messages_filter_result(&self) -> GossipMessage {
+        GossipMessage::BroadcastMessagesFilterResult(BroadcastMessagesFilterResult {
+            messages: vec![self.clone()],
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
