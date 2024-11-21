@@ -9,15 +9,13 @@ use ractor::{
     Actor, ActorCell, ActorProcessingErr, ActorRef, ActorRuntime,
 };
 use secp256k1::Message;
-use serde::Serialize;
 use tentacle::{
     async_trait as tasync_trait,
     builder::MetaBuilder,
     bytes::Bytes,
     context::{ProtocolContext, ProtocolContextMutRef, SessionContext},
-    multiaddr::Multiaddr,
     secio::PeerId,
-    service::{ProtocolHandle, ProtocolMeta, Service, ServiceAsyncControl},
+    service::{ProtocolHandle, ProtocolMeta, ServiceAsyncControl},
     traits::ServiceProtocol,
     SessionId,
 };
@@ -31,13 +29,16 @@ use crate::{
 };
 
 use super::{
-    network::{get_chain_hash, GossipMessageWithPeerId, GOSSIP_PROTOCOL_ID},
+    network::{check_chain_hash, GossipMessageWithPeerId, GOSSIP_PROTOCOL_ID},
     types::{
         BroadcastMessage, BroadcastMessageID, BroadcastMessageQuery, BroadcastMessageQueryFlags,
-        BroadcastMessageWithTimestamp, BroadcastMessagesFilter, ChannelAnnouncement, ChannelUpdate,
-        Cursor, GossipMessage, NodeAnnouncement, Pubkey,
+        BroadcastMessageWithTimestamp, BroadcastMessagesFilter, BroadcastMessagesFilterResult,
+        ChannelAnnouncement, ChannelUpdate, Cursor, GetBroadcastMessagesResult, GossipMessage,
+        NodeAnnouncement, Pubkey, QueryBroadcastMessages, QueryBroadcastMessagesResult,
     },
 };
+
+const MAX_NUM_OF_BROADCAST_MESSAGES: u16 = 1000;
 
 pub(crate) trait GossipMessageStore {
     fn get_broadcast_messages(
@@ -198,6 +199,37 @@ pub(crate) struct GossipActorState<S> {
     peer_session_map: HashMap<PeerId, SessionId>,
     peer_pubkey_map: HashMap<PeerId, Pubkey>,
     peer_filter_map: HashMap<PeerId, Cursor>,
+}
+
+impl<S> GossipActorState<S>
+where
+    S: GossipMessageStore + Send + Sync + 'static,
+{
+    fn get_peer_session(&self, peer_id: &PeerId) -> Option<SessionId> {
+        self.peer_session_map.get(peer_id).cloned()
+    }
+
+    async fn send_message_to_session(
+        &self,
+        session_id: SessionId,
+        message: GossipMessage,
+    ) -> crate::Result<()> {
+        self.control
+            .send_message_to(session_id, GOSSIP_PROTOCOL_ID, message.to_molecule_bytes())
+            .await?;
+        Ok(())
+    }
+
+    async fn send_message_to_peer(
+        &self,
+        peer_id: &PeerId,
+        message: GossipMessage,
+    ) -> crate::Result<()> {
+        match self.get_peer_session(peer_id) {
+            Some(session_id) => self.send_message_to_session(session_id, message).await,
+            None => Err(Error::PeerNotFound(peer_id.clone())),
+        }
+    }
 }
 
 pub(crate) struct GossipProtocolHandle {
@@ -528,7 +560,7 @@ where
 
     async fn pre_start(
         &self,
-        myself: ActorRef<Self::Msg>,
+        _myself: ActorRef<Self::Msg>,
         (rx, store, chain_actor): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let control = timeout(Duration::from_secs(1), rx)
@@ -549,7 +581,7 @@ where
 
     async fn handle(
         &self,
-        myself: ActorRef<Self::Msg>,
+        _myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
@@ -599,16 +631,13 @@ where
                         chain_hash,
                         after_cursor,
                     }) => {
-                        if chain_hash != get_chain_hash() {
-                            warn!("Received BroadcastMessagesFilter with unknown chain hash {:?} (wants {:?})", chain_hash, get_chain_hash());
-                            return Ok(());
-                        }
+                        check_chain_hash(&chain_hash)?;
                         state.peer_filter_map.insert(peer_id, after_cursor);
                     }
                     GossipMessage::BroadcastMessagesFilterResult(
-                        broadcast_messages_filter_result,
+                        BroadcastMessagesFilterResult { messages },
                     ) => {
-                        for message in broadcast_messages_filter_result.messages {
+                        for message in messages {
                             verify_and_save_broadcast_message(
                                 message,
                                 &state.store,
@@ -617,14 +646,92 @@ where
                             .await;
                         }
                     }
-                    GossipMessage::GetBroadcastMessages(get_broadcast_messages) => todo!(),
-                    GossipMessage::GetBroadcastMessagesResult(get_broadcast_messages_result) => {
-                        todo!()
+                    GossipMessage::GetBroadcastMessages(get_broadcast_messages) => {
+                        check_chain_hash(&get_broadcast_messages.chain_hash)?;
+                        if get_broadcast_messages.count > MAX_NUM_OF_BROADCAST_MESSAGES {
+                            warn!(
+                                "Received GetBroadcastMessages with too many messages: {:?}",
+                                get_broadcast_messages.count
+                            );
+                            return Ok(());
+                        }
+                        let id = get_broadcast_messages.id;
+                        let messages = state.store.get_broadcast_messages(
+                            &get_broadcast_messages.after_cursor,
+                            Some(get_broadcast_messages.count as u16),
+                        );
+                        let result =
+                            GossipMessage::GetBroadcastMessagesResult(GetBroadcastMessagesResult {
+                                id,
+                                messages: messages.into_iter().map(|m| m.into()).collect(),
+                            });
+                        if let Err(error) = state.send_message_to_peer(&peer_id, result).await {
+                            error!(
+                                "Failed to send GetBroadcastMessagesResult to peer {:?}: {:?}",
+                                &peer_id, error
+                            );
+                        }
                     }
-                    GossipMessage::QueryBroadcastMessages(query_broadcast_messages) => todo!(),
-                    GossipMessage::QueryBroadcastMessagesResult(
-                        query_broadcast_messages_result,
-                    ) => todo!(),
+                    GossipMessage::GetBroadcastMessagesResult(GetBroadcastMessagesResult {
+                        id,
+                        messages,
+                    }) => {
+                        let is_finished = messages.is_empty();
+                        for message in messages {
+                            verify_and_save_broadcast_message(
+                                message,
+                                &state.store,
+                                &state.chain_actor,
+                            )
+                            .await;
+                        }
+                        // TODO: mark requests corresponding to id as finished
+                        // TODO: if not finished, send another GetBroadcastMessages.
+                    }
+                    GossipMessage::QueryBroadcastMessages(QueryBroadcastMessages {
+                        id,
+                        queries,
+                    }) => {
+                        if queries.len() > MAX_NUM_OF_BROADCAST_MESSAGES as usize {
+                            warn!(
+                                "Received QueryBroadcastMessages with too many queries: {:?}",
+                                queries.len()
+                            );
+                            return Ok(());
+                        }
+                        let (results, missing_queries) =
+                            state.store.query_broadcast_messages(queries);
+                        let result = GossipMessage::QueryBroadcastMessagesResult(
+                            QueryBroadcastMessagesResult {
+                                id,
+                                messages: results.into_iter().map(|m| m.into()).collect(),
+                                missing_queries: missing_queries,
+                            },
+                        );
+                        if let Err(error) = state.send_message_to_peer(&peer_id, result).await {
+                            error!(
+                                "Failed to send QueryBroadcastMessagesResult to peer {:?}: {:?}",
+                                &peer_id, error
+                            );
+                        }
+                    }
+                    GossipMessage::QueryBroadcastMessagesResult(QueryBroadcastMessagesResult {
+                        id,
+                        messages,
+                        missing_queries,
+                    }) => {
+                        let is_finished = missing_queries.is_empty();
+                        for message in messages {
+                            verify_and_save_broadcast_message(
+                                message,
+                                &state.store,
+                                &state.chain_actor,
+                            )
+                            .await;
+                        }
+                        // TODO: mark requests corresponding to id as finished
+                        // TODO: if not finished, send another QueryBroadcastMessages.
+                    }
                 }
             }
         }

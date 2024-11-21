@@ -121,6 +121,14 @@ pub(crate) fn get_chain_hash() -> Hash256 {
     CHAIN_HASH_INSTANCE.get().cloned().unwrap_or_default()
 }
 
+pub(crate) fn check_chain_hash(chain_hash: &Hash256) -> Result<(), Error> {
+    if chain_hash == &get_chain_hash() {
+        Ok(())
+    } else {
+        Err(Error::InvalidChainHash(*chain_hash, get_chain_hash()))
+    }
+}
+
 #[derive(Debug)]
 pub struct OpenChannelResponse {
     pub channel_id: Hash256,
@@ -2424,17 +2432,6 @@ where
             Some(session) => self.send_fiber_message_to_session(session, message).await,
             None => Err(Error::PeerNotFound(peer_id.clone())),
         }
-    }
-
-    async fn send_gossip_message_to_session(
-        &self,
-        session_id: SessionId,
-        message: GossipMessage,
-    ) -> crate::Result<()> {
-        self.control
-            .send_message_to(session_id, GOSSIP_PROTOCOL_ID, message.to_molecule_bytes())
-            .await?;
-        Ok(())
     }
 
     async fn send_command_to_channel(

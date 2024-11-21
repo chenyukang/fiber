@@ -51,6 +51,8 @@ pub enum Error {
     CkbRpcError(RpcError),
     #[error("Internal error: {0}")]
     InternalError(anyhow::Error),
+    #[error("Invalid chain hash: {0} (expecting {1})")]
+    InvalidChainHash(Hash256, Hash256),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
