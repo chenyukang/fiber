@@ -187,6 +187,9 @@ pub struct FiberConfig {
     pub(crate) sync_network_graph: Option<bool>,
 }
 
+/// Must be a valid utf-8 string of length maximal length 32 bytes.
+/// If the length is less than 32 bytes, it will be padded with 0.
+/// If the length is more than 32 bytes, it should be truncated.
 #[derive(PartialEq, Copy, Clone, Default)]
 pub struct AnnouncedNodeName(pub [u8; 32]);
 

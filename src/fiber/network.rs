@@ -593,6 +593,7 @@ where
     S: NetworkActorStateStore
         + ChannelActorStateStore
         + NetworkGraphStateStore
+        + GossipMessageStore
         + InvoiceStore
         + Clone
         + Send
@@ -1352,7 +1353,7 @@ where
                     TlcErrData::ChannelFailed { channel_update, .. } => {
                         if let Some(channel_update) = channel_update {
                             let mut graph = self.network_graph.write().await;
-                            let _ = graph.process_channel_update(channel_update.clone());
+                            // let _ = graph.process_channel_update(channel_update.clone());
                         }
                     }
                     _ => {}
@@ -1399,14 +1400,19 @@ where
         let mut error = None;
         while payment_session.can_retry() {
             payment_session.retried_times += 1;
-            let hops_infos = match self.network_graph.read().await.build_route(&payment_data) {
-                Err(e) => {
-                    error!("Failed to build route: {:?}", e);
-                    error = Some(format!("Failed to build route: {:?}", payment_hash));
-                    break;
+            let hops_infos = {
+                let mut graph = self.network_graph.write().await;
+                graph.load_from_store();
+                match graph.build_route(&payment_data) {
+                    Err(e) => {
+                        error!("Failed to build route: {:?}", e);
+                        error = Some(format!("Failed to build route: {:?}", payment_hash));
+                        break;
+                    }
+                    Ok(onion_path) => onion_path,
                 }
-                Ok(onion_path) => onion_path,
             };
+
             let first_channel_outpoint = hops_infos[0]
                 .channel_outpoint
                 .clone()
@@ -1667,6 +1673,7 @@ where
     S: NetworkActorStateStore
         + ChannelActorStateStore
         + NetworkGraphStateStore
+        + GossipMessageStore
         + InvoiceStore
         + Clone
         + Send
@@ -1684,7 +1691,7 @@ where
             // and falsely believe we updated the node announcement, and then forward this message to other nodes.
             // This is undesirable because we don't want to flood the network with the same message.
             // On the other hand, if the message is too old, we need to create a new one.
-            Some(ref message) if now - message.version < 3600 * 1000 => {
+            Some(ref message) if now - message.timestamp < 3600 * 1000 => {
                 debug!("Node announcement message is still valid: {:?}", &message);
             }
             _ => {
@@ -2790,7 +2797,11 @@ where
 
         // Save our own NodeInfo to the network graph.
         let node_announcement = state.get_or_create_new_node_announcement_message();
-        graph.process_node_announcement(node_announcement);
+        myself.send_message(NetworkActorMessage::new_command(
+            NetworkActorCommand::BroadcastMessage(BroadcastMessageWithTimestamp::NodeAnnouncement(
+                node_announcement.clone(),
+            )),
+        ))?;
 
         let announce_node_interval_seconds = config.announce_node_interval_seconds();
         if announce_node_interval_seconds > 0 {

@@ -116,14 +116,14 @@ impl MockNetworkGraph {
                 features: 0,
             },
             timestamp: 0,
-            node1_to_node2: None,
-            node2_to_node1: None,
+            update_of_node2: None,
+            update_of_node1: None,
         };
         self.graph.add_channel(channel_info);
         let channel_update = ChannelUpdate {
             signature: None,
             chain_hash: get_chain_hash(),
-            version: 0,
+            timestamp: 0,
             message_flags: 1,
             channel_flags: 0,
             tlc_expiry_delta: 144,
@@ -137,7 +137,7 @@ impl MockNetworkGraph {
             let channel_update = ChannelUpdate {
                 signature: None,
                 chain_hash: get_chain_hash(),
-                version: 0,
+                timestamp: 0,
                 message_flags: 0,
                 channel_flags: 0,
                 tlc_expiry_delta: 144,

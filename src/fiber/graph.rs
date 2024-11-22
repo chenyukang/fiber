@@ -1,8 +1,13 @@
+use super::config::AnnouncedNodeName;
+use super::gossip::GossipMessageStore;
 use super::network::{get_chain_hash, SendPaymentData, SendPaymentResponse};
 use super::path::NodeHeap;
-use super::types::Pubkey;
-use super::types::{ChannelAnnouncement, ChannelUpdate, Hash256, NodeAnnouncement};
-use crate::fiber::channel::CHANNEL_DISABLED_FLAG;
+use super::types::{
+    BroadcastMessageID, BroadcastMessageWithTimestamp, ChannelAnnouncement, ChannelUpdate, Hash256,
+    NodeAnnouncement,
+};
+use super::types::{Cursor, Pubkey};
+use crate::ckb::config::UdtCfgInfos;
 use crate::fiber::fee::calculate_tlc_forward_fee;
 use crate::fiber::path::{NodeHeapElement, ProbabilityEvaluator};
 use crate::fiber::serde_utils::EntityHex;
@@ -13,10 +18,10 @@ use ckb_types::packed::{OutPoint, Script};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::collections::HashMap;
-use tentacle::secio::PeerId;
+use tentacle::multiaddr::MultiAddr;
 use thiserror::Error;
 use tracing::log::error;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace};
 
 const DEFAULT_MIN_PROBABILITY: f64 = 0.01;
 
@@ -25,99 +30,104 @@ const DEFAULT_MIN_PROBABILITY: f64 = 0.01;
 /// Details about a node in the network, known from the network announcement.
 pub struct NodeInfo {
     pub node_id: Pubkey,
-
-    // The time when the node was last updated. This is the time of processing the message,
-    // not the time of the NodeAnnouncement itself.
+    // The timestamp set by the owner for the node announcement.
     pub timestamp: u64,
-
-    pub anouncement_msg: NodeAnnouncement,
+    // Tentatively using 64 bits for features. May change the type later while developing.
+    // rust-lightning uses a Vec<u8> here.
+    pub features: u64,
+    // The alias of the node. This is a human-readable string that is meant to be used for labelling nodes in the UI.
+    pub alias: AnnouncedNodeName,
+    // All the reachable addresses.
+    pub addresses: Vec<MultiAddr>,
+    // If the other party funding more than this amount, we will automatically accept the channel.
+    pub auto_accept_min_ckb_funding_amount: u64,
+    // UDT config info
+    pub udt_cfg_infos: UdtCfgInfos,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+impl From<NodeAnnouncement> for NodeInfo {
+    fn from(value: NodeAnnouncement) -> Self {
+        Self {
+            node_id: value.node_id,
+            timestamp: value.timestamp,
+            features: value.features,
+            alias: value.alias,
+            addresses: value.addresses,
+            auto_accept_min_ckb_funding_amount: value.auto_accept_min_ckb_funding_amount,
+            udt_cfg_infos: value.udt_cfg_infos,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChannelInfo {
-    pub funding_tx_block_number: u64,
-    pub funding_tx_index: u32,
-    pub announcement_msg: ChannelAnnouncement,
-    pub node1_to_node2: Option<ChannelUpdateInfo>,
-    pub node2_to_node1: Option<ChannelUpdateInfo>,
-    // The time that the channel was announced to the network.
+    pub channel_outpoint: OutPoint,
+    // The timestamp in the block header of the block that includes the funding transaction of the channel.
     pub timestamp: u64,
+
+    pub features: u64,
+    pub node1: Pubkey,
+    pub node2: Pubkey,
+    // The total capacity of the channel.
+    pub capacity: u128,
+    // UDT script
+    pub udt_type_script: Option<Script>,
+    pub update_of_node1: Option<ChannelUpdateInfo>,
+    pub update_of_node2: Option<ChannelUpdateInfo>,
 }
 
 impl ChannelInfo {
-    pub fn out_point(&self) -> OutPoint {
-        self.announcement_msg.channel_outpoint.clone()
+    pub fn out_point(&self) -> &OutPoint {
+        &self.channel_outpoint
+    }
+
+    pub fn capacity(&self) -> u128 {
+        self.capacity
     }
 
     pub fn node1(&self) -> Pubkey {
-        self.announcement_msg.node1_id
+        self.node1
     }
 
     pub fn node2(&self) -> Pubkey {
-        self.announcement_msg.node2_id
+        self.node2
     }
 
-    pub fn node1_peerid(&self) -> PeerId {
-        self.announcement_msg.node1_id.tentacle_peer_id()
-    }
-
-    pub fn node2_peerid(&self) -> PeerId {
-        self.announcement_msg.node2_id.tentacle_peer_id()
-    }
-
-    pub fn channel_annoucement_timestamp(&self) -> u64 {
-        self.timestamp
-    }
-
-    pub fn node1_to_node2_channel_update_flags(&self) -> u8 {
-        1
-    }
-
-    pub fn node2_to_node1_channel_update_flags(&self) -> u8 {
-        0
-    }
-
-    pub fn channel_update_node1_to_node2_timestamp(&self) -> Option<u64> {
-        self.node1_to_node2.as_ref().map(|x| x.timestamp)
-    }
-
-    pub fn channel_update_node2_to_node1_timestamp(&self) -> Option<u64> {
-        self.node2_to_node1.as_ref().map(|x| x.timestamp)
-    }
-
-    pub fn channel_last_update_time(&self) -> Option<u64> {
-        self.node1_to_node2
-            .as_ref()
-            .map(|n| n.timestamp)
-            .max(self.node2_to_node1.as_ref().map(|n| n.timestamp))
+    pub fn udt_type_script(&self) -> &Option<Script> {
+        &self.udt_type_script
     }
 
     // Whether this channel is explicitly disabled in either direction.
     // TODO: we currently deem a channel as disabled if one direction is disabled.
     // Is it possible that one direction is disabled while the other is not?
     pub fn is_explicitly_disabled(&self) -> bool {
-        dbg!(self.node1_to_node2.as_ref(), self.node2_to_node1.as_ref());
-        match (&self.node1_to_node2, &self.node2_to_node1) {
+        dbg!(self.update_of_node2.as_ref(), self.update_of_node1.as_ref());
+        match (&self.update_of_node2, &self.update_of_node1) {
             (Some(update1), _) if !update1.enabled => true,
             (_, Some(update2)) if !update2.enabled => true,
             _ => false,
         }
     }
+}
 
-    pub fn capacity(&self) -> u128 {
-        self.announcement_msg.capacity
-    }
-
-    pub fn funding_tx_block_number(&self) -> u64 {
-        self.funding_tx_block_number
+impl From<(u64, ChannelAnnouncement)> for ChannelInfo {
+    fn from((timestamp, channel_announcement): (u64, ChannelAnnouncement)) -> Self {
+        Self {
+            channel_outpoint: channel_announcement.channel_outpoint,
+            timestamp,
+            features: channel_announcement.features,
+            node1: channel_announcement.node1_id,
+            node2: channel_announcement.node2_id,
+            capacity: channel_announcement.capacity,
+            udt_type_script: channel_announcement.udt_type_script,
+            update_of_node2: None,
+            update_of_node1: None,
+        }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChannelUpdateInfo {
-    // The version is a number that represents the newness of the channel update.
-    // It is set by the node that sends the channel update. Larger number means newer update.
-    pub version: u64,
     // The timestamp is the time when the channel update was received by the node.
     pub timestamp: u64,
     /// Whether the channel can be currently used for payments (in this one direction).
@@ -129,27 +139,28 @@ pub struct ChannelUpdateInfo {
     /// The maximum value which may be relayed to the next hop via the channel.
     pub htlc_maximum_value: u128,
     pub fee_rate: u64,
-    /// Most recent update for the channel received from the network
-    /// Mostly redundant with the data we store in fields explicitly.
-    /// Everything else is useful only for sending out for initial routing sync.
-    /// Not stored if contains excess data to prevent DoS.
-    pub last_update_message: ChannelUpdate,
+}
+
+impl From<ChannelUpdate> for ChannelUpdateInfo {
+    fn from(update: ChannelUpdate) -> Self {
+        Self {
+            timestamp: update.timestamp,
+            enabled: !update.is_disabled(),
+            htlc_expiry_delta: update.tlc_expiry_delta,
+            htlc_minimum_value: update.tlc_minimum_value,
+            htlc_maximum_value: update.tlc_maximum_value,
+            fee_rate: update.tlc_fee_proportional_millionths as u64,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct NetworkGraph<S> {
     source: Pubkey,
     channels: HashMap<OutPoint, ChannelInfo>,
-    // This is the best height of the network graph, every time the
-    // node restarts, we will try to sync the graph from this height - ASSUME_MAX_CHANNEL_HEIGHT_GAP.
-    // We assume that we have already synced the graph up to this height - ASSUME_MAX_CHANNEL_HEIGHT_GAP.
-    best_height: u64,
-    // Similar to the best_height, this is the last update time of the network graph.
-    // We assume that we have already synced the graph up to this time - ASSUME_MAX_MESSAGE_TIMESTAMP_GAP.
-    last_update_timestamp: u64,
     nodes: HashMap<Pubkey, NodeInfo>,
+    latest_cursor: Cursor,
     store: S,
-    chain_hash: Hash256,
 }
 
 #[derive(Error, Debug)]
@@ -170,147 +181,136 @@ pub struct PathEdge {
 
 impl<S> NetworkGraph<S>
 where
-    S: NetworkGraphStateStore + Clone + Send + Sync + 'static,
+    S: NetworkGraphStateStore + GossipMessageStore + Clone + Send + Sync + 'static,
 {
     pub fn new(store: S, source: Pubkey) -> Self {
         let mut network_graph = Self {
             source,
-            best_height: 0,
-            last_update_timestamp: 0,
             channels: HashMap::new(),
             nodes: HashMap::new(),
+            latest_cursor: Cursor::default(),
             store,
-            chain_hash: get_chain_hash(),
         };
         network_graph.load_from_store();
         network_graph
     }
 
-    pub fn chain_hash(&self) -> Hash256 {
-        self.chain_hash
+    fn update_lastest_cursor(&mut self, cursor: Cursor) {
+        if cursor > self.latest_cursor {
+            self.latest_cursor = cursor;
+        }
     }
 
+    // Load all the broadcast messages starting from latest_cursor from the store.
+    // Process them and set nodes and channels accordingly.
     pub(crate) fn load_from_store(&mut self) {
-        let channels = self.store.get_channels(None);
-        for channel in channels.iter() {
-            if self.best_height < channel.funding_tx_block_number() {
-                self.best_height = channel.funding_tx_block_number();
+        loop {
+            let messages = self.store.get_broadcast_messages(&self.latest_cursor, None);
+            if messages.is_empty() {
+                break;
             }
-            if self.last_update_timestamp < channel.timestamp {
-                self.last_update_timestamp = channel.timestamp;
-            }
-            if let Some(channel_update) = channel.node1_to_node2.as_ref() {
-                if self.last_update_timestamp < channel_update.timestamp {
-                    self.last_update_timestamp = channel_update.timestamp;
+            for message in messages {
+                if message.chain_hash() != get_chain_hash() {
+                    continue;
+                }
+                let cursor = match message {
+                    BroadcastMessageWithTimestamp::ChannelAnnouncement(
+                        timestamp,
+                        channel_announcement,
+                    ) => self.process_channel_announcement(timestamp, channel_announcement),
+                    BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                        self.process_channel_update(channel_update)
+                    }
+                    BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+                        self.process_node_announcement(node_announcement)
+                    }
+                };
+                if let Some(cursor) = cursor {
+                    self.update_lastest_cursor(cursor);
                 }
             }
-            if let Some(channel_update) = channel.node2_to_node1.as_ref() {
-                if self.last_update_timestamp < channel_update.timestamp {
-                    self.last_update_timestamp = channel_update.timestamp;
-                }
-            }
-            self.channels.insert(channel.out_point(), channel.clone());
-        }
-        let nodes = self.store.get_nodes(None);
-        for node in nodes.iter() {
-            if self.last_update_timestamp < node.timestamp {
-                self.last_update_timestamp = node.timestamp;
-            }
-            self.nodes.insert(node.node_id, node.clone());
         }
     }
 
-    pub fn get_best_height(&self) -> u64 {
-        self.best_height
-    }
-
-    pub fn get_last_update_timestamp(&self) -> u64 {
-        self.last_update_timestamp
-    }
-
-    pub(crate) fn process_node_announcement(&mut self, node_announcement: NodeAnnouncement) {
-        let node_id = node_announcement.node_id;
-        let node_info = NodeInfo {
-            node_id,
-            timestamp: std::time::UNIX_EPOCH
-                .elapsed()
-                .expect("Duration since unix epoch")
-                .as_millis() as u64,
-            anouncement_msg: node_announcement,
-        };
-        self.add_node(node_info);
-    }
-
-    pub fn add_node(&mut self, node_info: NodeInfo) {
-        debug!("Adding node to network graph: {:?}", node_info);
-
-        let node_id = node_info.node_id;
-        if let Some(old_node) = self.nodes.get(&node_id) {
-            if old_node.anouncement_msg.version > node_info.anouncement_msg.version {
-                warn!(
-                    "Ignoring adding an outdated node info because old node version {} > new node version {}, new node info {:?}, existing node {:?}",
-                    old_node.anouncement_msg.version, node_info.anouncement_msg.version,
-                    &node_info, &old_node
+    fn process_channel_announcement(
+        &mut self,
+        timestamp: u64,
+        channel_announcement: ChannelAnnouncement,
+    ) -> Option<Cursor> {
+        match self.channels.get(&channel_announcement.channel_outpoint) {
+            Some(_channel) => {
+                trace!(
+                    "Channel already exists, ignoring: {:?}",
+                    &channel_announcement
                 );
-                return;
-            } else if old_node.anouncement_msg.version == node_info.anouncement_msg.version {
-                debug!("Repeatedly adding node info, ignoring: {:?}", node_info);
-                return;
-            }
-        }
-        if self.last_update_timestamp < node_info.timestamp {
-            self.last_update_timestamp = node_info.timestamp;
-        }
-        self.nodes.insert(node_id, node_info.clone());
-        self.store.insert_node(node_info);
-    }
-
-    // TODO: If we are syncing with the peers for newest graph, we should
-    // not process channels here. Because if the node may restart while syncing is
-    // is still ongoing, the next time when the node starts, it may falsely believe
-    // that we have already processed channels before the height of this channel.
-    pub fn add_channel(&mut self, channel_info: ChannelInfo) {
-        assert_ne!(channel_info.node1(), channel_info.node2());
-        debug!("Adding channel to network graph: {:?}", channel_info);
-        if self.best_height < channel_info.funding_tx_block_number {
-            self.best_height = channel_info.funding_tx_block_number;
-        }
-        if self.last_update_timestamp < channel_info.timestamp {
-            self.last_update_timestamp = channel_info.timestamp;
-        }
-        match self.channels.get(&channel_info.out_point()) {
-            Some(channel) => {
-                // If the channel already exists, we don't need to update it
-                // FIXME: if other fields is different, we should consider it as malioucious and ban the node?
-                if channel.node1_to_node2.is_some() || channel.node2_to_node1.is_some() {
-                    debug!("channel already exists, ignoring: {:?}", &channel_info);
-                    return;
-                }
+                return None;
             }
             None => {
-                debug!(
-                    "Channel not found, saving it to database {:?}",
-                    &channel_info
+                let cursor = Cursor::new(
+                    timestamp,
+                    BroadcastMessageID::ChannelAnnouncement(
+                        channel_announcement.channel_outpoint.clone(),
+                    ),
                 );
+                self.channels.insert(
+                    channel_announcement.channel_outpoint.clone(),
+                    ChannelInfo::from((timestamp, channel_announcement)),
+                );
+                return Some(cursor);
             }
         }
-        if let Some(node) = self.nodes.get(&channel_info.node1()) {
-            self.store.insert_node(node.clone());
-        } else {
-            // It is possible that the node announcement is after broadcasted after the channel announcement.
-            // So don't just ignore the channel even if we didn't find the node info here.
-            warn!("Node1 not found for channel {:?}", &channel_info);
-        }
-        if let Some(node) = self.nodes.get(&channel_info.node2()) {
-            self.store.insert_node(node.clone());
-        } else {
-            warn!("Node2 not found for channel {:?}", &channel_info);
-        }
+    }
 
-        let outpoint = channel_info.out_point();
-        self.channels.insert(outpoint.clone(), channel_info.clone());
-        self.store.insert_channel(channel_info);
-        debug!("Successfully added channel {:?}", outpoint);
+    fn process_channel_update(&mut self, channel_update: ChannelUpdate) -> Option<Cursor> {
+        let channel_outpoint = &channel_update.channel_outpoint;
+        // TODO: There is a slim chance that the channel update is received before the channel announcement.
+        let channel = self.channels.get_mut(channel_outpoint)?;
+        let update_info = if channel_update.is_update_of_node_1() {
+            &mut channel.update_of_node1
+        } else {
+            &mut channel.update_of_node2
+        };
+
+        match update_info {
+            Some(old_update) if old_update.timestamp > channel_update.timestamp => {
+                trace!(
+                    "Ignoring outdated channel update {:?} for channel {:?}",
+                    &channel_update,
+                    &channel
+                );
+                return None;
+            }
+            _ => {
+                let cursor = Cursor::new(
+                    channel_update.timestamp,
+                    BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone()),
+                );
+                *update_info = Some(ChannelUpdateInfo::from(channel_update));
+                return Some(cursor);
+            }
+        }
+    }
+
+    fn process_node_announcement(&mut self, node_announcement: NodeAnnouncement) -> Option<Cursor> {
+        let node_info = NodeInfo::from(node_announcement);
+        match self.nodes.get(&node_info.node_id) {
+            Some(old_node) if old_node.timestamp > node_info.timestamp => {
+                trace!(
+                    "Ignoring outdated node announcement {:?} for node {:?}",
+                    &node_info,
+                    &old_node
+                );
+                return None;
+            }
+            _ => {
+                let cursor = Cursor::new(
+                    node_info.timestamp,
+                    BroadcastMessageID::NodeAnnouncement(node_info.node_id),
+                );
+                self.nodes.insert(node_info.node_id, node_info);
+                return Some(cursor);
+            }
+        }
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = &NodeInfo> {
@@ -322,15 +322,7 @@ where
         limit: usize,
         after: Option<JsonBytes>,
     ) -> (Vec<NodeInfo>, JsonBytes) {
-        self.store.get_nodes_with_params(limit, after, None)
-    }
-
-    pub fn get_channels_with_params(
-        &self,
-        limit: usize,
-        after: Option<JsonBytes>,
-    ) -> (Vec<ChannelInfo>, JsonBytes) {
-        self.store.get_channels_with_params(limit, after, None)
+        unimplemented!("TODO: gossip message refactor");
     }
 
     pub fn get_node(&self, node_id: Pubkey) -> Option<&NodeInfo> {
@@ -343,6 +335,13 @@ where
 
     pub fn get_channel(&self, outpoint: &OutPoint) -> Option<&ChannelInfo> {
         self.channels.get(outpoint)
+    }
+    pub fn get_channels_with_params(
+        &self,
+        limit: usize,
+        after: Option<JsonBytes>,
+    ) -> (Vec<ChannelInfo>, JsonBytes) {
+        unimplemented!("TODO: gossip message refactor");
     }
 
     pub fn get_channels_by_peer(&self, node_id: Pubkey) -> impl Iterator<Item = &ChannelInfo> {
@@ -360,97 +359,18 @@ where
             .filter(move |channel| channel.node1() == node_id || channel.node2() == node_id)
     }
 
-    pub fn get_channels_within_block_range(
-        &self,
-        start_block: u64,
-        end_block: u64,
-    ) -> (impl Iterator<Item = &ChannelInfo>, u64, bool) {
-        (
-            self.channels.values().filter(move |channel| {
-                channel.funding_tx_block_number >= start_block
-                    && channel.funding_tx_block_number < end_block
-            }),
-            end_block,
-            self.channels.is_empty()
-                || self
-                    .channels
-                    .values()
-                    .any(|channel| channel.funding_tx_block_number >= end_block),
-        )
-    }
-
-    pub fn process_channel_update(&mut self, update: ChannelUpdate) -> Result<(), GraphError> {
-        debug!("Processing channel update: {:?}", &update);
-        let channel_outpoint = &update.channel_outpoint;
-        let Some(channel) = self.channels.get_mut(channel_outpoint) else {
-            return Err(GraphError::Other("channel not found".to_string()));
-        };
-        debug!(
-            "Found channel {:?} for channel update {:?}",
-            &channel, &update
-        );
-        let update_info = if update.message_flags & 1 == 1 {
-            &mut channel.node1_to_node2
-        } else {
-            &mut channel.node2_to_node1
-        };
-
-        if let Some(info) = update_info {
-            if update.version <= info.version {
-                // update.version == info.version happens most possibly because we received the
-                // broadcast many times. Don't emit too many logs in that case.
-                if update.version < info.version {
-                    warn!(
-                        "Ignoring updating with an outdated channel update {:?} for channel {:?}, current update info: {:?}",
-                        &update, channel_outpoint, &info
-                    );
-                }
-                return Ok(());
-            }
-        }
-        let disabled = update.channel_flags & CHANNEL_DISABLED_FLAG == CHANNEL_DISABLED_FLAG;
-
-        *update_info = Some(ChannelUpdateInfo {
-            version: update.version,
-            timestamp: std::time::UNIX_EPOCH
-                .elapsed()
-                .expect("Duration since unix epoch")
-                .as_millis() as u64,
-            enabled: !disabled,
-            htlc_expiry_delta: update.tlc_expiry_delta,
-            htlc_minimum_value: update.tlc_minimum_value,
-            htlc_maximum_value: update.tlc_maximum_value,
-            fee_rate: update.tlc_fee_proportional_millionths as u64,
-            last_update_message: update.clone(),
-        });
-
-        self.store.insert_channel(channel.to_owned());
-        debug!(
-            "Processed channel update: channel {:?}, update {:?}",
-            &channel, &update
-        );
-        if disabled {
-            self.channels.remove(channel_outpoint);
-        }
-        Ok(())
-    }
-
-    pub fn check_chain_hash(&self, chain_hash: Hash256) -> bool {
-        self.chain_hash == chain_hash
-    }
-
     pub fn get_node_inbounds(
         &self,
         node_id: Pubkey,
     ) -> impl Iterator<Item = (Pubkey, &ChannelInfo, &ChannelUpdateInfo)> {
         self.channels.values().filter_map(move |channel| {
-            if let Some(info) = channel.node1_to_node2.as_ref() {
+            if let Some(info) = channel.update_of_node2.as_ref() {
                 if info.enabled && channel.node2() == node_id {
                     return Some((channel.node1(), channel, info));
                 }
             }
 
-            if let Some(info) = channel.node2_to_node1.as_ref() {
+            if let Some(info) = channel.update_of_node1.as_ref() {
                 if info.enabled && channel.node1() == node_id {
                     return Some((channel.node2(), channel, info));
                 }
@@ -465,10 +385,10 @@ where
 
     pub(crate) fn mark_channel_failed(&mut self, channel_outpoint: &OutPoint) {
         if let Some(channel) = self.channels.get_mut(channel_outpoint) {
-            if let Some(info) = channel.node1_to_node2.as_mut() {
+            if let Some(info) = channel.update_of_node2.as_mut() {
                 info.enabled = false;
             }
-            if let Some(info) = channel.node2_to_node1.as_mut() {
+            if let Some(info) = channel.update_of_node1.as_mut() {
                 info.enabled = false;
             }
         }
@@ -477,21 +397,15 @@ where
     pub(crate) fn mark_node_failed(&mut self, node_id: Pubkey) {
         for channel in self.get_mut_channels_by_peer(node_id) {
             if channel.node1() == node_id {
-                if let Some(info) = channel.node1_to_node2.as_mut() {
+                if let Some(info) = channel.update_of_node2.as_mut() {
                     info.enabled = false;
                 }
             } else {
-                if let Some(info) = channel.node2_to_node1.as_mut() {
+                if let Some(info) = channel.update_of_node1.as_mut() {
                     info.enabled = false;
                 }
             }
         }
-    }
-
-    #[cfg(test)]
-    pub fn reset(&mut self) {
-        self.channels.clear();
-        self.nodes.clear();
     }
 
     /// Returns a list of `PaymentHopData` for all nodes in the route, including the origin and the target node.
@@ -556,9 +470,9 @@ where
                     .get_channel(&route[i + 1].channel_outpoint)
                     .expect("channel not found");
                 let channel_update = &if channel_info.node1() == route[i + 1].target {
-                    channel_info.node2_to_node1.as_ref()
+                    channel_info.update_of_node1.as_ref()
                 } else {
-                    channel_info.node1_to_node2.as_ref()
+                    channel_info.update_of_node2.as_ref()
                 }
                 .expect("channel_update is none");
                 let fee_rate = channel_update.fee_rate;
@@ -660,7 +574,7 @@ where
                 if from == target && !route_to_self {
                     continue;
                 }
-                if udt_type_script != channel_info.announcement_msg.udt_type_script {
+                if &udt_type_script != channel_info.udt_type_script() {
                     continue;
                 }
 
@@ -748,7 +662,7 @@ where
                     incoming_htlc_expiry,
                     fee_charged: fee,
                     probability,
-                    next_hop: Some((cur_hop.node_id, channel_info.out_point())),
+                    next_hop: Some((cur_hop.node_id, channel_info.out_point().clone())),
                 };
                 last_hop_channels.insert(node.node_id, channel_info.out_point());
                 distances.insert(node.node_id, node.clone());
@@ -803,22 +717,6 @@ where
 }
 
 pub trait NetworkGraphStateStore {
-    fn get_channels(&self, outpoint: Option<OutPoint>) -> Vec<ChannelInfo>;
-    fn get_nodes(&self, peer_id: Option<Pubkey>) -> Vec<NodeInfo>;
-    fn get_nodes_with_params(
-        &self,
-        limit: usize,
-        after: Option<JsonBytes>,
-        node_id: Option<Pubkey>,
-    ) -> (Vec<NodeInfo>, JsonBytes);
-    fn get_channels_with_params(
-        &self,
-        limit: usize,
-        after: Option<JsonBytes>,
-        outpoint: Option<OutPoint>,
-    ) -> (Vec<ChannelInfo>, JsonBytes);
-    fn insert_channel(&self, channel: ChannelInfo);
-    fn insert_node(&self, node: NodeInfo);
     fn get_payment_session(&self, payment_hash: Hash256) -> Option<PaymentSession>;
     fn insert_payment_session(&self, session: PaymentSession);
 }

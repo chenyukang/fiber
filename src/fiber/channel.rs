@@ -87,7 +87,7 @@ pub const FUNDING_CELL_WITNESS_LEN: usize = 16 + 32 + 64;
 pub const INITIAL_COMMITMENT_NUMBER: u64 = 0;
 
 // The channel is disabled, and no more tlcs can be added to the channel.
-pub const CHANNEL_DISABLED_FLAG: u32 = 1;
+pub const CHANNEL_DISABLED_FLAG: u32 = 2;
 
 #[derive(Debug)]
 pub enum ChannelActorMessage {

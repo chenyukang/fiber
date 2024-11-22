@@ -48,6 +48,7 @@ const GET_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CHECK_INFLIGHT_REQUESTS_INTERVAL: Duration = Duration::from_secs(5);
 
 pub trait GossipMessageStore {
+    /// It is guaranteed that the returned messages are sorted by timestamp in the ascending order.
     fn get_broadcast_messages(
         &self,
         after_cursor: &Cursor,
@@ -308,37 +309,56 @@ pub(crate) struct GossipProtocolHandle {
     sender: Option<oneshot::Sender<ServiceAsyncControl>>,
 }
 
+async fn verify_broadcast_message<S: GossipMessageStore>(
+    message: BroadcastMessage,
+    store: &S,
+    chain: &ActorRef<CkbChainMessage>,
+) -> Result<BroadcastMessageWithTimestamp, Error> {
+    match message {
+        BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
+            let timestamp = verify_channel_announcement(&channel_announcement, chain).await?;
+            Ok(BroadcastMessageWithTimestamp::ChannelAnnouncement(
+                timestamp,
+                channel_announcement,
+            ))
+        }
+        BroadcastMessage::ChannelUpdate(channel_update) => {
+            verify_channel_update(&channel_update, store)?;
+            Ok(BroadcastMessageWithTimestamp::ChannelUpdate(channel_update))
+        }
+        BroadcastMessage::NodeAnnouncement(node_announcement) => {
+            verify_node_announcement(&node_announcement)?;
+            Ok(BroadcastMessageWithTimestamp::NodeAnnouncement(
+                node_announcement,
+            ))
+        }
+    }
+}
+
 async fn verify_and_save_broadcast_message<S: GossipMessageStore>(
     message: BroadcastMessage,
     store: &S,
     chain: &ActorRef<CkbChainMessage>,
 ) -> Result<Cursor, Error> {
     let message_id = message.id();
-    match message {
-        BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
-            verify_and_save_channel_announcement(channel_announcement, store, chain).await
-        }
-        BroadcastMessage::ChannelUpdate(channel_update) => {
-            verify_and_save_channel_update(channel_update, store)
-        }
-        BroadcastMessage::NodeAnnouncement(node_announcement) => {
-            verify_and_save_node_announcement(node_announcement, store)
-        }
-    }
-    .map_err(|error| {
-        error!(
-            "Failed to process broadcast message with id {:?}: {:?}",
-            message_id, &error
-        );
-        error
-    })
+    let verified_message = verify_broadcast_message(message, store, chain)
+        .await
+        .map_err(|error| {
+            error!(
+                "Failed to process broadcast message with id {:?}: {:?}",
+                message_id, &error
+            );
+            error
+        })?;
+    let cursor = verified_message.cursor();
+    store.save_broadcast_message(verified_message);
+    Ok(cursor)
 }
 
-async fn verify_and_save_channel_announcement<S: GossipMessageStore>(
-    channel_announcement: ChannelAnnouncement,
-    store: &S,
+async fn verify_channel_announcement(
+    channel_announcement: &ChannelAnnouncement,
     chain: &ActorRef<CkbChainMessage>,
-) -> Result<Cursor, Error> {
+) -> Result<u64, Error> {
     debug!(
         "Received channel announcement message: {:?}",
         &channel_announcement
@@ -503,18 +523,13 @@ async fn verify_and_save_channel_announcement<S: GossipMessageStore>(
         &channel_announcement.channel_outpoint, timestamp
     );
 
-    let message =
-        BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement.clone());
-    let cursor = message.cursor();
-    store.save_broadcast_message(message);
-
-    Ok(cursor)
+    Ok(timestamp)
 }
 
-fn verify_and_save_channel_update<S: GossipMessageStore>(
-    channel_update: ChannelUpdate,
+fn verify_channel_update<S: GossipMessageStore>(
+    channel_update: &ChannelUpdate,
     store: &S,
-) -> Result<Cursor, Error> {
+) -> Result<(), Error> {
     let message = channel_update.message_to_sign();
 
     let signature = match channel_update.signature {
@@ -553,16 +568,10 @@ fn verify_and_save_channel_update<S: GossipMessageStore>(
             )));
         }
     }
-    let message = BroadcastMessageWithTimestamp::ChannelUpdate(channel_update);
-    let cursor = message.cursor();
-    store.save_broadcast_message(message);
-    Ok(cursor)
+    Ok(())
 }
 
-fn verify_and_save_node_announcement<S: GossipMessageStore>(
-    node_announcement: NodeAnnouncement,
-    store: &S,
-) -> Result<Cursor, Error> {
+fn verify_node_announcement(node_announcement: &NodeAnnouncement) -> Result<(), Error> {
     let message = node_announcement.message_to_sign();
     match node_announcement.signature {
         Some(ref signature) if signature.verify(&node_announcement.node_id, &message) => {
@@ -578,10 +587,7 @@ fn verify_and_save_node_announcement<S: GossipMessageStore>(
             )));
         }
     }
-    let message = BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement);
-    let cursor = message.cursor();
-    store.save_broadcast_message(message);
-    Ok(cursor)
+    Ok(())
 }
 
 impl GossipProtocolHandle {
@@ -692,6 +698,9 @@ where
                 let _ = state.peer_pubkey_map.remove(&peer_id);
             }
             GossipActorMessage::BroadcastMessage(broadcast_message) => {
+                state
+                    .store
+                    .save_broadcast_message(broadcast_message.clone());
                 for (peer, session) in &state.peer_session_map {
                     match state.peer_filter_map.get(peer) {
                         Some(cursor) if cursor < &broadcast_message.cursor() => {

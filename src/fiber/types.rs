@@ -1,7 +1,7 @@
 use crate::ckb::config::{UdtArgInfo, UdtCellDep, UdtCfgInfos, UdtScript};
 use crate::ckb::contracts::get_udt_whitelist;
 
-use super::channel::ChannelFlags;
+use super::channel::{ChannelFlags, CHANNEL_DISABLED_FLAG};
 use super::config::AnnouncedNodeName;
 use super::gen::fiber::{self as molecule_fiber, PubNonce as Byte66, UdtCellDeps, Uint128Opt};
 use super::gen::gossip::{self as molecule_gossip};
@@ -1505,7 +1505,7 @@ pub struct NodeAnnouncement {
     // rust-lightning uses a Vec<u8> here.
     pub features: u64,
     // Opaque version number of the node announcement update, later update should have larger version number.
-    pub version: u64,
+    pub timestamp: u64,
     pub node_id: Pubkey,
     // Must be a valid utf-8 string of length maximal length 32 bytes.
     // If the length is less than 32 bytes, it will be padded with 0.
@@ -1532,7 +1532,7 @@ impl NodeAnnouncement {
         Self {
             signature: None,
             features: Default::default(),
-            version,
+            timestamp: version,
             node_id,
             alias,
             chain_hash: get_chain_hash(),
@@ -1564,7 +1564,7 @@ impl NodeAnnouncement {
         let unsigned_announcement = NodeAnnouncement {
             signature: None,
             features: self.features,
-            version: self.version,
+            timestamp: self.timestamp,
             node_id: self.node_id,
             alias: self.alias,
             chain_hash: self.chain_hash,
@@ -1704,7 +1704,7 @@ impl From<NodeAnnouncement> for molecule_gossip::NodeAnnouncement {
                     .into(),
             )
             .features(node_announcement.features.pack())
-            .timestamp(node_announcement.version.pack())
+            .timestamp(node_announcement.timestamp.pack())
             .node_id(node_announcement.node_id.into())
             .alias(u8_32_as_byte_32(&node_announcement.alias.0))
             .chain_hash(node_announcement.chain_hash.into())
@@ -1734,7 +1734,7 @@ impl TryFrom<molecule_gossip::NodeAnnouncement> for NodeAnnouncement {
         Ok(NodeAnnouncement {
             signature: Some(node_announcement.signature().try_into()?),
             features: node_announcement.features().unpack(),
-            version: node_announcement.timestamp().unpack(),
+            timestamp: node_announcement.timestamp().unpack(),
             node_id: node_announcement.node_id().try_into()?,
             chain_hash: node_announcement.chain_hash().into(),
             auto_accept_min_ckb_funding_amount: node_announcement
@@ -1888,7 +1888,7 @@ pub struct ChannelUpdate {
     pub chain_hash: Hash256,
     #[serde_as(as = "EntityHex")]
     pub channel_outpoint: OutPoint,
-    pub version: u64,
+    pub timestamp: u64,
     // Currently only the first bit is used to indicate the direction of the channel.
     // If it is 0, it means this channel message is from node 1 (thus applies to tlcs
     // sent from node 2 to node 1). Otherwise, it is from node 2.
@@ -1918,7 +1918,7 @@ impl ChannelUpdate {
             signature: None,
             chain_hash,
             channel_outpoint,
-            version: timestamp,
+            timestamp,
             message_flags,
             channel_flags,
             tlc_expiry_delta,
@@ -1933,7 +1933,7 @@ impl ChannelUpdate {
             signature: None,
             chain_hash: self.chain_hash,
             channel_outpoint: self.channel_outpoint.clone(),
-            version: self.version,
+            timestamp: self.timestamp,
             message_flags: self.message_flags,
             channel_flags: self.channel_flags,
             tlc_expiry_delta: self.tlc_expiry_delta,
@@ -1951,6 +1951,10 @@ impl ChannelUpdate {
     pub fn is_update_of_node_2(&self) -> bool {
         !self.is_update_of_node_1()
     }
+
+    pub fn is_disabled(&self) -> bool {
+        self.channel_flags & CHANNEL_DISABLED_FLAG == CHANNEL_DISABLED_FLAG
+    }
 }
 
 impl From<ChannelUpdate> for molecule_gossip::ChannelUpdate {
@@ -1964,7 +1968,7 @@ impl From<ChannelUpdate> for molecule_gossip::ChannelUpdate {
             )
             .chain_hash(channel_update.chain_hash.into())
             .channel_outpoint(channel_update.channel_outpoint)
-            .timestamp(channel_update.version.pack())
+            .timestamp(channel_update.timestamp.pack())
             .message_flags(channel_update.message_flags.pack())
             .channel_flags(channel_update.channel_flags.pack())
             .tlc_expiry_delta(channel_update.tlc_expiry_delta.pack())
@@ -1983,7 +1987,7 @@ impl TryFrom<molecule_gossip::ChannelUpdate> for ChannelUpdate {
             signature: Some(channel_update.signature().try_into()?),
             chain_hash: channel_update.chain_hash().into(),
             channel_outpoint: channel_update.channel_outpoint(),
-            version: channel_update.timestamp().unpack(),
+            timestamp: channel_update.timestamp().unpack(),
             message_flags: channel_update.message_flags().unpack(),
             channel_flags: channel_update.channel_flags().unpack(),
             tlc_expiry_delta: channel_update.tlc_expiry_delta().unpack(),
@@ -2273,10 +2277,24 @@ pub enum BroadcastMessageWithTimestamp {
 }
 
 impl BroadcastMessageWithTimestamp {
+    pub fn chain_hash(&self) -> Hash256 {
+        match self {
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+                node_announcement.chain_hash
+            }
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(_, channel_announcement) => {
+                channel_announcement.chain_hash
+            }
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                channel_update.chain_hash
+            }
+        }
+    }
+
     pub fn cursor(&self) -> Cursor {
         match self {
             BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => Cursor::new(
-                node_announcement.version,
+                node_announcement.timestamp,
                 BroadcastMessageID::NodeAnnouncement(node_announcement.node_id),
             ),
             BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement) => {
@@ -2288,7 +2306,7 @@ impl BroadcastMessageWithTimestamp {
                 )
             }
             BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => Cursor::new(
-                channel_update.version,
+                channel_update.timestamp,
                 BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone()),
             ),
         }
@@ -2297,10 +2315,12 @@ impl BroadcastMessageWithTimestamp {
     pub fn timestamp(&self) -> u64 {
         match self {
             BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
-                node_announcement.version
+                node_announcement.timestamp
             }
             BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, _) => *timestamp,
-            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => channel_update.version,
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                channel_update.timestamp
+            }
         }
     }
 
@@ -2347,14 +2367,14 @@ impl From<(BroadcastMessage, u64)> for BroadcastMessageWithTimestamp {
     fn from((broadcast_message, timestamp): (BroadcastMessage, u64)) -> Self {
         match broadcast_message {
             BroadcastMessage::NodeAnnouncement(node_announcement) => {
-                debug_assert_eq!(timestamp, node_announcement.version);
+                debug_assert_eq!(timestamp, node_announcement.timestamp);
                 BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement)
             }
             BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
                 BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement)
             }
             BroadcastMessage::ChannelUpdate(channel_update) => {
-                debug_assert_eq!(timestamp, channel_update.version);
+                debug_assert_eq!(timestamp, channel_update.timestamp);
                 BroadcastMessageWithTimestamp::ChannelUpdate(channel_update)
             }
         }
