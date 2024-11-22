@@ -58,9 +58,9 @@ use super::gossip::{GossipActorMessage, GossipMessageStore};
 use super::graph::{NetworkGraph, NetworkGraphStateStore};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
-    BroadcastMessage, BroadcastMessageWithTimestamp, EcdsaSignature, FiberMessage, GossipMessage,
-    Hash256, NodeAnnouncement, OpenChannel, Privkey, Pubkey, RemoveTlc, RemoveTlcReason, TlcErr,
-    TlcErrData, TlcErrPacket, TlcErrorCode,
+    BroadcastMessage, EcdsaSignature, FiberMessage, GossipMessage, Hash256, NodeAnnouncement,
+    OpenChannel, Privkey, Pubkey, RemoveTlc, RemoveTlcReason, TlcErr, TlcErrData, TlcErrPacket,
+    TlcErrorCode,
 };
 use super::{FiberConfig, ASSUME_NETWORK_ACTOR_ALIVE};
 
@@ -216,7 +216,10 @@ pub enum NetworkActorCommand {
     ),
     UpdateChannelFunding(Hash256, Transaction, FundingRequest),
     SignTx(PeerId, Hash256, Transaction, Option<Vec<Vec<u8>>>),
-    BroadcastMessage(BroadcastMessageWithTimestamp),
+    // Process a broadcast message from the network.
+    ProcessBroadcastMessage(BroadcastMessage),
+    // Broadcast our BroadcastMessage to the network.
+    BroadcastMessage(BroadcastMessage),
     // Broadcast local information to the network.
     BroadcastLocalInfo(LocalInfoKind),
     SignMessage([u8; 32], RpcReplyPort<EcdsaSignature>),
@@ -1155,6 +1158,11 @@ where
                     ))
                     .expect("network actor alive");
             }
+            NetworkActorCommand::ProcessBroadcastMessage(message) => {
+                let _ = state
+                    .gossip_actor
+                    .send_message(GossipActorMessage::ProcessBroadcastMessage(message));
+            }
             NetworkActorCommand::BroadcastMessage(message) => {
                 let _ = state
                     .gossip_actor
@@ -1191,7 +1199,7 @@ where
                     myself
                         .send_message(NetworkActorMessage::new_command(
                             NetworkActorCommand::BroadcastMessage(
-                                BroadcastMessageWithTimestamp::NodeAnnouncement(message),
+                                BroadcastMessage::NodeAnnouncement(message),
                             ),
                         ))
                         .expect(ASSUME_NETWORK_MYSELF_ALIVE);
@@ -1326,7 +1334,8 @@ where
                     }
                     RemoveTlcReason::RemoveTlcFail(reason) => {
                         let detail_error = reason.decode().expect("decoded error");
-                        self.update_with_tcl_fail(&detail_error).await;
+                        self.update_with_tcl_fail(&state.network, &detail_error)
+                            .await;
                         if payment_session.can_retry() && !detail_error.error_code.payment_failed()
                         {
                             let res = self.try_payment_session(state, payment_session).await;
@@ -1343,7 +1352,11 @@ where
         }
     }
 
-    async fn update_with_tcl_fail(&self, tcl_error_detail: &TlcErr) {
+    async fn update_with_tcl_fail(
+        &self,
+        network: &ActorRef<NetworkActorMessage>,
+        tcl_error_detail: &TlcErr,
+    ) {
         let error_code = tcl_error_detail.error_code();
         // https://github.com/lightning/bolts/blob/master/04-onion-routing.md#rationale-6
         // we now still update the graph, maybe we need to remove it later?
@@ -1352,8 +1365,11 @@ where
                 match extra_data {
                     TlcErrData::ChannelFailed { channel_update, .. } => {
                         if let Some(channel_update) = channel_update {
-                            let mut graph = self.network_graph.write().await;
-                            // let _ = graph.process_channel_update(channel_update.clone());
+                            let _ = network.send_message(NetworkActorMessage::new_command(
+                                NetworkActorCommand::ProcessBroadcastMessage(
+                                    BroadcastMessage::ChannelUpdate(channel_update.clone()),
+                                ),
+                            ));
                         }
                     }
                     _ => {}
@@ -1445,7 +1461,8 @@ where
                             error_detail.error_code_as_str()
                         );
                         error = Some(err);
-                        self.update_with_tcl_fail(&error_detail).await;
+                        self.update_with_tcl_fail(&state.network, &error_detail)
+                            .await;
                     }
                     continue;
                 }
@@ -2798,7 +2815,7 @@ where
         // Save our own NodeInfo to the network graph.
         let node_announcement = state.get_or_create_new_node_announcement_message();
         myself.send_message(NetworkActorMessage::new_command(
-            NetworkActorCommand::BroadcastMessage(BroadcastMessageWithTimestamp::NodeAnnouncement(
+            NetworkActorCommand::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
                 node_announcement.clone(),
             )),
         ))?;

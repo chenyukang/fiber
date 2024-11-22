@@ -1,4 +1,3 @@
-use ckb_jsonrpc_types::JsonBytes;
 use ckb_types::packed::OutPoint;
 use ckb_types::{core::TransactionView, packed::Byte32};
 use ractor::{Actor, ActorRef};

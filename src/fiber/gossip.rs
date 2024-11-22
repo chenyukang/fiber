@@ -20,7 +20,7 @@ use tentacle::{
     SessionId,
 };
 use tokio::sync::oneshot;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     ckb::{CkbChainMessage, GetBlockTimestampRequest, TraceTxRequest, TraceTxResponse},
@@ -189,8 +189,11 @@ pub(crate) enum GossipActorMessage {
     // if we have sufficient number of peers to receive broadcasts.
     TickNetworkMaintenance,
 
-    // Command to broadcast BroadcastMessage to the network
-    BroadcastMessage(BroadcastMessageWithTimestamp),
+    // Process BroadcastMessage from the network. This is mostly used for testing.
+    // In production, we process GossipMessage from the network.
+    ProcessBroadcastMessage(BroadcastMessage),
+    // Broadcast a BroadcastMessage created by us to the network.
+    BroadcastMessage(BroadcastMessage),
     // Received GossipMessage from a peer
     GossipMessage(GossipMessageWithPeerId),
 }
@@ -339,7 +342,7 @@ async fn verify_and_save_broadcast_message<S: GossipMessageStore>(
     message: BroadcastMessage,
     store: &S,
     chain: &ActorRef<CkbChainMessage>,
-) -> Result<Cursor, Error> {
+) -> Result<BroadcastMessageWithTimestamp, Error> {
     let message_id = message.id();
     let verified_message = verify_broadcast_message(message, store, chain)
         .await
@@ -350,9 +353,9 @@ async fn verify_and_save_broadcast_message<S: GossipMessageStore>(
             );
             error
         })?;
-    let cursor = verified_message.cursor();
-    store.save_broadcast_message(verified_message);
-    Ok(cursor)
+
+    store.save_broadcast_message(verified_message.clone());
+    Ok(verified_message)
 }
 
 async fn verify_channel_announcement(
@@ -697,10 +700,40 @@ where
                 let _ = state.peer_session_map.remove(&peer_id);
                 let _ = state.peer_pubkey_map.remove(&peer_id);
             }
-            GossipActorMessage::BroadcastMessage(broadcast_message) => {
-                state
-                    .store
-                    .save_broadcast_message(broadcast_message.clone());
+            GossipActorMessage::ProcessBroadcastMessage(message) => {
+                if let Err(error) = verify_and_save_broadcast_message(
+                    message.clone(),
+                    &state.store,
+                    &state.chain_actor,
+                )
+                .await
+                {
+                    error!(
+                        "Failed to process broadcast message {:?}: {:?}",
+                        &message, &error
+                    );
+                }
+            }
+            GossipActorMessage::BroadcastMessage(message) => {
+                let broadcast_message = match verify_and_save_broadcast_message(
+                    message.clone(),
+                    &state.store,
+                    &state.chain_actor,
+                )
+                .await
+                {
+                    Ok(message) => message,
+                    Err(error) => {
+                        // This should never happen because we have already verified the message before broadcasting.
+                        // But it is possible that we failed to obtain the block timestamp for the message.
+                        error!(
+                            "Failed to verify and save broadcast message {:?}: {:?}",
+                            &message, &error
+                        );
+                        return Ok(());
+                    }
+                };
+                trace!("Broadcasting messages to peers: {:?}", &broadcast_message);
                 for (peer, session) in &state.peer_session_map {
                     match state.peer_filter_map.get(peer) {
                         Some(cursor) if cursor < &broadcast_message.cursor() => {

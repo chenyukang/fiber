@@ -9,8 +9,6 @@ use crate::{
             ShutdownCommand, DEFAULT_COMMITMENT_FEE_RATE,
         },
         config::DEFAULT_CHANNEL_MINIMAL_CKB_AMOUNT,
-        gossip::GossipMessageStore,
-        graph::{NetworkGraph, NetworkGraphStateStore},
         hash_algorithm::HashAlgorithm,
         network::{AcceptChannelCommand, OpenChannelCommand},
         types::{Hash256, Privkey, RemoveTlcFulfill, RemoveTlcReason},

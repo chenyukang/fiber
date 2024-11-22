@@ -1,12 +1,4 @@
-use crate::fiber::config::AnnouncedNodeName;
-use crate::fiber::graph::ChannelInfo;
-use crate::fiber::graph::NetworkGraphStateStore;
-use crate::fiber::graph::NodeInfo;
 use crate::fiber::tests::test_utils::gen_sha256_hash;
-use crate::fiber::types::ChannelAnnouncement;
-use crate::fiber::types::Hash256;
-use crate::fiber::types::NodeAnnouncement;
-use crate::fiber::types::Pubkey;
 use crate::invoice::*;
 use crate::store::Store;
 use crate::store::CHANNEL_INFO_PREFIX;

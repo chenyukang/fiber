@@ -7,7 +7,7 @@ use crate::{
     fiber::{
         fee::calculate_tlc_forward_fee,
         network::{get_chain_hash, SendOnionPacketCommand},
-        types::{ChannelUpdate, TlcErr, TlcErrPacket, TlcErrorCode},
+        types::{BroadcastMessage, ChannelUpdate, TlcErr, TlcErrPacket, TlcErrorCode},
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceStore},
 };
@@ -68,10 +68,10 @@ use super::{
     network::FiberMessageWithPeerId,
     serde_utils::EntityHex,
     types::{
-        AcceptChannel, AddTlc, BroadcastMessageWithTimestamp, ChannelAnnouncement, ChannelReady,
-        ClosingSigned, CommitmentSigned, EcdsaSignature, FiberChannelMessage, FiberMessage,
-        Hash256, OpenChannel, Privkey, Pubkey, ReestablishChannel, RemoveTlc, RemoveTlcFulfill,
-        RemoveTlcReason, RevokeAndAck, TxCollaborationMsg, TxComplete, TxUpdate,
+        AcceptChannel, AddTlc, ChannelAnnouncement, ChannelReady, ClosingSigned, CommitmentSigned,
+        EcdsaSignature, FiberChannelMessage, FiberMessage, Hash256, OpenChannel, Privkey, Pubkey,
+        ReestablishChannel, RemoveTlc, RemoveTlcFulfill, RemoveTlcReason, RevokeAndAck,
+        TxCollaborationMsg, TxComplete, TxUpdate,
     },
     NetworkActorCommand, NetworkActorEvent, NetworkActorMessage, ASSUME_NETWORK_ACTOR_ALIVE,
 };
@@ -1478,9 +1478,9 @@ where
 
                 self.network
                     .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::BroadcastMessage(
-                            BroadcastMessageWithTimestamp::ChannelUpdate(update),
-                        ),
+                        NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
+                            update,
+                        )),
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
@@ -2620,9 +2620,9 @@ impl ChannelActorState {
 
         network
             .send_message(NetworkActorMessage::new_command(
-                NetworkActorCommand::BroadcastMessage(
-                    BroadcastMessageWithTimestamp::ChannelUpdate(channel_update),
-                ),
+                NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
+                    channel_update,
+                )),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
     }
@@ -4624,12 +4624,9 @@ impl ChannelActorState {
             );
             network
                 .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::BroadcastMessage(
-                        crate::fiber::types::BroadcastMessageWithTimestamp::ChannelAnnouncement(
-                            u64::MAX, // TODO: use the correct timestamp
-                            channel_announcement,
-                        ),
-                    ),
+                    NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelAnnouncement(
+                        channel_announcement,
+                    )),
                 ))
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
             debug!(
@@ -4639,9 +4636,9 @@ impl ChannelActorState {
 
             network
                 .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::BroadcastMessage(
-                        BroadcastMessageWithTimestamp::ChannelUpdate(channel_update),
-                    ),
+                    NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
+                        channel_update,
+                    )),
                 ))
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
         }

@@ -2,7 +2,7 @@ use super::test_utils::{init_tracing, NetworkNode};
 use crate::{
     fiber::{
         gossip::GossipMessageStore,
-        graph::{ChannelInfo, ChannelUpdateInfo, NetworkGraphStateStore},
+        graph::ChannelUpdateInfo,
         network::{get_chain_hash, NetworkActorStateStore},
         tests::test_utils::NetworkNodeConfigBuilder,
         types::{
