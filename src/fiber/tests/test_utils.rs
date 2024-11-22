@@ -160,6 +160,7 @@ pub struct NetworkNode {
     pub listening_addrs: Vec<MultiAddr>,
     pub network_actor: ActorRef<NetworkActorMessage>,
     pub chain_actor: ActorRef<CkbChainMessage>,
+    pub public_key: Pubkey,
     pub peer_id: PeerId,
     pub event_emitter: mpsc::Receiver<NetworkServiceEvent>,
 }
@@ -338,6 +339,7 @@ impl NetworkNode {
             listening_addrs: announced_addrs,
             network_actor,
             chain_actor,
+            public_key: public_key.into(),
             peer_id,
             event_emitter: event_receiver,
         }
@@ -377,6 +379,10 @@ impl NetworkNode {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         tracing::debug!("Node stopped, restarting");
         self.start().await;
+    }
+
+    pub fn get_network_graph(&self) -> NetworkGraph<MemoryStore> {
+        NetworkGraph::new(self.store.clone(), self.public_key)
     }
 
     pub async fn new_n_interconnected_nodes<const N: usize>() -> [Self; N] {
@@ -608,70 +614,8 @@ impl GossipMessageStore for MemoryStore {
             .map(|msg| msg.timestamp())
     }
 }
+
 impl NetworkGraphStateStore for MemoryStore {
-    fn get_channels(&self, outpoint: Option<OutPoint>) -> Vec<ChannelInfo> {
-        if let Some(outpoint) = outpoint {
-            let mut res = vec![];
-
-            if let Some(channel) = self.channels_map.read().unwrap().get(&outpoint) {
-                res.push(channel.clone());
-            }
-            res
-        } else {
-            self.channels_map
-                .read()
-                .unwrap()
-                .values()
-                .cloned()
-                .collect()
-        }
-    }
-
-    fn insert_channel(&self, channel: ChannelInfo) {
-        self.channels_map
-            .write()
-            .unwrap()
-            .insert(channel.out_point(), channel);
-    }
-
-    fn get_nodes(&self, node_id: Option<Pubkey>) -> Vec<NodeInfo> {
-        if let Some(node_id) = node_id {
-            let mut res = vec![];
-
-            if let Some(node) = self.nodes_map.read().unwrap().get(&node_id) {
-                res.push(node.clone());
-            }
-            res
-        } else {
-            self.nodes_map.read().unwrap().values().cloned().collect()
-        }
-    }
-
-    fn get_nodes_with_params(
-        &self,
-        _limit: usize,
-        _after: Option<JsonBytes>,
-        _node_id: Option<Pubkey>,
-    ) -> (Vec<NodeInfo>, JsonBytes) {
-        unimplemented!("currently not used in mock store");
-    }
-
-    fn get_channels_with_params(
-        &self,
-        _limit: usize,
-        _after: Option<JsonBytes>,
-        _ooutpoint: Option<OutPoint>,
-    ) -> (Vec<ChannelInfo>, JsonBytes) {
-        unimplemented!("currently not used in mock store");
-    }
-
-    fn insert_node(&self, node: NodeInfo) {
-        self.nodes_map
-            .write()
-            .unwrap()
-            .insert(node.node_id.clone(), node);
-    }
-
     fn get_payment_session(&self, id: Hash256) -> Option<PaymentSession> {
         self.payment_sessions.read().unwrap().get(&id).cloned()
     }

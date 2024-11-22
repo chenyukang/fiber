@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::collections::HashMap;
 use tentacle::multiaddr::MultiAddr;
+use tentacle::secio::PeerId;
 use thiserror::Error;
 use tracing::log::error;
 use tracing::{debug, info, trace};
@@ -93,6 +94,14 @@ impl ChannelInfo {
         self.node2
     }
 
+    pub fn node1_peerid(&self) -> PeerId {
+        self.node1.tentacle_peer_id()
+    }
+
+    pub fn node2_peerid(&self) -> PeerId {
+        self.node2.tentacle_peer_id()
+    }
+
     pub fn udt_type_script(&self) -> &Option<Script> {
         &self.udt_type_script
     }
@@ -126,7 +135,7 @@ impl From<(u64, ChannelAnnouncement)> for ChannelInfo {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ChannelUpdateInfo {
     // The timestamp is the time when the channel update was received by the node.
     pub timestamp: u64,
@@ -143,6 +152,12 @@ pub struct ChannelUpdateInfo {
 
 impl From<ChannelUpdate> for ChannelUpdateInfo {
     fn from(update: ChannelUpdate) -> Self {
+        Self::from(&update)
+    }
+}
+
+impl From<&ChannelUpdate> for ChannelUpdateInfo {
+    fn from(update: &ChannelUpdate) -> Self {
         Self {
             timestamp: update.timestamp,
             enabled: !update.is_disabled(),

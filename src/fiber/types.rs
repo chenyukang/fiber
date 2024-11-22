@@ -1823,6 +1823,10 @@ impl ChannelAnnouncement {
         };
         deterministically_hash(&unsigned_announcement)
     }
+
+    pub fn out_point(&self) -> &OutPoint {
+        &self.channel_outpoint
+    }
 }
 
 impl From<ChannelAnnouncement> for molecule_gossip::ChannelAnnouncement {

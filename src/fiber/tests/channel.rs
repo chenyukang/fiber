@@ -9,7 +9,8 @@ use crate::{
             ShutdownCommand, DEFAULT_COMMITMENT_FEE_RATE,
         },
         config::DEFAULT_CHANNEL_MINIMAL_CKB_AMOUNT,
-        graph::NetworkGraphStateStore,
+        gossip::GossipMessageStore,
+        graph::{NetworkGraph, NetworkGraphStateStore},
         hash_algorithm::HashAlgorithm,
         network::{AcceptChannelCommand, OpenChannelCommand},
         types::{Hash256, Privkey, RemoveTlcFulfill, RemoveTlcReason},
@@ -191,27 +192,29 @@ async fn test_public_channel_saved_to_the_owner_graph() {
     let node2_id = node2.peer_id.clone();
     node2.stop().await;
 
-    let node1_channels = node1_store.get_channels(None);
+    let node1_graph = node1.get_network_graph();
+    let node1_channels = node1_graph.channels().collect::<Vec<_>>();
     assert_eq!(node1_channels.len(), 1);
-    let node1_channel = &node1_channels[0];
+    let node1_channel = node1_channels[0];
     assert_eq!(
         HashSet::from([node1_channel.node1_peerid(), node1_channel.node2_peerid()]),
         HashSet::from([node1_id.clone(), node2_id.clone()])
     );
-    let node1_nodes = node1_store.get_nodes(None);
+    let node1_nodes = node1_graph.nodes().collect::<Vec<_>>();
     assert_eq!(node1_nodes.len(), 2);
     for node in node1_nodes {
         assert!(node.node_id == node1_channel.node1() || node.node_id == node1_channel.node2());
     }
 
-    let node2_channels = node2_store.get_channels(None);
+    let node2_graph = node2.get_network_graph();
+    let node2_channels = node2_graph.channels().collect::<Vec<_>>();
     assert_eq!(node2_channels.len(), 1);
-    let node2_channel = &node2_channels[0];
+    let node2_channel = node2_channels[0];
     assert_eq!(
         HashSet::from([node2_channel.node1_peerid(), node2_channel.node2_peerid()]),
         HashSet::from([node1_id, node2_id])
     );
-    let node2_nodes = node2_store.get_nodes(None);
+    let node2_nodes = node2_graph.nodes().collect::<Vec<_>>();
     assert_eq!(node2_nodes.len(), 2);
     for node in node2_nodes {
         assert!(node.node_id == node2_channel.node1() || node.node_id == node2_channel.node2());
@@ -240,16 +243,17 @@ async fn test_public_channel_saved_to_the_other_nodes_graph() {
     // Wait for the channel announcement to be broadcasted
     tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
 
-    let node3_store = node3.store.clone();
     node3.stop().await;
-    let channels = node3_store.get_channels(None);
+    let node3_store = node3.store.clone();
+    let node3_graph = node3.get_network_graph();
+    let channels = node3_graph.channels().collect::<Vec<_>>();
     assert_eq!(channels.len(), 1);
-    let channel = &channels[0];
+    let channel = channels[0];
     assert_eq!(
         HashSet::from([channel.node1_peerid(), channel.node2_peerid()]),
         HashSet::from([node1.peer_id.clone(), node2.peer_id.clone()])
     );
-    let nodes = node3_store.get_nodes(None);
+    let nodes = node3_graph.nodes().collect::<Vec<_>>();
     let node_pubkeys = nodes
         .iter()
         .map(|node| node.node_id)
@@ -282,9 +286,9 @@ async fn test_public_channel_with_unconfirmed_funding_tx() {
     // Wait for the channel announcement to be broadcasted
     tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
 
-    let node3_store = node3.store.clone();
     node3.stop().await;
-    let channels = node3_store.get_channels(None);
+    let node3_graph = node3.get_network_graph();
+    let channels = node3_graph.channels().collect::<Vec<_>>();
     // No channels here as node 3 didn't think the funding transaction is confirmed.
     assert_eq!(channels.len(), 0);
 }

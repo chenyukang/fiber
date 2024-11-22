@@ -1,7 +1,8 @@
 use super::test_utils::{init_tracing, NetworkNode};
 use crate::{
     fiber::{
-        graph::{ChannelInfo, NetworkGraphStateStore},
+        gossip::GossipMessageStore,
+        graph::{ChannelInfo, ChannelUpdateInfo, NetworkGraphStateStore},
         network::{get_chain_hash, NetworkActorStateStore},
         tests::test_utils::NetworkNodeConfigBuilder,
         types::{
@@ -162,11 +163,12 @@ async fn test_sync_channel_announcement_on_startup() {
         .await;
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let channels = node2.store.get_channels(None);
+    let node2_graph = node2.get_network_graph();
+    let channels = node2_graph.channels().collect::<Vec<_>>();
     assert!(!channels.is_empty());
 }
 
-async fn create_a_channel() -> (NetworkNode, ChannelInfo, Privkey, Privkey, Privkey) {
+async fn create_a_channel() -> (NetworkNode, ChannelAnnouncement, Privkey, Privkey, Privkey) {
     init_tracing();
 
     let mut node1 = NetworkNode::new_with_node_name("node1").await;
@@ -218,22 +220,24 @@ async fn create_a_channel() -> (NetworkNode, ChannelInfo, Privkey, Privkey, Priv
     assert_eq!(node1.submit_tx(tx.clone()).await, Status::Committed);
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let channels = node1.store.get_channels(None);
-    assert_eq!(channels.len(), 1);
-    let channel_info = channels.into_iter().next().unwrap();
-    assert_eq!(&channel_info.announcement_msg, &channel_announcement);
+    let channel = node1
+        .store
+        .get_latest_channel_announcement(&channel_announcement.channel_outpoint)
+        .expect("channel saved")
+        .1;
+    assert_eq!(&channel, &channel_announcement);
 
-    (node1, channel_info, priv_key, sk1, sk2)
+    (node1, channel, priv_key, sk1, sk2)
 }
 
 #[tokio::test]
 async fn test_node1_node2_channel_update() {
-    let (node, channel_info, _priv_key, sk1, sk2) = create_a_channel().await;
+    let (node, channel_announcement, _priv_key, sk1, sk2) = create_a_channel().await;
 
     let create_channel_update = |version: u64, message_flags: u32, key: Privkey| {
         let mut channel_update = ChannelUpdate::new_unsigned(
             get_chain_hash(),
-            channel_info.announcement_msg.channel_outpoint.clone(),
+            channel_announcement.out_point().clone(),
             version,
             message_flags,
             0,
@@ -258,41 +262,30 @@ async fn test_node1_node2_channel_update() {
 
     let channel_update_of_node1 = create_channel_update(2, 0, sk1);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let new_channel_info = node
-        .store
-        .get_channels(Some(channel_info.announcement_msg.channel_outpoint.clone()));
-    assert_eq!(new_channel_info.len(), 1);
+    let mut node_graph = node.get_network_graph();
+
+    let new_channel_info = node_graph
+        .get_channel(&channel_announcement.out_point())
+        .expect("get channel");
     assert_eq!(
-        new_channel_info[0]
-            .node2_to_node1
-            .as_ref()
-            .unwrap()
-            .last_update_message,
-        channel_update_of_node1
+        new_channel_info.update_of_node1,
+        Some(ChannelUpdateInfo::from(&channel_update_of_node1))
     );
-    assert_eq!(new_channel_info[0].node1_to_node2, None);
+    assert_eq!(new_channel_info.update_of_node2, None);
 
     let channel_update_of_node2 = create_channel_update(3, 1, sk2);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let new_channel_info = node
-        .store
-        .get_channels(Some(channel_info.announcement_msg.channel_outpoint.clone()));
-    assert_eq!(new_channel_info.len(), 1);
+    node_graph.load_from_store();
+    let new_channel_info = node_graph
+        .get_channel(&channel_announcement.out_point())
+        .expect("get channel");
     assert_eq!(
-        new_channel_info[0]
-            .node2_to_node1
-            .as_ref()
-            .unwrap()
-            .last_update_message,
-        channel_update_of_node1
+        new_channel_info.update_of_node1,
+        Some(ChannelUpdateInfo::from(&channel_update_of_node1))
     );
     assert_eq!(
-        new_channel_info[0]
-            .node1_to_node2
-            .as_ref()
-            .unwrap()
-            .last_update_message,
-        channel_update_of_node2
+        new_channel_info.update_of_node2,
+        Some(ChannelUpdateInfo::from(&channel_update_of_node2))
     );
 }
 
@@ -303,7 +296,7 @@ async fn test_channel_update_version() {
     let create_channel_update = |version: u64, key: &Privkey| {
         let mut channel_update = ChannelUpdate::new_unsigned(
             get_chain_hash(),
-            channel_info.announcement_msg.channel_outpoint.clone(),
+            channel_info.out_point().clone(),
             version,
             0,
             0,
@@ -328,49 +321,31 @@ async fn test_channel_update_version() {
 
     let channel_update_2 = create_channel_update(2, &sk1);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let new_channel_info = node
-        .store
-        .get_channels(Some(channel_info.announcement_msg.channel_outpoint.clone()));
-    assert_eq!(new_channel_info.len(), 1);
+    let mut node_graph = node.get_network_graph();
+    let new_channel_info = node_graph.get_channel(channel_info.out_point()).unwrap();
     assert_eq!(
-        new_channel_info[0]
-            .node2_to_node1
-            .as_ref()
-            .unwrap()
-            .last_update_message,
-        channel_update_2
+        new_channel_info.update_of_node2,
+        Some(ChannelUpdateInfo::from(&channel_update_2))
     );
 
     // Old channel update will not replace the new one.
     let _channel_update_1 = create_channel_update(1, &sk1);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let new_channel_info = node
-        .store
-        .get_channels(Some(channel_info.announcement_msg.channel_outpoint.clone()));
-    assert_eq!(new_channel_info.len(), 1);
+    node_graph.load_from_store();
+    let new_channel_info = node_graph.get_channel(channel_info.out_point()).unwrap();
     assert_eq!(
-        new_channel_info[0]
-            .node2_to_node1
-            .as_ref()
-            .unwrap()
-            .last_update_message,
-        channel_update_2
+        new_channel_info.update_of_node1,
+        Some(ChannelUpdateInfo::from(&channel_update_2))
     );
 
     // New channel update will replace the old one.
     let channel_update_3 = create_channel_update(3, &sk1);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let new_channel_info = node
-        .store
-        .get_channels(Some(channel_info.announcement_msg.channel_outpoint.clone()));
-    assert_eq!(new_channel_info.len(), 1);
+    node_graph.load_from_store();
+    let new_channel_info = node_graph.get_channel(channel_info.out_point()).unwrap();
     assert_eq!(
-        new_channel_info[0]
-            .node2_to_node1
-            .as_ref()
-            .unwrap()
-            .last_update_message,
-        channel_update_3
+        new_channel_info.update_of_node1,
+        Some(ChannelUpdateInfo::from(&channel_update_3))
     );
 }
 
@@ -394,9 +369,10 @@ async fn test_sync_node_announcement_version() {
 
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let node_info = node.store.get_nodes(Some(test_pub_key));
-    match node_info.first() {
-        Some(n) if n.anouncement_msg.version == 2 => {}
+    let node_graph = node.get_network_graph();
+    let node_info = node_graph.get_node(test_pub_key);
+    match node_info {
+        Some(n) if n.timestamp == 2 => {}
         _ => panic!(
             "Must have version 2 announcement message, found {:?}",
             &node_info
@@ -415,9 +391,10 @@ async fn test_sync_node_announcement_version() {
 
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let node_info = node.store.get_nodes(Some(test_pub_key));
-    match node_info.first() {
-        Some(n) if n.anouncement_msg.version == 2 => {}
+    let node_graph = node.get_network_graph();
+    let node_info = node_graph.get_node(test_pub_key);
+    match node_info {
+        Some(n) if n.timestamp == 2 => {}
         _ => panic!(
             "Must have version 2 announcement message, found {:?}",
             &node_info
@@ -435,9 +412,9 @@ async fn test_sync_node_announcement_version() {
         .expect("send message to network actor");
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let node_info = node.store.get_nodes(Some(test_pub_key));
-    match node_info.first() {
-        Some(n) if n.anouncement_msg.version == 3 => {}
+    let node_info = node_graph.get_node(test_pub_key);
+    match node_info {
+        Some(n) if n.timestamp == 3 => {}
         _ => panic!(
             "Must have version 3 announcement message, found {:?}",
             &node_info
@@ -478,11 +455,13 @@ async fn test_sync_node_announcement_on_startup() {
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
-    let node = node1.store.get_nodes(Some(test_pub_key));
-    assert!(!node.is_empty());
+    let node_graph = node1.get_network_graph();
+    let node_info = node_graph.get_node(test_pub_key);
+    assert!(node_info.is_some());
 
-    let node = node2.store.get_nodes(Some(test_pub_key));
-    assert!(!node.is_empty());
+    let node_graph = node2.get_network_graph();
+    let node_info = node_graph.get_node(test_pub_key);
+    assert!(node_info.is_some());
 }
 
 // Test that we can sync the network graph with peers.
@@ -527,11 +506,13 @@ async fn test_sync_node_announcement_after_restart() {
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-    let node = node1.store.get_nodes(Some(test_pub_key));
-    assert!(!node.is_empty());
+    let node_graph = node1.get_network_graph();
+    let node_info = node_graph.get_node(test_pub_key);
+    assert!(node_info.is_some());
 
-    let node = node2.store.get_nodes(Some(test_pub_key));
-    assert!(!node.is_empty());
+    let node_graph = node2.get_network_graph();
+    let node_info = node_graph.get_node(test_pub_key);
+    assert!(node_info.is_some());
 }
 
 #[tokio::test]

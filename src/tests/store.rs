@@ -30,49 +30,50 @@ fn gen_rand_public_key() -> PublicKey {
     PublicKey::from_keypair(&key_pair)
 }
 
-fn mock_node() -> (Pubkey, NodeInfo) {
-    let node_id: Pubkey = gen_rand_public_key().into();
-    let node = NodeInfo {
-        node_id,
-        anouncement_msg: NodeAnnouncement::new_unsigned(
-            AnnouncedNodeName::from_str("node1").expect("invalid name"),
-            vec![],
-            node_id,
-            1,
-            0,
-        ),
-        timestamp: 0,
-    };
-    (node_id, node)
-}
+// TODO: gossip message refactor
+// fn mock_node() -> (Pubkey, NodeInfo) {
+//     let node_id: Pubkey = gen_rand_public_key().into();
+//     let node = NodeInfo {
+//         node_id,
+//         anouncement_msg: NodeAnnouncement::new_unsigned(
+//             AnnouncedNodeName::from_str("node1").expect("invalid name"),
+//             vec![],
+//             node_id,
+//             1,
+//             0,
+//         ),
+//         timestamp: 0,
+//     };
+//     (node_id, node)
+// }
 
-fn mock_channel() -> ChannelInfo {
-    let node1: Pubkey = gen_rand_public_key().into();
-    let node2: Pubkey = gen_rand_public_key().into();
-    let secp = Secp256k1::new();
-    let keypair = Keypair::new(&secp, &mut rand::thread_rng());
-    let (xonly, _parity) = keypair.x_only_public_key();
-    let rand_hash256 = gen_sha256_hash();
-    ChannelInfo {
-        funding_tx_block_number: 0,
-        funding_tx_index: 0,
-        timestamp: 0,
-        update_of_node2: None,
-        update_of_node1: None,
-        announcement_msg: ChannelAnnouncement::new_unsigned(
-            &node1,
-            &node2,
-            OutPoint::new_builder()
-                .tx_hash(rand_hash256.into())
-                .index(0u32.pack())
-                .build(),
-            Hash256::default(),
-            &xonly,
-            0,
-            None,
-        ),
-    }
-}
+// fn mock_channel() -> ChannelInfo {
+//     let node1: Pubkey = gen_rand_public_key().into();
+//     let node2: Pubkey = gen_rand_public_key().into();
+//     let secp = Secp256k1::new();
+//     let keypair = Keypair::new(&secp, &mut rand::thread_rng());
+//     let (xonly, _parity) = keypair.x_only_public_key();
+//     let rand_hash256 = gen_sha256_hash();
+//     ChannelInfo {
+//         funding_tx_block_number: 0,
+//         funding_tx_index: 0,
+//         timestamp: 0,
+//         update_of_node2: None,
+//         update_of_node1: None,
+//         announcement_msg: ChannelAnnouncement::new_unsigned(
+//             &node1,
+//             &node2,
+//             OutPoint::new_builder()
+//                 .tx_hash(rand_hash256.into())
+//                 .index(0u32.pack())
+//                 .build(),
+//             Hash256::default(),
+//             &xonly,
+//             0,
+//             None,
+//         ),
+//     }
+// }
 
 #[test]
 fn test_store_invoice() {
