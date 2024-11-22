@@ -367,6 +367,30 @@ impl InvoiceStore for Store {
 }
 
 impl GossipMessageStore for Store {
+    fn get_broadcast_messages_iter(
+        &self,
+        after_cursor: &Cursor,
+    ) -> impl IntoIterator<Item = BroadcastMessageWithTimestamp> {
+        let prefix = [
+            &[BROADCAST_MESSAGE_PREFIX],
+            after_cursor.to_bytes().as_slice(),
+        ]
+        .concat();
+
+        self.db
+            .prefix_iterator(prefix.as_ref())
+            .take_while(move |(key, _)| key.starts_with(&prefix))
+            .map(|(key, value)| {
+                debug_assert_eq!(key.len(), 1 + CURSOR_SIZE);
+                let mut timestamp_bytes = [0u8; 8];
+                timestamp_bytes.copy_from_slice(&key[1..9]);
+                let timestamp = u64::from_le_bytes(timestamp_bytes);
+                let message: BroadcastMessage = serde_json::from_slice(value.as_ref())
+                    .expect("deserialize BroadcastMessage should be OK");
+                (message, timestamp).into()
+            })
+    }
+
     fn get_broadcast_messages(
         &self,
         after_cursor: &Cursor,

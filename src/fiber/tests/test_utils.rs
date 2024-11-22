@@ -529,6 +529,21 @@ impl NetworkActorStateStore for MemoryStore {
 }
 
 impl GossipMessageStore for MemoryStore {
+    fn get_broadcast_messages_iter(
+        &self,
+        after_cursor: &Cursor,
+    ) -> impl IntoIterator<Item = BroadcastMessageWithTimestamp> {
+        let mut v: Vec<_> = self
+            .gossip_messages_map
+            .read()
+            .unwrap()
+            .values()
+            .filter_map(|msg| (after_cursor < &msg.cursor()).then_some(msg.clone()))
+            .collect();
+        v.sort_by(|a, b| a.cursor().cmp(&b.cursor()));
+        v
+    }
+
     fn get_broadcast_messages(
         &self,
         after_cursor: &Cursor,

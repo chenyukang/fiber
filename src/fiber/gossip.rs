@@ -48,12 +48,22 @@ const GET_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const CHECK_INFLIGHT_REQUESTS_INTERVAL: Duration = Duration::from_secs(5);
 
 pub trait GossipMessageStore {
-    /// It is guaranteed that the returned messages are sorted by timestamp in the ascending order.
+    /// The implementors should guarantee that the returned messages are sorted by timestamp in the ascending order.
+    fn get_broadcast_messages_iter(
+        &self,
+        after_cursor: &Cursor,
+    ) -> impl IntoIterator<Item = BroadcastMessageWithTimestamp>;
+
     fn get_broadcast_messages(
         &self,
         after_cursor: &Cursor,
         count: Option<u16>,
-    ) -> Vec<BroadcastMessageWithTimestamp>;
+    ) -> Vec<BroadcastMessageWithTimestamp> {
+        self.get_broadcast_messages_iter(after_cursor)
+            .into_iter()
+            .take(count.unwrap_or(DEFAULT_NUM_OF_BROADCAST_MESSAGE as u16) as usize)
+            .collect()
+    }
 
     fn query_broadcast_messages<I: IntoIterator<Item = BroadcastMessageQuery>>(
         &self,
