@@ -2864,6 +2864,7 @@ impl TryFrom<molecule_gossip::GetBroadcastMessagesResult> for GetBroadcastMessag
 #[derive(Debug, Clone)]
 pub struct QueryBroadcastMessages {
     pub id: u64,
+    pub chain_hash: Hash256,
     pub queries: Vec<BroadcastMessageQuery>,
 }
 
@@ -2871,6 +2872,7 @@ impl From<QueryBroadcastMessages> for molecule_gossip::QueryBroadcastMessages {
     fn from(query_broadcast_messages: QueryBroadcastMessages) -> Self {
         molecule_gossip::QueryBroadcastMessages::new_builder()
             .id(query_broadcast_messages.id.pack())
+            .chain_hash(query_broadcast_messages.chain_hash.into())
             .queries(
                 molecule_gossip::BroadcastMessageQueries::new_builder()
                     .set(
@@ -2894,6 +2896,7 @@ impl TryFrom<molecule_gossip::QueryBroadcastMessages> for QueryBroadcastMessages
     ) -> Result<Self, Self::Error> {
         Ok(QueryBroadcastMessages {
             id: query_broadcast_messages.id().unpack(),
+            chain_hash: query_broadcast_messages.chain_hash().into(),
             queries: query_broadcast_messages
                 .queries()
                 .into_iter()

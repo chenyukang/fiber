@@ -864,8 +864,10 @@ where
                     }
                     GossipMessage::QueryBroadcastMessages(QueryBroadcastMessages {
                         id,
+                        chain_hash,
                         queries,
                     }) => {
+                        check_chain_hash(&chain_hash)?;
                         if queries.len() > MAX_NUM_OF_BROADCAST_MESSAGES as usize {
                             warn!(
                                 "Received QueryBroadcastMessages with too many queries: {:?}",

@@ -132,6 +132,7 @@ struct GetBroadcastMessages {
 // messages after a cursor.
 table QueryBroadcastMessages {
     id: Uint64,
+    chain_hash: Byte32,
     queries: BroadcastMessageQueries,
 }
 

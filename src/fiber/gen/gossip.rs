@@ -6076,6 +6076,7 @@ impl ::core::fmt::Display for QueryBroadcastMessages {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{} {{ ", Self::NAME)?;
         write!(f, "{}: {}", "id", self.id())?;
+        write!(f, ", {}: {}", "chain_hash", self.chain_hash())?;
         write!(f, ", {}: {}", "queries", self.queries())?;
         let extra_count = self.count_extra_fields();
         if extra_count != 0 {
@@ -6091,10 +6092,12 @@ impl ::core::default::Default for QueryBroadcastMessages {
     }
 }
 impl QueryBroadcastMessages {
-    const DEFAULT_VALUE: [u8; 24] = [
-        24, 0, 0, 0, 12, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    const DEFAULT_VALUE: [u8; 60] = [
+        60, 0, 0, 0, 16, 0, 0, 0, 24, 0, 0, 0, 56, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0,
     ];
-    pub const FIELD_COUNT: usize = 2;
+    pub const FIELD_COUNT: usize = 3;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -6117,11 +6120,17 @@ impl QueryBroadcastMessages {
         let end = molecule::unpack_number(&slice[8..]) as usize;
         Uint64::new_unchecked(self.0.slice(start..end))
     }
-    pub fn queries(&self) -> BroadcastMessageQueries {
+    pub fn chain_hash(&self) -> Byte32 {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[8..]) as usize;
+        let end = molecule::unpack_number(&slice[12..]) as usize;
+        Byte32::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn queries(&self) -> BroadcastMessageQueries {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[12..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[12..]) as usize;
+            let end = molecule::unpack_number(&slice[16..]) as usize;
             BroadcastMessageQueries::new_unchecked(self.0.slice(start..end))
         } else {
             BroadcastMessageQueries::new_unchecked(self.0.slice(start..))
@@ -6153,7 +6162,10 @@ impl molecule::prelude::Entity for QueryBroadcastMessages {
         ::core::default::Default::default()
     }
     fn as_builder(self) -> Self::Builder {
-        Self::new_builder().id(self.id()).queries(self.queries())
+        Self::new_builder()
+            .id(self.id())
+            .chain_hash(self.chain_hash())
+            .queries(self.queries())
     }
 }
 #[derive(Clone, Copy)]
@@ -6176,6 +6188,7 @@ impl<'r> ::core::fmt::Display for QueryBroadcastMessagesReader<'r> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{} {{ ", Self::NAME)?;
         write!(f, "{}: {}", "id", self.id())?;
+        write!(f, ", {}: {}", "chain_hash", self.chain_hash())?;
         write!(f, ", {}: {}", "queries", self.queries())?;
         let extra_count = self.count_extra_fields();
         if extra_count != 0 {
@@ -6185,7 +6198,7 @@ impl<'r> ::core::fmt::Display for QueryBroadcastMessagesReader<'r> {
     }
 }
 impl<'r> QueryBroadcastMessagesReader<'r> {
-    pub const FIELD_COUNT: usize = 2;
+    pub const FIELD_COUNT: usize = 3;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -6208,11 +6221,17 @@ impl<'r> QueryBroadcastMessagesReader<'r> {
         let end = molecule::unpack_number(&slice[8..]) as usize;
         Uint64Reader::new_unchecked(&self.as_slice()[start..end])
     }
-    pub fn queries(&self) -> BroadcastMessageQueriesReader<'r> {
+    pub fn chain_hash(&self) -> Byte32Reader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[8..]) as usize;
+        let end = molecule::unpack_number(&slice[12..]) as usize;
+        Byte32Reader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn queries(&self) -> BroadcastMessageQueriesReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[12..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[12..]) as usize;
+            let end = molecule::unpack_number(&slice[16..]) as usize;
             BroadcastMessageQueriesReader::new_unchecked(&self.as_slice()[start..end])
         } else {
             BroadcastMessageQueriesReader::new_unchecked(&self.as_slice()[start..])
@@ -6266,19 +6285,25 @@ impl<'r> molecule::prelude::Reader<'r> for QueryBroadcastMessagesReader<'r> {
             return ve!(Self, OffsetsNotMatch);
         }
         Uint64Reader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
-        BroadcastMessageQueriesReader::verify(&slice[offsets[1]..offsets[2]], compatible)?;
+        Byte32Reader::verify(&slice[offsets[1]..offsets[2]], compatible)?;
+        BroadcastMessageQueriesReader::verify(&slice[offsets[2]..offsets[3]], compatible)?;
         Ok(())
     }
 }
 #[derive(Clone, Debug, Default)]
 pub struct QueryBroadcastMessagesBuilder {
     pub(crate) id: Uint64,
+    pub(crate) chain_hash: Byte32,
     pub(crate) queries: BroadcastMessageQueries,
 }
 impl QueryBroadcastMessagesBuilder {
-    pub const FIELD_COUNT: usize = 2;
+    pub const FIELD_COUNT: usize = 3;
     pub fn id(mut self, v: Uint64) -> Self {
         self.id = v;
+        self
+    }
+    pub fn chain_hash(mut self, v: Byte32) -> Self {
+        self.chain_hash = v;
         self
     }
     pub fn queries(mut self, v: BroadcastMessageQueries) -> Self {
@@ -6292,6 +6317,7 @@ impl molecule::prelude::Builder for QueryBroadcastMessagesBuilder {
     fn expected_length(&self) -> usize {
         molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1)
             + self.id.as_slice().len()
+            + self.chain_hash.as_slice().len()
             + self.queries.as_slice().len()
     }
     fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
@@ -6300,12 +6326,15 @@ impl molecule::prelude::Builder for QueryBroadcastMessagesBuilder {
         offsets.push(total_size);
         total_size += self.id.as_slice().len();
         offsets.push(total_size);
+        total_size += self.chain_hash.as_slice().len();
+        offsets.push(total_size);
         total_size += self.queries.as_slice().len();
         writer.write_all(&molecule::pack_number(total_size as molecule::Number))?;
         for offset in offsets.into_iter() {
             writer.write_all(&molecule::pack_number(offset as molecule::Number))?;
         }
         writer.write_all(self.id.as_slice())?;
+        writer.write_all(self.chain_hash.as_slice())?;
         writer.write_all(self.queries.as_slice())?;
         Ok(())
     }
