@@ -43,7 +43,7 @@ use tentacle::{
 };
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_util::task::TaskTracker;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 use super::channel::{
     AcceptChannelParameter, ChannelActor, ChannelActorMessage, ChannelActorStateStore,
@@ -2707,9 +2707,11 @@ where
         );
         let secio_kp = SecioKeyPair::from(kp);
         let secio_pk = secio_kp.public_key();
+        let my_peer_id: PeerId = PeerId::from(secio_pk);
         let handle = MyServiceHandle::new(myself.clone());
         let fiber_handle = FiberProtocolHandle::from(&handle);
         let gossip_handle = GossipProtocolHandle::new(
+            Some(format!("gossip actor {:?}", my_peer_id)),
             self.store.clone(),
             self.chain_actor.clone(),
             myself.get_cell(),
@@ -2729,8 +2731,6 @@ where
             .await
             .expect("listen tentacle");
 
-        trace!("debug secio_pk: {:?}", secio_pk);
-        let my_peer_id: PeerId = PeerId::from(secio_pk);
         listening_addr.push(Protocol::P2P(Cow::Owned(my_peer_id.clone().into_bytes())));
         let mut announced_addrs = Vec::with_capacity(config.announced_addrs.len() + 1);
         if config.announce_listening_addr() {

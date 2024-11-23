@@ -623,6 +623,7 @@ fn verify_node_announcement(node_announcement: &NodeAnnouncement) -> Result<(), 
 
 impl GossipProtocolHandle {
     pub(crate) async fn new<S: GossipMessageStore + Send + Sync + 'static>(
+        name: Option<String>,
         store: S,
         chain_actor: ActorRef<CkbChainMessage>,
         supervisor: ActorCell,
@@ -630,7 +631,7 @@ impl GossipProtocolHandle {
         let (sender, receiver) = oneshot::channel();
 
         let (actor, _handle) = ActorRuntime::spawn_linked_instant(
-            Some("gossip actor".to_string()),
+            name,
             GossipActor::new(),
             (receiver, store, chain_actor),
             supervisor,

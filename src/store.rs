@@ -18,8 +18,6 @@ use serde_json;
 use std::{path::Path, sync::Arc};
 use tentacle::secio::PeerId;
 
-const DEFAULT_NUM_OF_BROADCAST_MESSAGES: u16 = 1000;
-
 #[derive(Clone)]
 pub struct Store {
     pub(crate) db: Arc<DB>,

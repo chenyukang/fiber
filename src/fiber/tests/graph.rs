@@ -4,7 +4,7 @@ use crate::fiber::gossip::GossipMessageStore;
 use crate::fiber::types::Pubkey;
 use crate::{
     fiber::{
-        graph::{ChannelInfo, GraphError, NetworkGraph, NodeInfo, PathEdge},
+        graph::{GraphError, NetworkGraph, PathEdge},
         network::{get_chain_hash, SendPaymentCommand, SendPaymentData},
         types::{ChannelAnnouncement, ChannelUpdate, Hash256, NodeAnnouncement},
     },
