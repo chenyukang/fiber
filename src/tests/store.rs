@@ -1,8 +1,8 @@
 use crate::fiber::tests::test_utils::gen_sha256_hash;
 use crate::invoice::*;
 use crate::store::Store;
-use crate::store::CHANNEL_INFO_PREFIX;
-use crate::store::NODE_INFO_PREFIX;
+// use crate::store::CHANNEL_INFO_PREFIX;
+// use crate::store::NODE_INFO_PREFIX;
 use crate::watchtower::*;
 use ckb_jsonrpc_types::JsonBytes;
 use ckb_types::packed::Bytes;

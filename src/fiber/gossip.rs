@@ -116,7 +116,25 @@ pub trait GossipMessageStore {
         }
     }
 
-    fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp);
+    fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
+        match message {
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement) => {
+                self.save_channel_announcement(timestamp, channel_announcement)
+            }
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                self.save_channel_update(channel_update)
+            }
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+                self.save_node_announcement(node_announcement)
+            }
+        }
+    }
+
+    fn save_channel_announcement(&self, timestamp: u64, channel_announcement: ChannelAnnouncement);
+
+    fn save_channel_update(&self, channel_update: ChannelUpdate);
+
+    fn save_node_announcement(&self, node_announcement: NodeAnnouncement);
 
     fn get_broadcast_message_with_cursor(
         &self,
@@ -133,7 +151,7 @@ pub trait GossipMessageStore {
         is_node1: bool,
     ) -> Option<u64>;
 
-    fn get_lastest_node_announcement_timestamp(&self, pk: &Pubkey) -> Option<u64>;
+    fn get_latest_node_announcement_timestamp(&self, pk: &Pubkey) -> Option<u64>;
 
     fn get_latest_channel_announcement(
         &self,
@@ -174,7 +192,7 @@ pub trait GossipMessageStore {
     }
 
     fn get_lastest_node_announcement(&self, pk: &Pubkey) -> Option<NodeAnnouncement> {
-        self.get_lastest_node_announcement_timestamp(pk).and_then(|timestamp| {
+        self.get_latest_node_announcement_timestamp(pk).and_then(|timestamp| {
             self.get_broadcast_message_with_cursor(&Cursor::new(
                 timestamp,
                 BroadcastMessageID::NodeAnnouncement(pk.clone()),

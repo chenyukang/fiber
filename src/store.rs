@@ -5,8 +5,8 @@ use crate::{
         graph::{NetworkGraphStateStore, PaymentSession},
         network::{NetworkActorStateStore, PersistentNetworkActorState},
         types::{
-            BroadcastMessage, BroadcastMessageID, BroadcastMessageWithTimestamp, Cursor, Hash256,
-            Pubkey, CURSOR_SIZE,
+            BroadcastMessage, BroadcastMessageID, BroadcastMessageWithTimestamp,
+            ChannelAnnouncement, ChannelUpdate, Cursor, Hash256, Pubkey, CURSOR_SIZE,
         },
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceError, InvoiceStore},
@@ -179,11 +179,16 @@ const CKB_INVOICE_PREFIX: u8 = 32;
 const CKB_INVOICE_PREIMAGE_PREFIX: u8 = 33;
 const CKB_INVOICE_STATUS_PREFIX: u8 = 34;
 const PEER_ID_CHANNEL_ID_PREFIX: u8 = 64;
-pub(crate) const CHANNEL_INFO_PREFIX: u8 = 96;
+const CHANNEL_INFO_PREFIX: u8 = 96;
 const CHANNEL_ANNOUNCEMENT_INDEX_PREFIX: u8 = 97;
+// We save all the broadcast messages in a single column family because we need to
+// query all broadcast messages after a cursor. We use the cursor date type as the key
+// for the broadcast messages. This simplify the implementation of the query logic.
+// But this makes it harder to return a list of broadcast messages with the same type
+// (e.g. channel_announcement) in a single query.
 const BROADCAST_MESSAGE_PREFIX: u8 = 98;
-const BROADCAST_MESSAGE_TIMESTAMP_PREFIX: u8 = 98;
-pub(crate) const NODE_INFO_PREFIX: u8 = 128;
+const BROADCAST_MESSAGE_TIMESTAMP_PREFIX: u8 = 99;
+const NODE_INFO_PREFIX: u8 = 128;
 const NODE_ANNOUNCEMENT_INDEX_PREFIX: u8 = 129;
 const PAYMENT_SESSION_PREFIX: u8 = 192;
 const WATCHTOWER_CHANNEL_PREFIX: u8 = 224;
@@ -419,103 +424,130 @@ impl GossipMessageStore for Store {
             .collect()
     }
 
-    fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
-        let mut batch = self.batch();
-        let cursor = message.cursor();
-        match &message {
-            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, message) => {
-                if let Some(_old_timestamp) =
-                    self.get_latest_channel_announcement_timestamp(&message.channel_outpoint)
-                {
-                    // Channel announcement is immutable. If we have already saved one channel announcement,
-                    // we can early return now.
-                    return;
-                }
-
-                // Update the timestamps of the channel
-                let timestamp_key = [
-                    &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
-                    cursor.message_id.to_bytes().as_slice(),
-                ]
-                .concat();
-                let mut timestamps = self
-                    .get(&timestamp_key)
-                    .map(|v| v.try_into().expect("Invalid timestamp value length"))
-                    .unwrap_or([0u8; 24]);
-                timestamps[..8].copy_from_slice(&timestamp.to_le_bytes());
-                batch.put(timestamp_key, timestamps);
-            }
-
-            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
-                if let Some(old_timestamp) = self.get_latest_channel_update_timestamp(
-                    &channel_update.channel_outpoint,
-                    channel_update.is_update_of_node_1(),
-                ) {
-                    if channel_update.timestamp <= old_timestamp {
-                        return;
-                    }
-
-                    batch.delete(
-                        [
-                            &[BROADCAST_MESSAGE_PREFIX],
-                            Cursor::new(old_timestamp, cursor.message_id.clone())
-                                .to_bytes()
-                                .as_slice(),
-                        ]
-                        .concat(),
-                    );
-
-                    // Update the timestamps of the channel
-                    let timestamp_key = [
-                        &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
-                        cursor.message_id.to_bytes().as_slice(),
-                    ]
-                    .concat();
-                    let mut timestamps = self
-                        .get(&timestamp_key)
-                        .map(|v| v.try_into().expect("Invalid timestamp value length"))
-                        .unwrap_or([0u8; 24]);
-                    let start_index = if channel_update.is_update_of_node_1() {
-                        8
-                    } else {
-                        16
-                    };
-                    timestamps[start_index..start_index + 8]
-                        .copy_from_slice(&channel_update.timestamp.to_le_bytes());
-                    batch.put(timestamp_key, timestamps);
-                }
-            }
-
-            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
-                if let Some(old_timestamp) =
-                    self.get_lastest_node_announcement_timestamp(&node_announcement.node_id)
-                {
-                    if node_announcement.timestamp <= old_timestamp {
-                        return;
-                    }
-
-                    batch.delete(
-                        [
-                            &[BROADCAST_MESSAGE_PREFIX],
-                            Cursor::new(old_timestamp, cursor.message_id.clone())
-                                .to_bytes()
-                                .as_slice(),
-                        ]
-                        .concat(),
-                    );
-                    batch.put(
-                        [
-                            &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
-                            cursor.message_id.to_bytes().as_slice(),
-                        ]
-                        .concat(),
-                        node_announcement.timestamp.to_le_bytes(),
-                    )
-                }
-            }
+    fn save_channel_announcement(&self, timestamp: u64, channel_announcement: ChannelAnnouncement) {
+        if let Some(_old_timestamp) =
+            self.get_latest_channel_announcement_timestamp(&channel_announcement.channel_outpoint)
+        {
+            // Channel announcement is immutable. If we have already saved one channel announcement,
+            // we can early return now.
+            return;
         }
 
-        let message = BroadcastMessage::from(message);
+        let mut batch = self.batch();
+        let cursor = Cursor::new(
+            timestamp,
+            BroadcastMessageID::ChannelAnnouncement(channel_announcement.channel_outpoint.clone()),
+        );
+
+        // Update the timestamps of the channel
+        let timestamp_key = [
+            &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+            cursor.message_id.to_bytes().as_slice(),
+        ]
+        .concat();
+        let mut timestamps = self
+            .get(&timestamp_key)
+            .map(|v| v.try_into().expect("Invalid timestamp value length"))
+            .unwrap_or([0u8; 24]);
+        timestamps[..8].copy_from_slice(&timestamp.to_le_bytes());
+        batch.put(timestamp_key, timestamps);
+
+        // Save the channel announcement
+        let message = BroadcastMessage::ChannelAnnouncement(channel_announcement);
+        batch.put(
+            [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
+            serde_json::to_vec(&message).expect("serialize BroadcastMessage should be OK"),
+        );
+    }
+
+    fn save_channel_update(&self, channel_update: ChannelUpdate) {
+        let mut batch = self.batch();
+        let message_id = BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone());
+
+        // Remove old channel update if exists
+        if let Some(old_timestamp) = self.get_latest_channel_update_timestamp(
+            &channel_update.channel_outpoint,
+            channel_update.is_update_of_node_1(),
+        ) {
+            if channel_update.timestamp <= old_timestamp {
+                // This is an outdated channel update, early return
+                return;
+            }
+            // Delete old channel update
+            batch.delete(
+                [
+                    &[BROADCAST_MESSAGE_PREFIX],
+                    Cursor::new(old_timestamp, message_id.clone())
+                        .to_bytes()
+                        .as_slice(),
+                ]
+                .concat(),
+            );
+        }
+
+        // Update the timestamps of the channel
+        let timestamp_key = [
+            &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+            message_id.to_bytes().as_slice(),
+        ]
+        .concat();
+        let mut timestamps = self
+            .get(&timestamp_key)
+            .map(|v| v.try_into().expect("Invalid timestamp value length"))
+            .unwrap_or([0u8; 24]);
+        let start_index = if channel_update.is_update_of_node_1() {
+            8
+        } else {
+            16
+        };
+        timestamps[start_index..start_index + 8]
+            .copy_from_slice(&channel_update.timestamp.to_le_bytes());
+        batch.put(timestamp_key, timestamps);
+
+        // Save the channel update
+        let cursor = Cursor::new(channel_update.timestamp, message_id);
+        let message = BroadcastMessage::ChannelUpdate(channel_update.clone());
+        batch.put(
+            [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
+            serde_json::to_vec(&message).expect("serialize BroadcastMessage should be OK"),
+        );
+    }
+
+    fn save_node_announcement(&self, node_announcement: crate::fiber::types::NodeAnnouncement) {
+        let mut batch = self.batch();
+        let message_id = BroadcastMessageID::NodeAnnouncement(node_announcement.node_id.clone());
+
+        if let Some(old_timestamp) =
+            self.get_latest_node_announcement_timestamp(&node_announcement.node_id)
+        {
+            if node_announcement.timestamp <= old_timestamp {
+                // This is an outdated node announcement. Early return.
+                return;
+            }
+
+            // Delete old node announcement
+            batch.delete(
+                [
+                    &[BROADCAST_MESSAGE_PREFIX],
+                    Cursor::new(old_timestamp, message_id.clone())
+                        .to_bytes()
+                        .as_slice(),
+                ]
+                .concat(),
+            );
+        }
+        batch.put(
+            [
+                &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+                message_id.to_bytes().as_slice(),
+            ]
+            .concat(),
+            node_announcement.timestamp.to_le_bytes(),
+        );
+
+        // Save the channel update
+        let cursor = Cursor::new(node_announcement.timestamp, message_id);
+        let message = BroadcastMessage::NodeAnnouncement(node_announcement);
         batch.put(
             [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
             serde_json::to_vec(&message).expect("serialize BroadcastMessage should be OK"),
@@ -588,7 +620,7 @@ impl GossipMessageStore for Store {
         })
     }
 
-    fn get_lastest_node_announcement_timestamp(&self, pk: &Pubkey) -> Option<u64> {
+    fn get_latest_node_announcement_timestamp(&self, pk: &Pubkey) -> Option<u64> {
         let message_id = BroadcastMessageID::NodeAnnouncement(pk.clone());
         let timestamp_key = [
             &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],

@@ -22,7 +22,10 @@ use tokio::{
 };
 
 use crate::fiber::gossip::{GossipMessageStore, DEFAULT_NUM_OF_BROADCAST_MESSAGE};
-use crate::fiber::types::{BroadcastMessageID, BroadcastMessageWithTimestamp, Cursor};
+use crate::fiber::types::{
+    BroadcastMessageID, BroadcastMessageWithTimestamp, ChannelAnnouncement, ChannelUpdate, Cursor,
+    NodeAnnouncement,
+};
 use crate::{
     actors::{RootActor, RootActorMessage},
     ckb::tests::test_utils::{
@@ -558,6 +561,23 @@ impl GossipMessageStore for MemoryStore {
             .collect()
     }
 
+    fn save_channel_announcement(&self, timestamp: u64, channel_announcement: ChannelAnnouncement) {
+        self.save_broadcast_message(BroadcastMessageWithTimestamp::ChannelAnnouncement(
+            timestamp,
+            channel_announcement,
+        ));
+    }
+
+    fn save_channel_update(&self, channel_update: ChannelUpdate) {
+        self.save_broadcast_message(BroadcastMessageWithTimestamp::ChannelUpdate(channel_update));
+    }
+
+    fn save_node_announcement(&self, node_announcement: NodeAnnouncement) {
+        self.save_broadcast_message(BroadcastMessageWithTimestamp::NodeAnnouncement(
+            node_announcement,
+        ));
+    }
+
     fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
         let is_node_1 = match &message {
             BroadcastMessageWithTimestamp::ChannelUpdate(msg) if msg.is_update_of_node_2() => false,
@@ -620,7 +640,7 @@ impl GossipMessageStore for MemoryStore {
             .map(|msg| msg.timestamp())
     }
 
-    fn get_lastest_node_announcement_timestamp(&self, pk: &Pubkey) -> Option<u64> {
+    fn get_latest_node_announcement_timestamp(&self, pk: &Pubkey) -> Option<u64> {
         self.gossip_messages_map
             .read()
             .unwrap()
