@@ -134,6 +134,30 @@ fn test_store_get_broadcast_messages_iter() {
 }
 
 #[test]
+fn test_store_get_broadcast_messages() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("gossip_store");
+    let store = Store::new(path);
+
+    let timestamp = 1;
+    let channel_announcement = mock_channel();
+    let outpoint = channel_announcement.out_point().clone();
+    store.save_channel_announcement(timestamp, channel_announcement.clone());
+    let default_cursor = Cursor::default();
+    let result = store.get_broadcast_messages(&default_cursor, None);
+    assert_eq!(
+        result,
+        vec![BroadcastMessageWithTimestamp::ChannelAnnouncement(
+            timestamp,
+            channel_announcement
+        )],
+    );
+    let cursor = Cursor::new(timestamp, BroadcastMessageID::ChannelAnnouncement(outpoint));
+    let result = store.get_broadcast_messages(&cursor, None);
+    assert_eq!(result, vec![]);
+}
+
+#[test]
 fn test_store_save_channel_announcement() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("gossip_store");
