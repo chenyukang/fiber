@@ -4,10 +4,11 @@ use crate::fiber::graph::{NetworkGraph, NetworkGraphStateStore};
 use crate::fiber::network::get_chain_hash;
 use crate::fiber::serde_utils::EntityHex;
 use crate::fiber::serde_utils::{U128Hex, U32Hex, U64Hex};
-use crate::fiber::types::{Hash256, Pubkey};
+use crate::fiber::types::{Cursor, Hash256, Pubkey};
 use ckb_jsonrpc_types::{DepType, JsonBytes, Script, ScriptHashType};
 use ckb_types::packed::OutPoint;
 use ckb_types::H256;
+use jsonrpsee::types::error::INVALID_PARAMS_CODE;
 use jsonrpsee::{core::async_trait, proc_macros::rpc, types::ErrorObjectOwned};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -269,10 +270,20 @@ where
     ) -> Result<GraphNodesResult, ErrorObjectOwned> {
         let network_graph = self.network_graph.read().await;
         let default_max_limit = 500;
-        let (nodes, last_cursor) = network_graph.get_nodes_with_params(
-            params.limit.unwrap_or(default_max_limit) as usize,
-            params.after,
-        );
+        let limit = params.limit.unwrap_or(default_max_limit) as usize;
+        let cursor = params
+            .after
+            .as_ref()
+            .map(|cursor| Cursor::from_bytes(cursor.as_bytes()))
+            .transpose()
+            .map_err(|e| {
+                ErrorObjectOwned::owned(INVALID_PARAMS_CODE, e.to_string(), Some(params))
+            })?;
+        let nodes = network_graph.get_nodes_with_params(limit, cursor);
+        let last_cursor = nodes
+            .last()
+            .map(|node| JsonBytes::from_vec(node.cursor().to_bytes().into()))
+            .unwrap_or_default();
         let nodes = nodes.into_iter().map(Into::into).collect();
 
         Ok(GraphNodesResult { nodes, last_cursor })
@@ -284,10 +295,21 @@ where
     ) -> Result<GraphChannelsResult, ErrorObjectOwned> {
         let default_max_limit = 500;
         let network_graph = self.network_graph.read().await;
-        let (channels, last_cursor) = network_graph.get_channels_with_params(
-            params.limit.unwrap_or(default_max_limit) as usize,
-            params.after,
-        );
+        let limit = params.limit.unwrap_or(default_max_limit) as usize;
+        let cursor = params
+            .after
+            .as_ref()
+            .map(|cursor| Cursor::from_bytes(cursor.as_bytes()))
+            .transpose()
+            .map_err(|e| {
+                ErrorObjectOwned::owned(INVALID_PARAMS_CODE, e.to_string(), Some(params))
+            })?;
+
+        let channels = network_graph.get_channels_with_params(limit, cursor);
+        let last_cursor = channels
+            .last()
+            .map(|node| JsonBytes::from_vec(node.cursor().to_bytes().into()))
+            .unwrap_or_default();
 
         let channels = channels.into_iter().map(Into::into).collect();
         Ok(GraphChannelsResult {

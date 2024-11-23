@@ -110,7 +110,7 @@ pub trait GossipMessageStore {
                     } else {
                         &channel_announcement.node2_id
                     };
-                    self.get_lastest_node_announcement(node)
+                    self.get_latest_node_announcement(node)
                         .map(|m| BroadcastMessageWithTimestamp::NodeAnnouncement(m))
                 }),
         }
@@ -191,7 +191,7 @@ pub trait GossipMessageStore {
             })
     }
 
-    fn get_lastest_node_announcement(&self, pk: &Pubkey) -> Option<NodeAnnouncement> {
+    fn get_latest_node_announcement(&self, pk: &Pubkey) -> Option<NodeAnnouncement> {
         self.get_latest_node_announcement_timestamp(pk).and_then(|timestamp| {
             self.get_broadcast_message_with_cursor(&Cursor::new(
                 timestamp,

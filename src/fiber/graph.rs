@@ -13,7 +13,6 @@ use crate::fiber::path::{NodeHeapElement, ProbabilityEvaluator};
 use crate::fiber::serde_utils::EntityHex;
 use crate::fiber::types::PaymentHopData;
 use crate::invoice::CkbInvoice;
-use ckb_jsonrpc_types::JsonBytes;
 use ckb_types::packed::{OutPoint, Script};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -44,6 +43,15 @@ pub struct NodeInfo {
     pub auto_accept_min_ckb_funding_amount: u64,
     // UDT config info
     pub udt_cfg_infos: UdtCfgInfos,
+}
+
+impl NodeInfo {
+    pub fn cursor(&self) -> Cursor {
+        Cursor::new(
+            self.timestamp,
+            BroadcastMessageID::NodeAnnouncement(self.node_id),
+        )
+    }
 }
 
 impl From<NodeAnnouncement> for NodeInfo {
@@ -78,6 +86,13 @@ pub struct ChannelInfo {
 }
 
 impl ChannelInfo {
+    pub fn cursor(&self) -> Cursor {
+        Cursor::new(
+            self.timestamp,
+            BroadcastMessageID::ChannelAnnouncement(self.channel_outpoint.clone()),
+        )
+    }
+
     pub fn out_point(&self) -> &OutPoint {
         &self.channel_outpoint
     }
@@ -247,6 +262,19 @@ where
         }
     }
 
+    fn load_channel_updates_from_store(&self, channel_info: &mut ChannelInfo) {
+        let channel_update_of_node1 = self
+            .store
+            .get_latest_channel_update(&channel_info.channel_outpoint, true)
+            .map(Into::into);
+        let channel_update_of_node2 = self
+            .store
+            .get_latest_channel_update(&channel_info.channel_outpoint, false)
+            .map(Into::into);
+        channel_info.update_of_node1 = channel_update_of_node1;
+        channel_info.update_of_node2 = channel_update_of_node2;
+    }
+
     fn process_channel_announcement(
         &mut self,
         timestamp: u64,
@@ -332,12 +360,19 @@ where
         self.nodes.values()
     }
 
-    pub fn get_nodes_with_params(
-        &self,
-        limit: usize,
-        after: Option<JsonBytes>,
-    ) -> (Vec<NodeInfo>, JsonBytes) {
-        unimplemented!("TODO: gossip message refactor");
+    pub fn get_nodes_with_params(&self, limit: usize, after: Option<Cursor>) -> Vec<NodeInfo> {
+        let cursor = after.unwrap_or_default();
+        self.store
+            .get_broadcast_messages_iter(&cursor)
+            .into_iter()
+            .filter_map(|message| match message {
+                BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+                    Some(NodeInfo::from(node_announcement))
+                }
+                _ => None,
+            })
+            .take(limit)
+            .collect()
     }
 
     pub fn get_node(&self, node_id: Pubkey) -> Option<&NodeInfo> {
@@ -351,12 +386,29 @@ where
     pub fn get_channel(&self, outpoint: &OutPoint) -> Option<&ChannelInfo> {
         self.channels.get(outpoint)
     }
+
     pub fn get_channels_with_params(
         &self,
         limit: usize,
-        after: Option<JsonBytes>,
-    ) -> (Vec<ChannelInfo>, JsonBytes) {
-        unimplemented!("TODO: gossip message refactor");
+        after: Option<Cursor>,
+    ) -> Vec<ChannelInfo> {
+        let cursor = after.unwrap_or_default();
+        self.store
+            .get_broadcast_messages_iter(&cursor)
+            .into_iter()
+            .filter_map(|message| match message {
+                BroadcastMessageWithTimestamp::ChannelAnnouncement(
+                    timestamp,
+                    channel_announcement,
+                ) => {
+                    let mut channel_info = ChannelInfo::from((timestamp, channel_announcement));
+                    self.load_channel_updates_from_store(&mut channel_info);
+                    Some(channel_info)
+                }
+                _ => None,
+            })
+            .take(limit)
+            .collect()
     }
 
     pub fn get_channels_by_peer(&self, node_id: Pubkey) -> impl Iterator<Item = &ChannelInfo> {
