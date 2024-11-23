@@ -10,6 +10,7 @@ use crate::fiber::types::Hash256;
 use crate::fiber::types::NodeAnnouncement;
 use crate::fiber::types::Privkey;
 use crate::invoice::*;
+use crate::now_timestamp;
 use crate::store::Store;
 use crate::watchtower::*;
 use ckb_types::packed::Bytes;
@@ -40,7 +41,7 @@ fn mock_node() -> (Privkey, NodeAnnouncement) {
             AnnouncedNodeName::from_str("node1").expect("invalid name"),
             vec![],
             &sk,
-            1,
+            now_timestamp(),
             0,
         ),
     )
@@ -105,7 +106,7 @@ fn test_store_get_broadcast_messages_iter() {
     let path = dir.path().join("gossip_store");
     let store = Store::new(path);
 
-    let timestamp = 1;
+    let timestamp = now_timestamp();
     let channel_announcement = mock_channel();
     let outpoint = channel_announcement.out_point().clone();
     store.save_channel_announcement(timestamp, channel_announcement.clone());
@@ -132,7 +133,7 @@ fn test_store_get_broadcast_messages() {
     let path = dir.path().join("gossip_store");
     let store = Store::new(path);
 
-    let timestamp = 1;
+    let timestamp = now_timestamp();
     let channel_announcement = mock_channel();
     let outpoint = channel_announcement.out_point().clone();
     store.save_channel_announcement(timestamp, channel_announcement.clone());
@@ -156,7 +157,7 @@ fn test_store_save_channel_announcement() {
     let path = dir.path().join("gossip_store");
     let store = Store::new(path);
 
-    let timestamp = 1;
+    let timestamp = now_timestamp();
     let channel_announcement = mock_channel();
     store.save_channel_announcement(timestamp, channel_announcement.clone());
     let new_channel_announcement =

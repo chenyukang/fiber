@@ -10,7 +10,7 @@ use crate::{
         },
         NetworkActorCommand, NetworkActorEvent, NetworkActorMessage,
     },
-    NetworkServiceEvent,
+    now_timestamp, NetworkServiceEvent,
 };
 use ckb_hash::blake2b_256;
 use ckb_jsonrpc_types::Status;
@@ -90,8 +90,7 @@ fn create_fake_node_announcement_mesage_version1() -> NodeAnnouncement {
             .iter()
             .map(|x| MultiAddr::from_str(x).expect("valid multiaddr"))
             .collect();
-    let version = 1;
-    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, version, 0)
+    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, now_timestamp(), 0)
 }
 
 fn create_fake_node_announcement_mesage_version2() -> NodeAnnouncement {
@@ -102,8 +101,7 @@ fn create_fake_node_announcement_mesage_version2() -> NodeAnnouncement {
             .iter()
             .map(|x| MultiAddr::from_str(x).expect("valid multiaddr"))
             .collect();
-    let version = 2;
-    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, version, 0)
+    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, now_timestamp(), 0)
 }
 
 fn create_fake_node_announcement_mesage_version3() -> NodeAnnouncement {
@@ -114,8 +112,7 @@ fn create_fake_node_announcement_mesage_version3() -> NodeAnnouncement {
             .iter()
             .map(|x| MultiAddr::from_str(x).expect("valid multiaddr"))
             .collect();
-    let version = 3;
-    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, version, 0)
+    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, now_timestamp(), 0)
 }
 
 #[tokio::test]
@@ -234,11 +231,11 @@ async fn create_a_channel() -> (NetworkNode, ChannelAnnouncement, Privkey, Privk
 async fn test_node1_node2_channel_update() {
     let (node, channel_announcement, _priv_key, sk1, sk2) = create_a_channel().await;
 
-    let create_channel_update = |version: u64, message_flags: u32, key: Privkey| {
+    let create_channel_update = |timestamp: u64, message_flags: u32, key: Privkey| {
         let mut channel_update = ChannelUpdate::new_unsigned(
             get_chain_hash(),
             channel_announcement.out_point().clone(),
-            version,
+            timestamp,
             message_flags,
             0,
             42,
@@ -260,7 +257,7 @@ async fn test_node1_node2_channel_update() {
         channel_update
     };
 
-    let channel_update_of_node1 = create_channel_update(2, 0, sk1);
+    let channel_update_of_node1 = create_channel_update(now_timestamp(), 0, sk1);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     let mut node_graph = node.get_network_graph();
 
@@ -273,7 +270,7 @@ async fn test_node1_node2_channel_update() {
     );
     assert_eq!(new_channel_info.update_of_node2, None);
 
-    let channel_update_of_node2 = create_channel_update(3, 1, sk2);
+    let channel_update_of_node2 = create_channel_update(now_timestamp(), 1, sk2);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     node_graph.load_from_store();
     let new_channel_info = node_graph
@@ -293,11 +290,11 @@ async fn test_node1_node2_channel_update() {
 async fn test_channel_update_version() {
     let (node, channel_info, _priv_key, sk1, _sk2) = create_a_channel().await;
 
-    let create_channel_update = |version: u64, key: &Privkey| {
+    let create_channel_update = |timestamp: u64, key: &Privkey| {
         let mut channel_update = ChannelUpdate::new_unsigned(
             get_chain_hash(),
             channel_info.out_point().clone(),
-            version,
+            timestamp,
             0,
             0,
             42,

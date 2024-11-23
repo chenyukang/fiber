@@ -1504,7 +1504,8 @@ pub struct NodeAnnouncement {
     // Tentatively using 64 bits for features. May change the type later while developing.
     // rust-lightning uses a Vec<u8> here.
     pub features: u64,
-    // Opaque version number of the node announcement update, later update should have larger version number.
+    // The time when a this node announcement is created. Must not deviate too much from other nodes' time,
+    // otherwise the node announcement will be rejected by other nodes.
     pub timestamp: u64,
     pub node_id: Pubkey,
     // Must be a valid utf-8 string of length maximal length 32 bytes.
@@ -1526,13 +1527,13 @@ impl NodeAnnouncement {
         alias: AnnouncedNodeName,
         addresses: Vec<MultiAddr>,
         node_id: Pubkey,
-        version: u64,
+        timestamp: u64,
         auto_accept_min_ckb_funding_amount: u64,
     ) -> Self {
         Self {
             signature: None,
             features: Default::default(),
-            timestamp: version,
+            timestamp,
             node_id,
             alias,
             chain_hash: get_chain_hash(),
@@ -1546,14 +1547,14 @@ impl NodeAnnouncement {
         alias: AnnouncedNodeName,
         addresses: Vec<MultiAddr>,
         private_key: &Privkey,
-        version: u64,
+        timestamp: u64,
         auto_accept_min_ckb_funding_amount: u64,
     ) -> NodeAnnouncement {
         let mut unsigned = NodeAnnouncement::new_unsigned(
             alias,
             addresses,
             private_key.pubkey(),
-            version,
+            timestamp,
             auto_accept_min_ckb_funding_amount,
         );
         unsigned.signature = Some(private_key.sign(unsigned.message_to_sign()));

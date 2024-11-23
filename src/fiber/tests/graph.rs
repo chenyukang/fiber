@@ -1,8 +1,7 @@
-use std::cell::Cell;
-
 use crate::fiber::channel::{MESSAGE_OF_NODE1_FLAG, MESSAGE_OF_NODE2_FLAG};
 use crate::fiber::gossip::GossipMessageStore;
 use crate::fiber::types::Pubkey;
+use crate::now_timestamp_for_test;
 use crate::{
     fiber::{
         graph::{GraphError, NetworkGraph, PathEdge},
@@ -30,11 +29,6 @@ fn generate_key_pairs(num: usize) -> Vec<(SecretKey, PublicKey)> {
 struct MockNetworkGraph {
     pub keys: Vec<PublicKey>,
     pub edges: Vec<(usize, usize, OutPoint)>,
-    // The underlying store relies on a timestamp to sort all the broadcast messages.
-    // If we save a message with a timestamp earlier than the current last cursor of the graph,
-    // then the graph may not be able to pick up the message. So we use this field to simulate
-    // some time passing by. And thus makes sure the graph can pick up the message.
-    pub current_time: Cell<u64>,
     pub store: Store,
     pub graph: NetworkGraph<Store>,
 }
@@ -45,22 +39,20 @@ impl MockNetworkGraph {
         let store = Store::new(temp_path.path());
         let keypairs = generate_key_pairs(node_num + 1);
         let (secret_key1, public_key1) = keypairs[0];
-        let mut current_time = 0;
         store.save_node_announcement(NodeAnnouncement::new(
             "node0".into(),
             vec![],
             &secret_key1.into(),
-            current_time,
+            now_timestamp_for_test(),
             0,
         ));
         for i in 1..keypairs.len() {
             let (sk, _pk) = keypairs[i];
-            current_time = current_time + 1;
             store.save_node_announcement(NodeAnnouncement::new(
                 format!("node{i}").as_str().into(),
                 vec![],
                 &sk.into(),
-                current_time,
+                now_timestamp_for_test(),
                 0,
             ));
         }
@@ -69,16 +61,9 @@ impl MockNetworkGraph {
         Self {
             keys: keypairs.into_iter().map(|x| x.1).collect(),
             edges: vec![],
-            current_time: Cell::new(current_time + 1),
             store,
             graph,
         }
-    }
-
-    pub fn increment_current_timestamp(&self) -> u64 {
-        let current_time = self.current_time.get();
-        self.current_time.set(current_time + 1);
-        current_time
     }
 
     pub fn mark_node_failed(&mut self, node: usize) {
@@ -112,7 +97,7 @@ impl MockNetworkGraph {
         let channel_outpoint = OutPoint::from_slice(&[idx as u8; 36]).unwrap();
         self.edges.push((node_a, node_b, channel_outpoint.clone()));
         self.store.save_channel_announcement(
-            self.increment_current_timestamp(),
+            now_timestamp_for_test(),
             ChannelAnnouncement {
                 chain_hash: get_chain_hash(),
                 node1_id: public_key1.into(),
@@ -130,7 +115,7 @@ impl MockNetworkGraph {
         self.store.save_channel_update(ChannelUpdate {
             signature: None,
             chain_hash: get_chain_hash(),
-            timestamp: self.increment_current_timestamp(),
+            timestamp: now_timestamp_for_test(),
             message_flags: MESSAGE_OF_NODE2_FLAG,
             channel_flags: 0,
             tlc_expiry_delta: 144,
@@ -143,7 +128,7 @@ impl MockNetworkGraph {
             self.store.save_channel_update(ChannelUpdate {
                 signature: None,
                 chain_hash: get_chain_hash(),
-                timestamp: self.increment_current_timestamp(),
+                timestamp: now_timestamp_for_test(),
                 message_flags: MESSAGE_OF_NODE1_FLAG,
                 channel_flags: 0,
                 tlc_expiry_delta: 144,
