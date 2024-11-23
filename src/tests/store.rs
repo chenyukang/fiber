@@ -12,7 +12,6 @@ use crate::fiber::types::Privkey;
 use crate::invoice::*;
 use crate::store::Store;
 use crate::watchtower::*;
-use ckb_jsonrpc_types::JsonBytes;
 use ckb_types::packed::Bytes;
 use ckb_types::packed::CellOutput;
 use ckb_types::packed::OutPoint;
@@ -182,8 +181,8 @@ fn test_store_save_channel_update() {
             .index(0u32.pack())
             .build(),
         1,
-        0,
         flags_for_update_of_node1,
+        0,
         0,
         0,
         0,
@@ -199,7 +198,7 @@ fn test_store_save_channel_update() {
 
     let mut channel_update_of_node2 = channel_update_of_node1.clone();
     let flags_for_update_of_node2 = 1;
-    channel_update_of_node2.channel_flags = flags_for_update_of_node2;
+    channel_update_of_node2.message_flags = flags_for_update_of_node2;
     // Note that per discussion in Notion, we don't handle the rare case of two channel updates having the same timestamp.
     // In the current implementation, channel update from one side with the same timestamp will not overwrite the existing one
     // from the other side. So we have to set the timestamp to be different.

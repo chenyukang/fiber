@@ -1,5 +1,6 @@
 use std::cell::Cell;
 
+use crate::fiber::channel::{MESSAGE_OF_NODE1_FLAG, MESSAGE_OF_NODE2_FLAG};
 use crate::fiber::gossip::GossipMessageStore;
 use crate::fiber::types::Pubkey;
 use crate::{
@@ -130,7 +131,7 @@ impl MockNetworkGraph {
             signature: None,
             chain_hash: get_chain_hash(),
             timestamp: self.increment_current_timestamp(),
-            message_flags: 1,
+            message_flags: MESSAGE_OF_NODE2_FLAG,
             channel_flags: 0,
             tlc_expiry_delta: 144,
             tlc_fee_proportional_millionths: fee_rate.unwrap_or(0),
@@ -143,7 +144,7 @@ impl MockNetworkGraph {
                 signature: None,
                 chain_hash: get_chain_hash(),
                 timestamp: self.increment_current_timestamp(),
-                message_flags: 0,
+                message_flags: MESSAGE_OF_NODE1_FLAG,
                 channel_flags: 0,
                 tlc_expiry_delta: 144,
                 tlc_fee_proportional_millionths: fee_rate,

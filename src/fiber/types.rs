@@ -1,7 +1,7 @@
 use crate::ckb::config::{UdtArgInfo, UdtCellDep, UdtCfgInfos, UdtScript};
 use crate::ckb::contracts::get_udt_whitelist;
 
-use super::channel::{ChannelFlags, CHANNEL_DISABLED_FLAG};
+use super::channel::{ChannelFlags, CHANNEL_DISABLED_FLAG, MESSAGE_OF_NODE2_FLAG};
 use super::config::AnnouncedNodeName;
 use super::gen::fiber::{self as molecule_fiber, PubNonce as Byte66, UdtCellDeps, Uint128Opt};
 use super::gen::gossip::{self as molecule_gossip};
@@ -1949,11 +1949,11 @@ impl ChannelUpdate {
     }
 
     pub fn is_update_of_node_1(&self) -> bool {
-        self.channel_flags & 1 == 0
+        !self.is_update_of_node_2()
     }
 
     pub fn is_update_of_node_2(&self) -> bool {
-        !self.is_update_of_node_1()
+        self.message_flags & MESSAGE_OF_NODE2_FLAG == MESSAGE_OF_NODE2_FLAG
     }
 
     pub fn is_disabled(&self) -> bool {

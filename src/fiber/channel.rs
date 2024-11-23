@@ -86,8 +86,16 @@ pub const FUNDING_CELL_WITNESS_LEN: usize = 16 + 32 + 64;
 // is funded or not.
 pub const INITIAL_COMMITMENT_NUMBER: u64 = 0;
 
+// Whether we are receiving a channel update from node1 or node2.
+// If the flag is set, it means the channel update is from node2, otherwise it is from node1.
+pub const MESSAGE_OF_NODE1_FLAG: u32 = 0;
+
+// Whether we are receiving a channel update from node1 or node2.
+// If the flag is set, it means the channel update is from node2, otherwise it is from node1.
+pub const MESSAGE_OF_NODE2_FLAG: u32 = 1;
+
 // The channel is disabled, and no more tlcs can be added to the channel.
-pub const CHANNEL_DISABLED_FLAG: u32 = 2;
+pub const CHANNEL_DISABLED_FLAG: u32 = 1;
 
 #[derive(Debug)]
 pub enum ChannelActorMessage {
