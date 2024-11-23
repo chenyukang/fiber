@@ -125,7 +125,6 @@ impl ChannelInfo {
     // TODO: we currently deem a channel as disabled if one direction is disabled.
     // Is it possible that one direction is disabled while the other is not?
     pub fn is_explicitly_disabled(&self) -> bool {
-        dbg!(self.update_of_node2.as_ref(), self.update_of_node1.as_ref());
         match (&self.update_of_node2, &self.update_of_node1) {
             (Some(update1), _) if !update1.enabled => true,
             (_, Some(update2)) if !update2.enabled => true,
@@ -244,36 +243,32 @@ where
     // Load all the broadcast messages starting from latest_cursor from the store.
     // Process them and set nodes and channels accordingly.
     pub(crate) fn load_from_store(&mut self) {
-        dbg!(&self.channels, &self.nodes);
         loop {
-            dbg!(&self.latest_cursor);
             let messages = self.store.get_broadcast_messages(&self.latest_cursor, None);
-            dbg!(&messages);
             if messages.is_empty() {
                 break;
             }
             for message in messages {
+                self.update_lastest_cursor(message.cursor());
                 if message.chain_hash() != get_chain_hash() {
                     continue;
                 }
-                let cursor = match message {
+                match message {
                     BroadcastMessageWithTimestamp::ChannelAnnouncement(
                         timestamp,
                         channel_announcement,
-                    ) => self.process_channel_announcement(timestamp, channel_announcement),
+                    ) => {
+                        self.process_channel_announcement(timestamp, channel_announcement);
+                    }
                     BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
-                        self.process_channel_update(channel_update)
+                        self.process_channel_update(channel_update);
                     }
                     BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
-                        self.process_node_announcement(node_announcement)
+                        self.process_node_announcement(node_announcement);
                     }
-                };
-                if let Some(cursor) = cursor {
-                    self.update_lastest_cursor(cursor);
                 }
             }
         }
-        dbg!(&self.channels, &self.nodes);
     }
 
     fn load_channel_updates_from_store(&self, channel_info: &mut ChannelInfo) {
