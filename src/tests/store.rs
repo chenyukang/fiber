@@ -3,6 +3,7 @@ use crate::fiber::gossip::GossipMessageStore;
 use crate::fiber::graph::NodeInfo;
 use crate::fiber::tests::test_utils::gen_sha256_hash;
 use crate::fiber::types::ChannelAnnouncement;
+use crate::fiber::types::ChannelUpdate;
 use crate::fiber::types::Hash256;
 use crate::fiber::types::NodeAnnouncement;
 use crate::fiber::types::Privkey;
@@ -115,6 +116,53 @@ fn test_store_save_channel_announcement() {
     assert_eq!(
         new_channel_announcement,
         Some((timestamp, channel_announcement))
+    );
+}
+
+#[test]
+fn test_store_save_channel_update() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("gossip_store");
+    let store = Store::new(path);
+
+    let flags_for_update_of_node1 = 0;
+    let channel_update_of_node1 = ChannelUpdate::new_unsigned(
+        Hash256::default(),
+        OutPoint::new_builder()
+            .tx_hash(gen_sha256_hash().into())
+            .index(0u32.pack())
+            .build(),
+        1,
+        0,
+        flags_for_update_of_node1,
+        0,
+        0,
+        0,
+        0,
+    );
+    let out_point = channel_update_of_node1.channel_outpoint.clone();
+    store.save_channel_update(channel_update_of_node1.clone());
+    assert_eq!(
+        store.get_latest_channel_update(&out_point, true).as_ref(),
+        Some(&channel_update_of_node1)
+    );
+    assert_eq!(store.get_latest_channel_update(&out_point, false), None);
+
+    let mut channel_update_of_node2 = channel_update_of_node1.clone();
+    let flags_for_update_of_node2 = 1;
+    channel_update_of_node2.channel_flags = flags_for_update_of_node2;
+    // Note that per discussion in Notion, we don't handle the rare case of two channel updates having the same timestamp.
+    // In the current implementation, channel update from one side with the same timestamp will not overwrite the existing one
+    // from the other side. So we have to set the timestamp to be different.
+    channel_update_of_node2.timestamp = 2;
+    store.save_channel_update(channel_update_of_node2.clone());
+    assert_eq!(
+        store.get_latest_channel_update(&out_point, false).as_ref(),
+        Some(&channel_update_of_node2)
+    );
+    assert_eq!(
+        store.get_latest_channel_update(&out_point, true).as_ref(),
+        Some(&channel_update_of_node1)
     );
 }
 
