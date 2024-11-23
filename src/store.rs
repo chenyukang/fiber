@@ -458,6 +458,7 @@ impl GossipMessageStore for Store {
             [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
             serde_json::to_vec(&message).expect("serialize BroadcastMessage should be OK"),
         );
+        batch.commit();
     }
 
     fn save_channel_update(&self, channel_update: ChannelUpdate) {
@@ -511,6 +512,7 @@ impl GossipMessageStore for Store {
             [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
             serde_json::to_vec(&message).expect("serialize BroadcastMessage should be OK"),
         );
+        batch.commit();
     }
 
     fn save_node_announcement(&self, node_announcement: crate::fiber::types::NodeAnnouncement) {
@@ -552,6 +554,7 @@ impl GossipMessageStore for Store {
             [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
             serde_json::to_vec(&message).expect("serialize BroadcastMessage should be OK"),
         );
+        batch.commit();
     }
 
     fn get_broadcast_message_with_cursor(
