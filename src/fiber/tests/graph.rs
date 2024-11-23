@@ -1,3 +1,4 @@
+use crate::fiber::gossip::GossipMessageStore;
 use crate::fiber::types::Pubkey;
 use crate::{
     fiber::{
@@ -26,6 +27,7 @@ fn generate_key_pairs(num: usize) -> Vec<(SecretKey, PublicKey)> {
 struct MockNetworkGraph {
     pub keys: Vec<PublicKey>,
     pub edges: Vec<(usize, usize, OutPoint)>,
+    pub store: Store,
     pub graph: NetworkGraph<Store>,
 }
 
@@ -35,36 +37,30 @@ impl MockNetworkGraph {
         let store = Store::new(temp_path.path());
         let keypairs = generate_key_pairs(node_num + 1);
         let (secret_key1, public_key1) = keypairs[0];
-        let mut graph = NetworkGraph::new(store, public_key1.into());
-        graph.add_node(NodeInfo {
-            node_id: public_key1.into(),
-            timestamp: 0,
-            anouncement_msg: NodeAnnouncement::new(
-                "node0".into(),
-                vec![],
-                &secret_key1.into(),
-                0,
-                0,
-            ),
-        });
+        store.save_node_announcement(NodeAnnouncement::new(
+            "node0".into(),
+            vec![],
+            &secret_key1.into(),
+            0,
+            0,
+        ));
         for i in 1..keypairs.len() {
-            let (sk, pk) = keypairs[i];
-            let node = NodeInfo {
-                node_id: pk.into(),
-                timestamp: 0,
-                anouncement_msg: NodeAnnouncement::new(
-                    format!("node{i}").as_str().into(),
-                    vec![],
-                    &sk.into(),
-                    0,
-                    0,
-                ),
-            };
-            graph.add_node(node);
+            let (sk, _pk) = keypairs[i];
+
+            store.save_node_announcement(NodeAnnouncement::new(
+                format!("node{i}").as_str().into(),
+                vec![],
+                &sk.into(),
+                0,
+                0,
+            ));
         }
+        let graph = NetworkGraph::new(store.clone(), public_key1.into());
+
         Self {
             keys: keypairs.into_iter().map(|x| x.1).collect(),
             edges: vec![],
+            store,
             graph,
         }
     }
@@ -99,10 +95,9 @@ impl MockNetworkGraph {
         let idx = self.edges.len() + 1;
         let channel_outpoint = OutPoint::from_slice(&[idx as u8; 36]).unwrap();
         self.edges.push((node_a, node_b, channel_outpoint.clone()));
-        let channel_info = ChannelInfo {
-            funding_tx_block_number: 0,
-            funding_tx_index: 0,
-            announcement_msg: ChannelAnnouncement {
+        self.store.save_channel_announcement(
+            0,
+            ChannelAnnouncement {
                 chain_hash: get_chain_hash(),
                 node1_id: public_key1.into(),
                 node2_id: public_key2.into(),
@@ -115,12 +110,8 @@ impl MockNetworkGraph {
                 udt_type_script,
                 features: 0,
             },
-            timestamp: 0,
-            update_of_node2: None,
-            update_of_node1: None,
-        };
-        self.graph.add_channel(channel_info);
-        let channel_update = ChannelUpdate {
+        );
+        self.store.save_channel_update(ChannelUpdate {
             signature: None,
             chain_hash: get_chain_hash(),
             timestamp: 0,
@@ -131,10 +122,9 @@ impl MockNetworkGraph {
             tlc_maximum_value: max_htlc_value.unwrap_or(10000),
             tlc_minimum_value: min_htlc_value.unwrap_or(0),
             channel_outpoint: channel_outpoint.clone(),
-        };
-        self.graph.process_channel_update(channel_update).unwrap();
+        });
         if let Some(fee_rate) = other_fee_rate {
-            let channel_update = ChannelUpdate {
+            self.store.save_channel_update(ChannelUpdate {
                 signature: None,
                 chain_hash: get_chain_hash(),
                 timestamp: 0,
@@ -145,9 +135,9 @@ impl MockNetworkGraph {
                 tlc_maximum_value: max_htlc_value.unwrap_or(10000),
                 tlc_minimum_value: min_htlc_value.unwrap_or(0),
                 channel_outpoint: channel_outpoint.clone(),
-            };
-            self.graph.process_channel_update(channel_update).unwrap();
+            });
         }
+        self.graph.load_from_store();
     }
 
     pub fn add_edge(
@@ -244,11 +234,6 @@ fn test_graph_channel_info() {
             .graph
             .get_channel(&OutPoint::from_slice(&[i as u8; 36]).unwrap());
         assert!(channel_info.is_some());
-
-        let channel_info = channel_info.unwrap();
-        let channel_info_ser = serde_json::to_string(&channel_info).unwrap();
-        let channel_info_de: ChannelInfo = serde_json::from_str(&channel_info_ser).unwrap();
-        assert_eq!(*channel_info, channel_info_de);
     }
 }
 

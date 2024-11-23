@@ -186,10 +186,20 @@ impl From<&ChannelUpdate> for ChannelUpdateInfo {
 
 #[derive(Clone, Debug)]
 pub struct NetworkGraph<S> {
+    // The pubkey of the node that is running this instance of the network graph.
     source: Pubkey,
+    // All the channels in the network.
     channels: HashMap<OutPoint, ChannelInfo>,
+    // All the nodes in the network.
     nodes: HashMap<Pubkey, NodeInfo>,
+    // The latest cursor we read from the GossipMessageStore. When we need to refresh our view of the
+    // the network, we need to load all the messages starting from this cursor.
     latest_cursor: Cursor,
+    // A store is both a persistent storage from which we can fetch all the network messages.
+    // and a state store where we can store our local state (e.g. when a node has been unresponsive
+    // for a few rounds, we need to mark it as failed, this information needs to be persisted).
+    // The formal use of the store is defined as a GossipMessageStore, while the latter is defined
+    // as a NetworkGraphStateStore.
     store: S,
 }
 
