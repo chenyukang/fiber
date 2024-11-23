@@ -1,9 +1,17 @@
+use crate::fiber::config::AnnouncedNodeName;
+use crate::fiber::gossip::GossipMessageStore;
+use crate::fiber::graph::NodeInfo;
 use crate::fiber::tests::test_utils::gen_sha256_hash;
+use crate::fiber::types::ChannelAnnouncement;
+use crate::fiber::types::Hash256;
+use crate::fiber::types::NodeAnnouncement;
+use crate::fiber::types::Privkey;
 use crate::invoice::*;
 use crate::store::Store;
 // use crate::store::CHANNEL_INFO_PREFIX;
 // use crate::store::NODE_INFO_PREFIX;
 use crate::watchtower::*;
+use bitcoin::psbt::raw::Key;
 use ckb_jsonrpc_types::JsonBytes;
 use ckb_types::packed::Bytes;
 use ckb_types::packed::CellOutput;
@@ -14,58 +22,51 @@ use musig2::CompactSignature;
 use secp256k1::Keypair;
 use secp256k1::PublicKey;
 use secp256k1::Secp256k1;
+use secp256k1::SecretKey;
 use tempfile::tempdir;
 
-fn gen_rand_public_key() -> PublicKey {
+fn gen_rand_key_pair() -> Keypair {
     let secp = Secp256k1::new();
-    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
-    PublicKey::from_keypair(&key_pair)
+    Keypair::new(&secp, &mut rand::thread_rng())
 }
 
-// TODO: gossip message refactor
-// fn mock_node() -> (Pubkey, NodeInfo) {
-//     let node_id: Pubkey = gen_rand_public_key().into();
-//     let node = NodeInfo {
-//         node_id,
-//         anouncement_msg: NodeAnnouncement::new_unsigned(
-//             AnnouncedNodeName::from_str("node1").expect("invalid name"),
-//             vec![],
-//             node_id,
-//             1,
-//             0,
-//         ),
-//         timestamp: 0,
-//     };
-//     (node_id, node)
-// }
+fn gen_rand_private_key() -> SecretKey {
+    gen_rand_key_pair().secret_key()
+}
 
-// fn mock_channel() -> ChannelInfo {
-//     let node1: Pubkey = gen_rand_public_key().into();
-//     let node2: Pubkey = gen_rand_public_key().into();
-//     let secp = Secp256k1::new();
-//     let keypair = Keypair::new(&secp, &mut rand::thread_rng());
-//     let (xonly, _parity) = keypair.x_only_public_key();
-//     let rand_hash256 = gen_sha256_hash();
-//     ChannelInfo {
-//         funding_tx_block_number: 0,
-//         funding_tx_index: 0,
-//         timestamp: 0,
-//         update_of_node2: None,
-//         update_of_node1: None,
-//         announcement_msg: ChannelAnnouncement::new_unsigned(
-//             &node1,
-//             &node2,
-//             OutPoint::new_builder()
-//                 .tx_hash(rand_hash256.into())
-//                 .index(0u32.pack())
-//                 .build(),
-//             Hash256::default(),
-//             &xonly,
-//             0,
-//             None,
-//         ),
-//     }
-// }
+fn mock_node() -> (Privkey, NodeAnnouncement) {
+    let sk: Privkey = gen_rand_private_key().into();
+    (
+        sk.clone(),
+        NodeAnnouncement::new(
+            AnnouncedNodeName::from_str("node1").expect("invalid name"),
+            vec![],
+            &sk,
+            1,
+            0,
+        ),
+    )
+}
+
+fn mock_channel() -> ChannelAnnouncement {
+    let sk1: Privkey = gen_rand_private_key().into();
+    let sk2: Privkey = gen_rand_private_key().into();
+    let keypair = gen_rand_key_pair();
+    let (xonly, _parity) = keypair.x_only_public_key();
+    let rand_hash256 = gen_sha256_hash();
+    ChannelAnnouncement::new_unsigned(
+        &sk1.pubkey(),
+        &sk2.pubkey(),
+        OutPoint::new_builder()
+            .tx_hash(rand_hash256.into())
+            .index(0u32.pack())
+            .build(),
+        Hash256::default(),
+        &xonly,
+        0,
+        None,
+    )
+}
 
 #[test]
 fn test_store_invoice() {
@@ -100,70 +101,35 @@ fn test_store_invoice() {
     assert_eq!(store.get_invoice_status(hash), Some(status));
 }
 
-// TODO: gossip message refactor
-// #[test]
-// fn test_store_channels() {
-//     let dir = tempdir().unwrap();
-//     let path = dir.path().join("invoice_store");
-//     let store = Store::new(path);
+#[test]
+fn test_store_save_channel_announcement() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("gossip_store");
+    let store = Store::new(path);
 
-//     let mut channels = vec![];
-//     for _ in 0..10 {
-//         let channel = mock_channel();
-//         store.insert_channel(channel.clone());
-//         channels.push(channel);
-//     }
+    let timestamp = 1;
+    let channel_announcement = mock_channel();
+    store.save_channel_announcement(timestamp, channel_announcement.clone());
+    let new_channel_announcement =
+        store.get_latest_channel_announcement(channel_announcement.out_point());
+    assert_eq!(
+        new_channel_announcement,
+        Some((timestamp, channel_announcement))
+    );
+}
 
-//     // sort by out_point
-//     channels.sort_by_key(|a| a.out_point());
+#[test]
+fn test_store_save_node_announcement() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("gossip_store");
+    let store = Store::new(path);
 
-//     let outpoint_0 = channels[0].out_point();
-//     assert_eq!(
-//         store.get_channels(Some(outpoint_0)),
-//         vec![channels[0].clone()]
-//     );
-//     let (res, last_cursor) = store.get_channels_with_params(1, None, None);
-//     assert_eq!(res, vec![channels[0].clone()]);
-//     assert_eq!(res.len(), 1);
-
-//     let mut key = Vec::with_capacity(37);
-//     key.push(CHANNEL_INFO_PREFIX);
-//     key.extend_from_slice(channels[0].out_point().as_slice());
-//     assert_eq!(last_cursor, JsonBytes::from_bytes(key.to_vec().into()));
-
-//     let (res, _last_cursor) = store.get_channels_with_params(3, Some(last_cursor), None);
-//     assert_eq!(res, channels[1..=3]);
-// }
-
-// #[test]
-// fn test_store_nodes() {
-//     let dir = tempdir().unwrap();
-//     let path = dir.path().join("invoice_store");
-//     let store = Store::new(path);
-
-//     let mut nodes = vec![];
-//     for _ in 0..10 {
-//         let (_, node) = mock_node();
-//         store.insert_node(node.clone());
-//         nodes.push(node);
-//     }
-
-//     // sort by node pubkey
-//     nodes.sort_by(|a, b| a.node_id.cmp(&b.node_id));
-
-//     let node_id = nodes[0].node_id;
-//     assert_eq!(store.get_nodes(Some(node_id)), vec![nodes[0].clone()]);
-//     let (res, last_cursor) = store.get_nodes_with_params(1, None, None);
-//     assert_eq!(res, vec![nodes[0].clone()]);
-//     assert_eq!(res.len(), 1);
-//     let mut key = Vec::with_capacity(34);
-//     key.push(NODE_INFO_PREFIX);
-//     key.extend_from_slice(nodes[0].node_id.serialize().as_ref());
-//     assert_eq!(last_cursor, JsonBytes::from_bytes(key.to_vec().into()));
-
-//     let (res, _last_cursor) = store.get_nodes_with_params(3, Some(last_cursor), None);
-//     assert_eq!(res, nodes[1..=3]);
-// }
+    let (sk, node_announcement) = mock_node();
+    let pk = sk.pubkey();
+    store.save_node_announcement(node_announcement.clone());
+    let new_node_announcement = store.get_latest_node_announcement(&pk);
+    assert_eq!(new_node_announcement, Some(node_announcement));
+}
 
 #[test]
 fn test_store_wacthtower() {

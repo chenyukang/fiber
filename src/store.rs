@@ -592,7 +592,7 @@ impl GossipMessageStore for Store {
         ]
         .concat();
         self.get(&timestamp_key).map(|v| {
-            let v: [u8; 32] = v.try_into().expect("Invalid timestamp value length");
+            let v: [u8; 24] = v.try_into().expect("Invalid timestamp value length");
             u64::from_le_bytes(
                 v[..8]
                     .try_into()

@@ -244,8 +244,11 @@ where
     // Load all the broadcast messages starting from latest_cursor from the store.
     // Process them and set nodes and channels accordingly.
     pub(crate) fn load_from_store(&mut self) {
+        dbg!(&self.channels, &self.nodes);
         loop {
+            dbg!(&self.latest_cursor);
             let messages = self.store.get_broadcast_messages(&self.latest_cursor, None);
+            dbg!(&messages);
             if messages.is_empty() {
                 break;
             }
@@ -270,6 +273,7 @@ where
                 }
             }
         }
+        dbg!(&self.channels, &self.nodes);
     }
 
     fn load_channel_updates_from_store(&self, channel_info: &mut ChannelInfo) {
