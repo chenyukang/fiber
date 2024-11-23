@@ -40,7 +40,7 @@ pub fn get_node_prefix() -> &'static str {
 // This guarantees that the timestamp is always increasing in tests.
 // now_timestamp may return two identical timestamps in consecutive calls.
 #[cfg(test)]
-pub fn now_timestamp_for_test() -> u64 {
+pub fn now_timestamp() -> u64 {
     use once_cell::sync::OnceCell;
     use std::sync::atomic::AtomicU64;
 
@@ -49,6 +49,7 @@ pub fn now_timestamp_for_test() -> u64 {
     count.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
 }
 
+#[cfg(not(test))]
 pub fn now_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -1,7 +1,7 @@
 use crate::fiber::channel::{MESSAGE_OF_NODE1_FLAG, MESSAGE_OF_NODE2_FLAG};
 use crate::fiber::gossip::GossipMessageStore;
 use crate::fiber::types::Pubkey;
-use crate::now_timestamp_for_test;
+use crate::now_timestamp;
 use crate::{
     fiber::{
         graph::{GraphError, NetworkGraph, PathEdge},
@@ -43,7 +43,7 @@ impl MockNetworkGraph {
             "node0".into(),
             vec![],
             &secret_key1.into(),
-            now_timestamp_for_test(),
+            now_timestamp(),
             0,
         ));
         for i in 1..keypairs.len() {
@@ -52,7 +52,7 @@ impl MockNetworkGraph {
                 format!("node{i}").as_str().into(),
                 vec![],
                 &sk.into(),
-                now_timestamp_for_test(),
+                now_timestamp(),
                 0,
             ));
         }
@@ -97,7 +97,7 @@ impl MockNetworkGraph {
         let channel_outpoint = OutPoint::from_slice(&[idx as u8; 36]).unwrap();
         self.edges.push((node_a, node_b, channel_outpoint.clone()));
         self.store.save_channel_announcement(
-            now_timestamp_for_test(),
+            now_timestamp(),
             ChannelAnnouncement {
                 chain_hash: get_chain_hash(),
                 node1_id: public_key1.into(),
@@ -115,7 +115,7 @@ impl MockNetworkGraph {
         self.store.save_channel_update(ChannelUpdate {
             signature: None,
             chain_hash: get_chain_hash(),
-            timestamp: now_timestamp_for_test(),
+            timestamp: now_timestamp(),
             message_flags: MESSAGE_OF_NODE2_FLAG,
             channel_flags: 0,
             tlc_expiry_delta: 144,
@@ -128,7 +128,7 @@ impl MockNetworkGraph {
             self.store.save_channel_update(ChannelUpdate {
                 signature: None,
                 chain_hash: get_chain_hash(),
-                timestamp: now_timestamp_for_test(),
+                timestamp: now_timestamp(),
                 message_flags: MESSAGE_OF_NODE1_FLAG,
                 channel_flags: 0,
                 tlc_expiry_delta: 144,

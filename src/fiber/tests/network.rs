@@ -82,6 +82,17 @@ fn create_fake_channel_announcement_mesage(
     announcement
 }
 
+fn create_fake_node_announcement_mesage() -> NodeAnnouncement {
+    let priv_key = get_test_priv_key();
+    let node_name = "fake node";
+    let addresses =
+        vec!["/ip4/1.1.1.1/tcp/8346/p2p/QmaFDJb9CkMrXy7nhTWBY5y9mvuykre3EzzRsCJUAVXprZ"]
+            .iter()
+            .map(|x| MultiAddr::from_str(x).expect("valid multiaddr"))
+            .collect();
+    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, now_timestamp(), 0)
+}
+
 fn create_fake_node_announcement_mesage_version1() -> NodeAnnouncement {
     let priv_key = get_test_priv_key();
     let node_name = "fake node";
@@ -354,11 +365,19 @@ async fn test_sync_node_announcement_version() {
     let test_pub_key = get_test_pub_key();
     let test_peer_id = get_test_peer_id();
 
+    let [node_announcement_message_version1, node_announcement_message_version2, node_announcement_message_version3] = [
+        create_fake_node_announcement_mesage(),
+        create_fake_node_announcement_mesage(),
+        create_fake_node_announcement_mesage(),
+    ];
+    let timestamp_version2 = node_announcement_message_version2.timestamp;
+    let timestamp_version3 = node_announcement_message_version3.timestamp;
+
     node.network_actor
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version2())
+                BroadcastMessage::NodeAnnouncement(node_announcement_message_version2)
                     .create_broadcast_messages_filter_result(),
             ),
         ))
@@ -369,7 +388,7 @@ async fn test_sync_node_announcement_version() {
     let node_graph = node.get_network_graph();
     let node_info = node_graph.get_node(test_pub_key);
     match node_info {
-        Some(n) if n.timestamp == 2 => {}
+        Some(n) if n.timestamp == timestamp_version2 => {}
         _ => panic!(
             "Must have version 2 announcement message, found {:?}",
             &node_info
@@ -380,7 +399,7 @@ async fn test_sync_node_announcement_version() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version1())
+                BroadcastMessage::NodeAnnouncement(node_announcement_message_version1)
                     .create_broadcast_messages_filter_result(),
             ),
         ))
@@ -388,10 +407,11 @@ async fn test_sync_node_announcement_version() {
 
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let node_graph = node.get_network_graph();
+    let mut node_graph = node.get_network_graph();
+    node_graph.load_from_store();
     let node_info = node_graph.get_node(test_pub_key);
     match node_info {
-        Some(n) if n.timestamp == 2 => {}
+        Some(n) if n.timestamp == timestamp_version2 => {}
         _ => panic!(
             "Must have version 2 announcement message, found {:?}",
             &node_info
@@ -402,16 +422,17 @@ async fn test_sync_node_announcement_version() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version3())
+                BroadcastMessage::NodeAnnouncement(node_announcement_message_version3)
                     .create_broadcast_messages_filter_result(),
             ),
         ))
         .expect("send message to network actor");
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    node_graph.load_from_store();
     let node_info = node_graph.get_node(test_pub_key);
     match node_info {
-        Some(n) if n.timestamp == 3 => {}
+        Some(n) if n.timestamp == timestamp_version3 => {}
         _ => panic!(
             "Must have version 3 announcement message, found {:?}",
             &node_info

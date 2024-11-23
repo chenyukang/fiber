@@ -78,7 +78,7 @@ use crate::fiber::types::{
 };
 use crate::fiber::KeyPair;
 use crate::invoice::{CkbInvoice, InvoiceStore};
-use crate::{unwrap_or_return, Error};
+use crate::{now_timestamp, unwrap_or_return, Error};
 
 pub const FIBER_PROTOCOL_ID: ProtocolId = ProtocolId::new(42);
 
@@ -1698,10 +1698,7 @@ where
         + 'static,
 {
     pub fn get_or_create_new_node_announcement_message(&mut self) -> NodeAnnouncement {
-        let now = std::time::UNIX_EPOCH
-            .elapsed()
-            .expect("Duration since unix epoch")
-            .as_millis() as u64;
+        let now = now_timestamp();
         match self.last_node_announcement_message {
             // If the last node announcement message is still relatively new, we don't need to create a new one.
             // Because otherwise the receiving node may be confused by the multiple announcements,

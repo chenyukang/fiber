@@ -6,7 +6,8 @@ use crate::{
         network::{NetworkActorStateStore, PersistentNetworkActorState},
         types::{
             BroadcastMessage, BroadcastMessageID, BroadcastMessageWithTimestamp,
-            ChannelAnnouncement, ChannelUpdate, Cursor, Hash256, Pubkey, CURSOR_SIZE,
+            ChannelAnnouncement, ChannelUpdate, Cursor, Hash256, NodeAnnouncement, Pubkey,
+            CURSOR_SIZE,
         },
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceError, InvoiceStore},
@@ -487,7 +488,7 @@ impl GossipMessageStore for Store {
         batch.commit();
     }
 
-    fn save_node_announcement(&self, node_announcement: crate::fiber::types::NodeAnnouncement) {
+    fn save_node_announcement(&self, node_announcement: NodeAnnouncement) {
         let mut batch = self.batch();
         let message_id = BroadcastMessageID::NodeAnnouncement(node_announcement.node_id.clone());
 
