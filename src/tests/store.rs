@@ -1,9 +1,13 @@
 use crate::fiber::config::AnnouncedNodeName;
+use crate::fiber::gen::gossip::BroadcastMessage;
 use crate::fiber::gossip::GossipMessageStore;
 use crate::fiber::graph::NodeInfo;
 use crate::fiber::tests::test_utils::gen_sha256_hash;
+use crate::fiber::types::BroadcastMessageID;
+use crate::fiber::types::BroadcastMessageWithTimestamp;
 use crate::fiber::types::ChannelAnnouncement;
 use crate::fiber::types::ChannelUpdate;
+use crate::fiber::types::Cursor;
 use crate::fiber::types::Hash256;
 use crate::fiber::types::NodeAnnouncement;
 use crate::fiber::types::Privkey;
@@ -100,6 +104,33 @@ fn test_store_invoice() {
     let status = CkbInvoiceStatus::Paid;
     store.update_invoice_status(hash, status).unwrap();
     assert_eq!(store.get_invoice_status(hash), Some(status));
+}
+
+#[test]
+fn test_store_get_broadcast_messages_iter() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("gossip_store");
+    let store = Store::new(path);
+
+    let timestamp = 1;
+    let channel_announcement = mock_channel();
+    let outpoint = channel_announcement.out_point().clone();
+    store.save_channel_announcement(timestamp, channel_announcement.clone());
+    let default_cursor = Cursor::default();
+    let mut iter = store
+        .get_broadcast_messages_iter(&default_cursor)
+        .into_iter();
+    assert_eq!(
+        iter.next(),
+        Some(BroadcastMessageWithTimestamp::ChannelAnnouncement(
+            timestamp,
+            channel_announcement
+        )),
+    );
+    assert_eq!(iter.next(), None);
+    let cursor = Cursor::new(timestamp, BroadcastMessageID::ChannelAnnouncement(outpoint));
+    let mut iter = store.get_broadcast_messages_iter(&cursor).into_iter();
+    assert_eq!(iter.next(), None);
 }
 
 #[test]

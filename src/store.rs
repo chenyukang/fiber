@@ -384,7 +384,9 @@ impl GossipMessageStore for Store {
 
         self.db
             .prefix_iterator(prefix.as_ref())
-            .take_while(move |(key, _)| key.starts_with(&prefix))
+            .take_while(move |(key, _)| key.starts_with(&[BROADCAST_MESSAGE_PREFIX]))
+            // after_cursor means we should not include key/value with key == cursor
+            .skip_while(move |(key, _)| key.as_ref() == &prefix)
             .map(|(key, value)| {
                 debug_assert_eq!(key.len(), 1 + CURSOR_SIZE);
                 let mut timestamp_bytes = [0u8; 8];

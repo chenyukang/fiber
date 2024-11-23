@@ -2273,7 +2273,7 @@ impl BroadcastMessage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum BroadcastMessageWithTimestamp {
     NodeAnnouncement(NodeAnnouncement),
     ChannelAnnouncement(u64, ChannelAnnouncement),
