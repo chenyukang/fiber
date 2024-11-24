@@ -1579,6 +1579,13 @@ impl NodeAnnouncement {
     pub fn peer_id(&self) -> PeerId {
         PeerId::from_public_key(&self.node_id.into())
     }
+
+    pub fn cursor(&self) -> Cursor {
+        Cursor::new(
+            self.timestamp,
+            BroadcastMessageID::NodeAnnouncement(self.node_id),
+        )
+    }
 }
 
 impl From<UdtCellDep> for molecule_fiber::UdtCellDep {
@@ -1959,6 +1966,13 @@ impl ChannelUpdate {
 
     pub fn is_disabled(&self) -> bool {
         self.channel_flags & CHANNEL_DISABLED_FLAG == CHANNEL_DISABLED_FLAG
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        Cursor::new(
+            self.timestamp,
+            BroadcastMessageID::ChannelUpdate(self.channel_outpoint.clone()),
+        )
     }
 }
 

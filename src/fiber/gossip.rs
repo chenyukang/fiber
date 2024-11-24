@@ -451,7 +451,8 @@ async fn verify_broadcast_message<S: GossipMessageStore>(
 ) -> Result<BroadcastMessageWithTimestamp, Error> {
     match message {
         BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
-            let timestamp = verify_channel_announcement(&channel_announcement, chain).await?;
+            let timestamp =
+                verify_channel_announcement(&channel_announcement, store, chain).await?;
             Ok(BroadcastMessageWithTimestamp::ChannelAnnouncement(
                 timestamp,
                 channel_announcement,
@@ -462,7 +463,7 @@ async fn verify_broadcast_message<S: GossipMessageStore>(
             Ok(BroadcastMessageWithTimestamp::ChannelUpdate(channel_update))
         }
         BroadcastMessage::NodeAnnouncement(node_announcement) => {
-            verify_node_announcement(&node_announcement)?;
+            verify_node_announcement(&node_announcement, store)?;
             Ok(BroadcastMessageWithTimestamp::NodeAnnouncement(
                 node_announcement,
             ))
@@ -470,14 +471,27 @@ async fn verify_broadcast_message<S: GossipMessageStore>(
     }
 }
 
-async fn verify_channel_announcement(
+async fn verify_channel_announcement<S: GossipMessageStore>(
     channel_announcement: &ChannelAnnouncement,
+    store: &S,
     chain: &ActorRef<CkbChainMessage>,
 ) -> Result<u64, Error> {
     debug!(
-        "Received channel announcement message: {:?}",
+        "Verifying channel announcement message: {:?}",
         &channel_announcement
     );
+    if let Some((timestamp, announcement)) =
+        store.get_latest_channel_announcement(&channel_announcement.channel_outpoint)
+    {
+        if announcement == *channel_announcement {
+            return Ok(timestamp);
+        } else {
+            return Err(Error::InvalidParameter(format!(
+                "Channel announcement message already exists but mismatched: {:?}, existing: {:?}",
+                &channel_announcement, &announcement
+            )));
+        }
+    }
     let message = channel_announcement.message_to_sign();
     if channel_announcement.node1_id == channel_announcement.node2_id {
         return Err(Error::InvalidParameter(format!(
@@ -645,6 +659,18 @@ fn verify_channel_update<S: GossipMessageStore>(
     channel_update: &ChannelUpdate,
     store: &S,
 ) -> Result<(), Error> {
+    if let Some(BroadcastMessageWithTimestamp::ChannelUpdate(existing)) =
+        store.get_broadcast_message_with_cursor(&channel_update.cursor())
+    {
+        if existing == *channel_update {
+            return Ok(());
+        } else {
+            return Err(Error::InvalidParameter(format!(
+                "Channel update message already exists but mismatched: {:?}, existing: {:?}",
+                &channel_update, &existing
+            )));
+        }
+    }
     let message = channel_update.message_to_sign();
 
     let signature = match channel_update.signature {
@@ -686,7 +712,22 @@ fn verify_channel_update<S: GossipMessageStore>(
     Ok(())
 }
 
-fn verify_node_announcement(node_announcement: &NodeAnnouncement) -> Result<(), Error> {
+fn verify_node_announcement<S: GossipMessageStore>(
+    node_announcement: &NodeAnnouncement,
+    store: &S,
+) -> Result<(), Error> {
+    if let Some(BroadcastMessageWithTimestamp::NodeAnnouncement(announcement)) =
+        store.get_broadcast_message_with_cursor(&node_announcement.cursor())
+    {
+        if announcement == *node_announcement {
+            return Ok(());
+        } else {
+            return Err(Error::InvalidParameter(format!(
+                "Node announcement message already exists but mismatched: {:?}, existing: {:?}",
+                &node_announcement, &announcement
+            )));
+        }
+    }
     let message = node_announcement.message_to_sign();
     match node_announcement.signature {
         Some(ref signature) if signature.verify(&node_announcement.node_id, &message) => {
