@@ -10,6 +10,7 @@ use crate::{
         types::{BroadcastMessage, ChannelUpdate, TlcErr, TlcErrPacket, TlcErrorCode},
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceStore},
+    now_timestamp,
 };
 use ckb_hash::{blake2b_256, new_blake2b};
 use ckb_sdk::{Since, SinceType};
@@ -2675,7 +2676,7 @@ impl ChannelActorState {
                 ) => Some(ChannelUpdate::new_unsigned(
                     Default::default(),
                     self.must_get_funding_transaction_outpoint(),
-                    std::time::UNIX_EPOCH.elapsed().expect("Duration since unix epoch").as_secs(),
+                    now_timestamp(),
                     message_flags,
                     0,
                     expiry_delta,
