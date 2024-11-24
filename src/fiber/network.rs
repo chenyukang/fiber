@@ -878,6 +878,7 @@ where
         state: &mut NetworkActorState<S>,
         command: NetworkActorCommand,
     ) -> crate::Result<()> {
+        tracing::trace!("Handling command: {:?}", command);
         match command {
             NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId { peer_id, message }) => {
                 state.send_fiber_message_to_peer(&peer_id, message).await?;
@@ -2845,6 +2846,7 @@ where
                 "Reconnecting channel {:x} peers {:?} in state {:?}",
                 &channel_id, &peer_id, &channel_state
             );
+            debug!("all addresses: {:?}", &addresses);
             for addr in addresses {
                 myself
                     .send_message(NetworkActorMessage::new_command(

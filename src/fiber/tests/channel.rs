@@ -1381,7 +1381,7 @@ async fn test_commitment_tx_capacity() {
 }
 
 #[tokio::test]
-async fn test_connect_to_peers_with_mutual_channel_on_restart() {
+async fn test_connect_to_peers_with_mutual_channel_on_restart_1() {
     init_tracing();
 
     let node_a_funding_amount = 100000000000;
@@ -1400,7 +1400,7 @@ async fn test_connect_to_peers_with_mutual_channel_on_restart() {
 }
 
 #[tokio::test]
-async fn test_connect_to_peers_with_mutual_channel_on_restart_version_2() {
+async fn test_connect_to_peers_with_mutual_channel_on_restart_2() {
     init_tracing();
 
     let node_a_funding_amount = 100000000000;
