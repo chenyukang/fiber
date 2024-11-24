@@ -93,39 +93,6 @@ fn create_fake_node_announcement_mesage() -> NodeAnnouncement {
     NodeAnnouncement::new(node_name.into(), addresses, &priv_key, now_timestamp(), 0)
 }
 
-fn create_fake_node_announcement_mesage_version1() -> NodeAnnouncement {
-    let priv_key = get_test_priv_key();
-    let node_name = "fake node";
-    let addresses =
-        vec!["/ip4/1.1.1.1/tcp/8346/p2p/QmaFDJb9CkMrXy7nhTWBY5y9mvuykre3EzzRsCJUAVXprZ"]
-            .iter()
-            .map(|x| MultiAddr::from_str(x).expect("valid multiaddr"))
-            .collect();
-    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, now_timestamp(), 0)
-}
-
-fn create_fake_node_announcement_mesage_version2() -> NodeAnnouncement {
-    let priv_key = get_test_priv_key();
-    let node_name = "fake node";
-    let addresses =
-        vec!["/ip4/1.1.1.1/tcp/8346/p2p/QmaFDJb9CkMrXy7nhTWBY5y9mvuykre3EzzRsCJUAVXprZ"]
-            .iter()
-            .map(|x| MultiAddr::from_str(x).expect("valid multiaddr"))
-            .collect();
-    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, now_timestamp(), 0)
-}
-
-fn create_fake_node_announcement_mesage_version3() -> NodeAnnouncement {
-    let priv_key = get_test_priv_key();
-    let node_name = "fake node";
-    let addresses =
-        vec!["/ip4/1.1.1.1/tcp/8346/p2p/QmaFDJb9CkMrXy7nhTWBY5y9mvuykre3EzzRsCJUAVXprZ"]
-            .iter()
-            .map(|x| MultiAddr::from_str(x).expect("valid multiaddr"))
-            .collect();
-    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, now_timestamp(), 0)
-}
-
 #[tokio::test]
 async fn test_sync_channel_announcement_on_startup() {
     init_tracing();
@@ -458,7 +425,7 @@ async fn test_sync_node_announcement_on_startup() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version1())
+                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage())
                     .create_broadcast_messages_filter_result(),
             ),
         ))
@@ -508,7 +475,7 @@ async fn test_sync_node_announcement_after_restart() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 test_peer_id.clone(),
-                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version1())
+                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage())
                     .create_broadcast_messages_filter_result(),
             ),
         ))
@@ -566,7 +533,7 @@ async fn test_persisting_bootnode() {
 async fn test_persisting_announced_nodes() {
     let mut node = NetworkNode::new_with_node_name("test").await;
 
-    let announcement = create_fake_node_announcement_mesage_version1();
+    let announcement = create_fake_node_announcement_mesage();
     let node_pk = announcement.node_id;
     let peer_id = node_pk.tentacle_peer_id();
 
@@ -574,7 +541,7 @@ async fn test_persisting_announced_nodes() {
         .send_message(NetworkActorMessage::Event(
             NetworkActorEvent::GossipMessage(
                 peer_id.clone(),
-                BroadcastMessage::NodeAnnouncement(create_fake_node_announcement_mesage_version1())
+                BroadcastMessage::NodeAnnouncement(announcement)
                     .create_broadcast_messages_filter_result(),
             ),
         ))
