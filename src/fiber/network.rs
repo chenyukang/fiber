@@ -1534,8 +1534,6 @@ pub struct NetworkActorState<S> {
     // the pre_start function.
     control: ServiceAsyncControl,
     peer_session_map: HashMap<PeerId, SessionId>,
-    // This map is used to store the public key of the peer.
-    peer_pubkey_map: HashMap<PeerId, Pubkey>,
     session_channels_map: HashMap<SessionId, HashSet<Hash256>>,
     channels: HashMap<Hash256, ActorRef<ChannelActorMessage>>,
     // Outpoint to channel id mapping, only contains channels with state of Ready.
@@ -1579,6 +1577,9 @@ pub struct NetworkActorState<S> {
 #[serde_as]
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct PersistentNetworkActorState {
+    // This map is used to store the public key of the peer.
+    #[serde_as(as = "Vec<(DisplayFromStr, _)>")]
+    peer_pubkey_map: HashMap<PeerId, Pubkey>,
     // These addresses are announced by the peer itself to the network.
     // When a new NodeAnnouncement message is received, we will overwrite the old addresses.
     #[serde_as(as = "Vec<(DisplayFromStr, _)>")]
@@ -1594,20 +1595,11 @@ impl PersistentNetworkActorState {
         Default::default()
     }
 
-    fn get_peer_addresses(&self, peer_id: &PeerId) -> HashSet<Multiaddr> {
-        let empty = vec![];
-        self.announced_peer_addresses
+    fn get_peer_addresses(&self, peer_id: &PeerId) -> Vec<Multiaddr> {
+        self.saved_peer_addresses
             .get(peer_id)
-            .unwrap_or(&empty)
-            .iter()
-            .chain(
-                self.saved_peer_addresses
-                    .get(peer_id)
-                    .unwrap_or(&empty)
-                    .iter(),
-            )
-            .map(|addr| addr.clone())
-            .collect::<HashSet<_, RandomState>>()
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Save a single peer address to the peer store. If this address for the peer does not exist,
@@ -1629,22 +1621,16 @@ impl PersistentNetworkActorState {
         }
     }
 
-    /// Save announced peer addresses to the peer store. If the peer addresses are updated,
-    /// return true, otherwise return false. This method will NOT keep the old announced addresses.
-    fn save_announced_peer_addresses(&mut self, peer_id: PeerId, addr: Vec<Multiaddr>) -> bool {
-        match self.announced_peer_addresses.entry(peer_id) {
-            Entry::Occupied(mut entry) => {
-                if entry.get() == &addr {
-                    false
-                } else {
-                    entry.insert(addr);
-                    true
-                }
-            }
-            Entry::Vacant(entry) => {
-                entry.insert(addr);
-                true
-            }
+    fn get_peer_pubkey(&self, peer_id: &PeerId) -> Option<Pubkey> {
+        self.peer_pubkey_map.get(peer_id).map(|x| *x)
+    }
+
+    // Save a single peer pubkey to the peer store. Returns true if the new pubkey is different from the old one,
+    // or there does not exist a old pubkey.
+    fn save_peer_pubkey(&mut self, peer_id: PeerId, pubkey: Pubkey) -> bool {
+        match self.peer_pubkey_map.insert(peer_id, pubkey) {
+            Some(old_pubkey) => old_pubkey != pubkey,
+            None => true,
         }
     }
 
@@ -1984,7 +1970,7 @@ where
     }
 
     fn get_peer_pubkey(&self, peer_id: &PeerId) -> Option<Pubkey> {
-        self.peer_pubkey_map.get(peer_id).cloned()
+        self.state_to_be_persisted.get_peer_pubkey(peer_id)
     }
 
     fn get_funding_and_reserved_amount(
@@ -2224,8 +2210,12 @@ where
         let store = self.store.clone();
         self.peer_session_map
             .insert(remote_peer_id.clone(), session.id);
-        self.peer_pubkey_map
-            .insert(remote_peer_id.clone(), remote_pubkey);
+        if self
+            .state_to_be_persisted
+            .save_peer_pubkey(remote_peer_id.clone(), remote_pubkey)
+        {
+            self.persist_state();
+        }
 
         if self.auto_announce {
             let message = self.get_or_create_new_node_announcement_message();
@@ -2283,7 +2273,16 @@ where
     }
 
     pub(crate) fn get_peer_addresses(&self, peer_id: &PeerId) -> HashSet<Multiaddr> {
-        self.state_to_be_persisted.get_peer_addresses(peer_id)
+        self.get_peer_pubkey(peer_id)
+            .and_then(|pk| self.store.get_latest_node_announcement(&pk))
+            .map(|a| {
+                debug!("peer addresses: {:?}", a.addresses);
+                a.addresses
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .chain(self.state_to_be_persisted.get_peer_addresses(peer_id))
+            .collect()
     }
 
     pub(crate) fn save_peer_address(&mut self, peer_id: PeerId, address: Multiaddr) -> bool {
@@ -2295,19 +2294,6 @@ where
             true
         } else {
             false
-        }
-    }
-
-    pub(crate) fn save_announced_peer_addresses(
-        &mut self,
-        peer_id: PeerId,
-        addresses: Vec<Multiaddr>,
-    ) {
-        if self
-            .state_to_be_persisted
-            .save_announced_peer_addresses(peer_id, addresses)
-        {
-            self.persist_state();
         }
     }
 
@@ -2791,7 +2777,6 @@ where
             network: myself.clone(),
             control,
             peer_session_map: Default::default(),
-            peer_pubkey_map: Default::default(),
             session_channels_map: Default::default(),
             channels: Default::default(),
             outpoint_channel_map: Default::default(),
@@ -2843,10 +2828,9 @@ where
             let addresses = state.get_peer_addresses(&peer_id);
 
             debug!(
-                "Reconnecting channel {:x} peers {:?} in state {:?}",
-                &channel_id, &peer_id, &channel_state
+                "Reconnecting channel {:x} peers {:?} in state {:?} with addresses {:?}",
+                &channel_id, &peer_id, &channel_state, &addresses
             );
-            debug!("all addresses: {:?}", &addresses);
             for addr in addresses {
                 myself
                     .send_message(NetworkActorMessage::new_command(

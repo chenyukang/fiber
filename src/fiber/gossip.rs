@@ -764,7 +764,8 @@ where
                 };
                 trace!("Broadcasting messages to peers: {:?}", &broadcast_message);
                 for (peer, session) in &state.peer_session_map {
-                    match state.peer_filter_map.get(peer) {
+                    let peer_cursor = state.peer_filter_map.get(peer);
+                    match peer_cursor {
                         Some(cursor) if cursor < &broadcast_message.cursor() => {
                             state
                                 .control
@@ -778,11 +779,19 @@ where
                                 )
                                 .await?;
                         }
-                        _ => {}
+                        _ => {
+                            debug!(
+                                "Ignoring broadcast message for peer {:?}: {:?} as its cursor is {:?}",
+                                peer, &broadcast_message, peer_cursor
+                            );
+                        }
                     }
                 }
             }
             GossipActorMessage::TickNetworkMaintenance => {
+                debug!("Network maintenance ticked, current state: num of peers: {}, inflight requests: {}, is syncing: {}",
+                    state.peer_session_map.len(), state.inflight_gets.len(), state.is_syncing);
+
                 let now = now_timestamp();
 
                 state
