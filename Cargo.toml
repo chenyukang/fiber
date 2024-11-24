@@ -60,6 +60,7 @@ tokio = { version = "1", features = [
     "time",
     "signal",
 ] }
+lru = "0.12.5"
 
 [profile.release]
 panic = "abort"

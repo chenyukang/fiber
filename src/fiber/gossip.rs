@@ -1,8 +1,13 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    hash::{DefaultHasher, Hash, Hasher},
+    num::NonZeroUsize,
+};
 
 use ckb_hash::blake2b_256;
 use ckb_jsonrpc_types::{Status, TxStatus};
 use ckb_types::packed::OutPoint;
+use lru::LruCache;
 use ractor::{
     async_trait as rasync_trait, call_t,
     concurrency::{timeout, Duration},
@@ -211,9 +216,11 @@ pub(crate) enum GossipActorMessage {
     PeerConnected(PeerId, Pubkey, SessionContext),
     PeerDisconnected(PeerId, SessionContext),
 
-    // We periodically check inflight requests to see if they are timed out.
-    // If so, we will resend the request other peers. We will also check if
-    // if we have sufficient number of peers to receive broadcasts.
+    // The function of TickNetworkMaintenance is to maintain the network state.
+    // Currently it will do the following things:
+    // 1. Check inflight requests to see if they are timed out. If so, resend the request to other peers.
+    // 2. Check if we have sufficient number of peers to receive broadcasts. If not, connect more peers.
+    // 3. Check if there are any pending broadcast messages. If so, broadcast them to the network.
     TickNetworkMaintenance,
 
     // Process BroadcastMessage from the network. This is mostly used for testing.
@@ -237,6 +244,73 @@ impl<S> GossipActor<S> {
     }
 }
 
+// This is used to prevent sending duplicate messages to the same peer.
+// It may report false negatives (i.e. we may have sent some messages, but it reports that we haven't).
+// Even though we wasted some bandwidth, it is not a big deal.
+// It will never report false positives (i.e. we haven't sent a message, but it reports that we have).
+// So we will never miss any messages.
+struct SentMessagesCache {
+    cache: LruCache<u64, ()>,
+}
+
+impl Default for SentMessagesCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SentMessagesCache {
+    fn new() -> Self {
+        Self {
+            cache: LruCache::new(NonZeroUsize::new(8092).unwrap()),
+        }
+    }
+
+    fn get_message_hash(message: &BroadcastMessage) -> u64 {
+        let mut s = DefaultHasher::new();
+        message.hash(&mut s);
+        s.finish()
+    }
+
+    fn insert(&mut self, message: &BroadcastMessage) {
+        self.cache.put(Self::get_message_hash(message), ());
+    }
+
+    fn insert_iter<'a, I: IntoIterator<Item = &'a BroadcastMessage>>(&mut self, messages: I) {
+        for message in messages {
+            self.insert(&message);
+        }
+    }
+
+    fn contains(&self, message: &BroadcastMessage) -> bool {
+        self.cache.contains(&Self::get_message_hash(message))
+    }
+}
+
+#[derive(Default)]
+struct PeerState {
+    // The filter is a cursor that the peer sent to us. We will only send messages to the peer
+    // that are newer than the cursor. If the peer has not sent us a filter, we will not actively
+    // send messages to the peer. If the peer sends us a new filter, we will update this field,
+    // and send all the messages after the cursor to the peer immediately.
+    filter: Option<Cursor>,
+    // Any messages with cursor >= biggest_cursor_sent is definitely not sent to the peer.
+    // We may have sent (or may haven't) some message with cursor < biggest_cursor_sent to the peer.
+    // That depends on if the message arrives at our side in order or not.
+    // If it arrived out of order, i.e. we received a message with cursor < biggest_cursor_sent later,
+    // we may have not sent the message to the peer. We will use SentMessagesCache to query if
+    // we have sent the message to the peer. If we haven't, we will send the message to the peer.
+    biggest_cursor_sent: Cursor,
+    // A cache of sent messages to prevent sending duplicate messages to the same peer.
+    // This only applies to BroadcastMessagesFilterResult.
+    // That means
+    // 1. When the peer requests messages via GetBroadcastMessages or QueryBroadcastMessages,
+    // we will always send the whole result.
+    // 2. Even if we've already sent peer messages via GetBroadcastMessagesResult or
+    // QueryBroadcastMessagesResult, we will still send them again with BroadcastMessagesFilterResult.
+    sent_messages_cache: SentMessagesCache,
+}
+
 pub(crate) struct GossipActorState<S> {
     store: S,
     chain_actor: ActorRef<CkbChainMessage>,
@@ -248,9 +322,10 @@ pub(crate) struct GossipActorState<S> {
     // requests to peers to sync with them. Otherwise, we will only send BroadcastMessagesFilter
     // requests to peers and wait for them to send us BroadcastMessagesFilterResult.
     is_syncing: bool,
+    // Messages that are pending to be broadcasted to the network.
+    pending_broadcast_messages: HashMap<BroadcastMessage, u64>,
     peer_session_map: HashMap<PeerId, SessionId>,
-    peer_pubkey_map: HashMap<PeerId, Pubkey>,
-    peer_filter_map: HashMap<PeerId, Cursor>,
+    peer_states: HashMap<PeerId, PeerState>,
     // The last BroadcastMessagesFilter we sent to a peer. We will maintain
     // a number of filters for each peer, so that we can receive the latest
     // messages from the peer.
@@ -269,6 +344,32 @@ where
         self.store
             .get_latest_broadcast_message_cursor()
             .unwrap_or_default()
+    }
+
+    async fn verify_and_save_broadcast_message(
+        &mut self,
+        message: BroadcastMessage,
+    ) -> Result<BroadcastMessageWithTimestamp, Error> {
+        if let Some(timestamp) = self.pending_broadcast_messages.get(&message) {
+            return Ok((message, *timestamp).into());
+        }
+        let message_id = message.id();
+        let verified_message = verify_broadcast_message(message, &self.store, &self.chain_actor)
+            .await
+            .map_err(|error| {
+                error!(
+                    "Failed to process broadcast message with id {:?}: {:?}",
+                    message_id, &error
+                );
+                error
+            })?;
+
+        self.store.save_broadcast_message(verified_message.clone());
+        self.pending_broadcast_messages.insert(
+            verified_message.clone().into(),
+            verified_message.timestamp(),
+        );
+        Ok(verified_message)
     }
 
     async fn send_message_to_session(
@@ -324,6 +425,10 @@ where
             chain_hash: get_chain_hash(),
             after_cursor: cursor.clone(),
         });
+        debug!(
+            "Sending BroadcastMessagesFilter to peer {:?}: {:?}",
+            &peer_id, &message
+        );
         if let Err(error) = self.send_message_to_peer(peer_id, message).await {
             error!(
                 "Failed to send BroadcastMessagesFilter to peer {:?}: {:?}",
@@ -363,26 +468,6 @@ async fn verify_broadcast_message<S: GossipMessageStore>(
             ))
         }
     }
-}
-
-async fn verify_and_save_broadcast_message<S: GossipMessageStore>(
-    message: BroadcastMessage,
-    store: &S,
-    chain: &ActorRef<CkbChainMessage>,
-) -> Result<BroadcastMessageWithTimestamp, Error> {
-    let message_id = message.id();
-    let verified_message = verify_broadcast_message(message, store, chain)
-        .await
-        .map_err(|error| {
-            error!(
-                "Failed to process broadcast message with id {:?}: {:?}",
-                message_id, &error
-            );
-            error
-        })?;
-
-    store.save_broadcast_message(verified_message.clone());
-    Ok(verified_message)
 }
 
 async fn verify_channel_announcement(
@@ -701,9 +786,9 @@ where
             next_request_id: 0,
             inflight_gets: Default::default(),
             is_syncing: true,
-            peer_pubkey_map: Default::default(),
+            pending_broadcast_messages: Default::default(),
             peer_session_map: Default::default(),
-            peer_filter_map: Default::default(),
+            peer_states: Default::default(),
             my_filter_map: Default::default(),
         };
         Ok(state)
@@ -729,7 +814,9 @@ where
                     &peer_id, &pubkey, &session.id
                 );
                 state.peer_session_map.insert(peer_id.clone(), session.id);
-                state.peer_pubkey_map.insert(peer_id.clone(), pubkey);
+                state
+                    .peer_states
+                    .insert(peer_id.clone(), Default::default());
             }
             GossipActorMessage::PeerDisconnected(peer_id, session) => {
                 debug!(
@@ -737,15 +824,11 @@ where
                     &peer_id, &session.id
                 );
                 let _ = state.peer_session_map.remove(&peer_id);
-                let _ = state.peer_pubkey_map.remove(&peer_id);
             }
             GossipActorMessage::ProcessBroadcastMessage(message) => {
-                if let Err(error) = verify_and_save_broadcast_message(
-                    message.clone(),
-                    &state.store,
-                    &state.chain_actor,
-                )
-                .await
+                if let Err(error) = state
+                    .verify_and_save_broadcast_message(message.clone())
+                    .await
                 {
                     error!(
                         "Failed to process broadcast message {:?}: {:?}",
@@ -754,14 +837,37 @@ where
                 }
             }
             GossipActorMessage::BroadcastMessage(message) => {
-                let broadcast_message = match verify_and_save_broadcast_message(
-                    message.clone(),
-                    &state.store,
-                    &state.chain_actor,
-                )
-                .await
+                debug!("Trying to broadcast message: {:?}", &message);
+                match state
+                    .verify_and_save_broadcast_message(message.clone())
+                    .await
                 {
-                    Ok(message) => message,
+                    Ok(broadcast_message) => {
+                        // This is our own message, so we will broadcast it to all peers immediately.
+                        for (peer, session) in &state.peer_session_map {
+                            let peer_cursor =
+                                state.peer_states.get(peer).and_then(|s| s.filter.as_ref());
+                            match peer_cursor {
+                                Some(cursor) if cursor < &broadcast_message.cursor() => {
+                                    state
+                                        .send_message_to_session(
+                                            *session,
+                                            GossipMessage::BroadcastMessagesFilterResult(
+                                                broadcast_message
+                                                    .create_broadcast_messages_filter_result(),
+                                            ),
+                                        )
+                                        .await?;
+                                }
+                                _ => {
+                                    debug!(
+                                        "Ignoring broadcast message for peer {:?}: {:?} as its cursor is {:?}",
+                                        peer, &broadcast_message, peer_cursor
+                                    );
+                                }
+                            }
+                        }
+                    }
                     Err(error) => {
                         // This should never happen because we have already verified the message before broadcasting.
                         // But it is possible that we failed to obtain the block timestamp for the message.
@@ -772,31 +878,6 @@ where
                         return Ok(());
                     }
                 };
-                trace!("Broadcasting messages to peers: {:?}", &broadcast_message);
-                for (peer, session) in &state.peer_session_map {
-                    let peer_cursor = state.peer_filter_map.get(peer);
-                    match peer_cursor {
-                        Some(cursor) if cursor < &broadcast_message.cursor() => {
-                            state
-                                .control
-                                .send_message_to(
-                                    *session,
-                                    GOSSIP_PROTOCOL_ID,
-                                    GossipMessage::BroadcastMessagesFilterResult(
-                                        broadcast_message.create_broadcast_messages_filter_result(),
-                                    )
-                                    .to_molecule_bytes(),
-                                )
-                                .await?;
-                        }
-                        _ => {
-                            debug!(
-                                "Ignoring broadcast message for peer {:?}: {:?} as its cursor is {:?}",
-                                peer, &broadcast_message, peer_cursor
-                            );
-                        }
-                    }
-                }
             }
             GossipActorMessage::TickNetworkMaintenance => {
                 debug!("Network maintenance ticked, current state: num of peers: {}, inflight requests: {}, is syncing: {}",
@@ -839,6 +920,52 @@ where
                         state.send_broadcast_message_filter(&peer_id).await;
                     }
                 }
+
+                // Save the pending_broadcast_messages to a new variable and clear the original one.
+                let pending_messages = std::mem::take(&mut state.pending_broadcast_messages);
+                let mut broadcast_messages = pending_messages
+                    .into_iter()
+                    .map(|(m, t)| BroadcastMessageWithTimestamp::from((m, t)))
+                    .collect::<Vec<BroadcastMessageWithTimestamp>>();
+                broadcast_messages.sort_by_key(|m| m.cursor());
+
+                trace!(
+                    "Trying to rebroadcast pending messages to peers: {:?}",
+                    &broadcast_messages
+                );
+                for (peer, session) in &state.peer_session_map {
+                    let (filter_cursor, peer_state) = match state
+                        .peer_states
+                        .get(peer)
+                        .and_then(|s| s.filter.as_ref().map(|f| (f, s)))
+                    {
+                        Some((filter, state)) => (filter, state),
+                        _ => {
+                            continue;
+                        }
+                    };
+                    let messages = broadcast_messages
+                        .iter()
+                        .filter_map(|m| {
+                            let c = m.cursor();
+                            let m = BroadcastMessage::from(m.clone());
+                            (&c > filter_cursor || !peer_state.sent_messages_cache.contains(&m))
+                                .then_some(m)
+                        })
+                        .collect::<Vec<_>>();
+                    for chunk in messages.chunks(DEFAULT_NUM_OF_BROADCAST_MESSAGE as usize) {
+                        state
+                            .send_message_to_session(
+                                *session,
+                                GossipMessage::BroadcastMessagesFilterResult(
+                                    BroadcastMessagesFilterResult {
+                                        messages: chunk.to_vec(),
+                                    },
+                                ),
+                            )
+                            .await?;
+                    }
+                }
             }
             GossipActorMessage::GossipMessage(GossipMessageWithPeerId { peer_id, message }) => {
                 match message {
@@ -847,18 +974,52 @@ where
                         after_cursor,
                     }) => {
                         check_chain_hash(&chain_hash)?;
-                        state.peer_filter_map.insert(peer_id, after_cursor);
+                        let mut biggest_cursor_sent = after_cursor.clone();
+                        let mut sent_messages_cache = SentMessagesCache::new();
+                        // Immediately send existing messages after the cursor in the store to the peer.
+                        loop {
+                            let messages = state.store.get_broadcast_messages(
+                                &biggest_cursor_sent,
+                                Some(DEFAULT_NUM_OF_BROADCAST_MESSAGE),
+                            );
+                            match messages.last() {
+                                Some(last_message) => {
+                                    biggest_cursor_sent = last_message.cursor();
+                                }
+                                None => {
+                                    break;
+                                }
+                            }
+                            let messages = messages
+                                .into_iter()
+                                .map(Into::into)
+                                .collect::<Vec<BroadcastMessage>>();
+                            sent_messages_cache.insert_iter(&messages);
+                            let result = GossipMessage::BroadcastMessagesFilterResult(
+                                BroadcastMessagesFilterResult { messages },
+                            );
+                            if let Err(error) = state.send_message_to_peer(&peer_id, result).await {
+                                error!(
+                                    "Failed to send BroadcastMessagesFilterResult to peer {:?}: {:?}",
+                                    &peer_id, error
+                                );
+                                break;
+                            }
+                        }
+                        state.peer_states.insert(
+                            peer_id,
+                            PeerState {
+                                filter: Some(after_cursor),
+                                biggest_cursor_sent,
+                                sent_messages_cache,
+                            },
+                        );
                     }
                     GossipMessage::BroadcastMessagesFilterResult(
                         BroadcastMessagesFilterResult { messages },
                     ) => {
                         for message in messages {
-                            let _ = verify_and_save_broadcast_message(
-                                message,
-                                &state.store,
-                                &state.chain_actor,
-                            )
-                            .await;
+                            let _ = state.verify_and_save_broadcast_message(message).await;
                         }
                     }
                     GossipMessage::GetBroadcastMessages(get_broadcast_messages) => {
@@ -899,12 +1060,7 @@ where
                         let current_cursor = state.get_latest_cursor();
                         for message in messages {
                             // TODO: handle invalid messages.
-                            let _ = verify_and_save_broadcast_message(
-                                message,
-                                &state.store,
-                                &state.chain_actor,
-                            )
-                            .await;
+                            let _ = state.verify_and_save_broadcast_message(message).await;
                         }
                         state.inflight_gets.remove(&(peer_id, id));
                         if current_cursor != state.get_latest_cursor() {
@@ -948,12 +1104,7 @@ where
                     }) => {
                         let is_finished = missing_queries.is_empty();
                         for message in messages {
-                            let _ = verify_and_save_broadcast_message(
-                                message,
-                                &state.store,
-                                &state.chain_actor,
-                            )
-                            .await;
+                            let _ = state.verify_and_save_broadcast_message(message).await;
                         }
                         // TODO: mark requests corresponding to id as finished
                         // TODO: if not finished, send another QueryBroadcastMessages.

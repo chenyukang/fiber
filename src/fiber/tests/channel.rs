@@ -242,8 +242,8 @@ async fn test_public_channel_saved_to_the_other_nodes_graph() {
     tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
 
     node3.stop().await;
-    let node3_store = node3.store.clone();
-    let node3_graph = node3.get_network_graph();
+    let mut node3_graph = node3.get_network_graph();
+    node3_graph.load_from_store();
     let channels = node3_graph.channels().collect::<Vec<_>>();
     assert_eq!(channels.len(), 1);
     let channel = channels[0];

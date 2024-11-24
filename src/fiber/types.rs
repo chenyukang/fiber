@@ -1497,7 +1497,7 @@ impl TryFrom<molecule_fiber::AnnouncementSignatures> for AnnouncementSignatures 
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct NodeAnnouncement {
     // Signature to this message, may be empty the message is not signed yet.
     pub signature: Option<EcdsaSignature>,
@@ -1754,7 +1754,7 @@ impl TryFrom<molecule_gossip::NodeAnnouncement> for NodeAnnouncement {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct ChannelAnnouncement {
     pub node1_signature: Option<EcdsaSignature>,
     pub node2_signature: Option<EcdsaSignature>,
@@ -1886,7 +1886,7 @@ impl TryFrom<molecule_gossip::ChannelAnnouncement> for ChannelAnnouncement {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct ChannelUpdate {
     // Signature of the node that wants to update the channel information.
     pub signature: Option<EcdsaSignature>,
@@ -2259,7 +2259,7 @@ impl TryFrom<molecule_gossip::GossipMessage> for GossipMessage {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub enum BroadcastMessage {
     NodeAnnouncement(NodeAnnouncement),
     ChannelAnnouncement(ChannelAnnouncement),
