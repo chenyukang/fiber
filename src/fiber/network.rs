@@ -2223,20 +2223,9 @@ where
                 "Auto announcing our node to peer {:?} (message: {:?})",
                 remote_peer_id, &message
             );
-            // if let Err(e) = self
-            //     .send_message_to_session(
-            //         session.id,
-            //         FiberMessage::BroadcastMessage(FiberBroadcastMessage::NodeAnnouncement(
-            //             message,
-            //         )),
-            //     )
-            //     .await
-            // {
-            //     error!(
-            //         "Failed to send NodeAnnouncement message to peer {:?}: {:?}",
-            //         remote_peer_id, e
-            //     );
-            // }
+            let _ = self.network.send_message(NetworkActorMessage::new_command(
+                NetworkActorCommand::BroadcastMessage(BroadcastMessage::NodeAnnouncement(message)),
+            ));
         } else {
             debug!(
                 "Auto announcing is disabled, skipping node announcement to peer {:?}",
