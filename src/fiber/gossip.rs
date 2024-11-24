@@ -45,7 +45,6 @@ pub(crate) const DEFAULT_NUM_OF_BROADCAST_MESSAGE: u16 = 100;
 const NUM_SIMULTANEOUS_GET_REQUESTS: usize = 1;
 const NUM_PEERS_TO_RECEIVE_BROADCASTS: usize = 3;
 const GET_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-const CHECK_INFLIGHT_REQUESTS_INTERVAL: Duration = Duration::from_secs(5);
 
 pub trait GossipMessageStore {
     /// The implementors should guarantee that the returned messages are sorted by timestamp in the ascending order.
@@ -624,6 +623,7 @@ fn verify_node_announcement(node_announcement: &NodeAnnouncement) -> Result<(), 
 impl GossipProtocolHandle {
     pub(crate) async fn new<S: GossipMessageStore + Send + Sync + 'static>(
         name: Option<String>,
+        gossip_network_maintenance_interval: Duration,
         store: S,
         chain_actor: ActorRef<CkbChainMessage>,
         supervisor: ActorCell,
@@ -633,7 +633,12 @@ impl GossipProtocolHandle {
         let (actor, _handle) = ActorRuntime::spawn_linked_instant(
             name,
             GossipActor::new(),
-            (receiver, store, chain_actor),
+            (
+                receiver,
+                gossip_network_maintenance_interval,
+                store,
+                chain_actor,
+            ),
             supervisor,
         )
         .expect("start gossip actor");
@@ -667,6 +672,7 @@ where
     type State = GossipActorState<S>;
     type Arguments = (
         oneshot::Receiver<ServiceAsyncControl>,
+        Duration,
         S,
         ActorRef<CkbChainMessage>,
     );
@@ -674,7 +680,7 @@ where
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        (rx, store, chain_actor): Self::Arguments,
+        (rx, network_maintenance_interval, store, chain_actor): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         let control = timeout(Duration::from_secs(1), rx)
             .await
@@ -685,7 +691,7 @@ where
         let _ = myself.send_after(Duration::from_millis(500), || {
             GossipActorMessage::TickNetworkMaintenance
         });
-        let _ = myself.send_interval(CHECK_INFLIGHT_REQUESTS_INTERVAL, || {
+        let _ = myself.send_interval(network_maintenance_interval, || {
             GossipActorMessage::TickNetworkMaintenance
         });
         let state = Self::State {
@@ -718,6 +724,10 @@ where
                     );
                     return Ok(());
                 }
+                debug!(
+                    "Saving gossip peer pubkey and session: peer {:?}, pubkey {:?}, session {:?}",
+                    &peer_id, &pubkey, &session.id
+                );
                 state.peer_session_map.insert(peer_id.clone(), session.id);
                 state.peer_pubkey_map.insert(peer_id.clone(), pubkey);
             }
@@ -806,6 +816,7 @@ where
                         .take(NUM_SIMULTANEOUS_GET_REQUESTS - current_num_peers)
                         .cloned()
                         .collect::<Vec<_>>();
+
                     for peer_id in peers {
                         state.send_get_broadcast_messages(&peer_id).await;
                     }
@@ -823,6 +834,7 @@ where
                         .take(NUM_PEERS_TO_RECEIVE_BROADCASTS - current_num_peers)
                         .cloned()
                         .collect::<Vec<_>>();
+
                     for peer_id in peers {
                         state.send_broadcast_message_filter(&peer_id).await;
                     }

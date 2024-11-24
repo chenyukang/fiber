@@ -53,6 +53,9 @@ pub const DEFAULT_AUTO_ANNOUNCE_NODE: bool = true;
 /// The interval to reannounce NodeAnnouncement, in seconds.
 pub const DEFAULT_ANNOUNCE_NODE_INTERVAL_SECONDS: u64 = 3600;
 
+/// The interval to maintain the gossip network, in milli-seconds.
+pub const DEFAULT_GOSSIP_MAINTENANCE_INTERVAL_MS: u64 = 1000;
+
 /// Whether to sync the network graph from the network. true means syncing.
 pub const DEFAULT_SYNC_NETWORK_GRAPH: bool = true;
 
@@ -176,6 +179,15 @@ pub struct FiberConfig {
         help = "The interval to reannounce NodeAnnouncement, in seconds. 0 means never reannounce. [default: 3600 (1 hour)]"
     )]
     pub(crate) announce_node_interval_seconds: Option<u64>,
+
+    /// Gossip network maintenance interval, in milli-seconds. [default: 1000]
+    #[arg(
+        name = "FIBER_GOSSIP_MAINTENANCE_INTERVAL_MS",
+        long = "fiber-gossip-maintenance-interval-ms",
+        env,
+        help = "Gossip network maintenance interval, in milli-seconds. [default: 1000]"
+    )]
+    pub(crate) gossip_maintenance_interval_ms: Option<u64>,
 
     /// Whether to sync the network graph from the network. [default: true]
     #[arg(
@@ -354,6 +366,11 @@ impl FiberConfig {
             .expect("read or generate secret key")
             .into();
         secio_kp.public_key()
+    }
+
+    pub fn gossip_maintenance_interval_ms(&self) -> u64 {
+        self.gossip_maintenance_interval_ms
+            .unwrap_or(DEFAULT_GOSSIP_MAINTENANCE_INTERVAL_MS)
     }
 
     pub fn sync_network_graph(&self) -> bool {
