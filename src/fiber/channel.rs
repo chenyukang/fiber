@@ -1983,6 +1983,12 @@ impl TLCId {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum TlcOperation {
+    AddTlc(AddTlc),
+    RemoveTlc(RemoveTlc),
+}
+
 #[serde_as]
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChannelActorState {
@@ -2063,6 +2069,9 @@ pub struct ChannelActorState {
 
     // The maximum number of tlcs that we can accept.
     pub max_tlc_number_in_flight: u64,
+
+    // The stagning tlc operations, we will process them when receiving the commitment_signed message.
+    pub staging_tlc_operations: Vec<TlcOperation>,
 
     // Below are fields that are only usable after the channel is funded,
     // (or at some point of the state).
@@ -2797,6 +2806,7 @@ impl ChannelActorState {
             commitment_delay_epoch,
             funding_fee_rate,
             id: channel_id,
+            staging_tlc_operations: vec![],
             tlc_ids: Default::default(),
             tlcs: Default::default(),
             local_shutdown_script: local_shutdown_script,
@@ -2860,6 +2870,7 @@ impl ChannelActorState {
             commitment_delay_epoch,
             funding_fee_rate,
             id: temp_channel_id,
+            staging_tlc_operations: vec![],
             tlc_ids: Default::default(),
             tlcs: Default::default(),
             signer,
@@ -4139,6 +4150,7 @@ impl ChannelActorState {
         }
         Ok(())
     }
+
     fn check_for_tlc_update(&self, add_tlc_amount: Option<u128>) -> ProcessingChannelResult {
         match self.state {
             ChannelState::ChannelReady() => {}

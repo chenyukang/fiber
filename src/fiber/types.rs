@@ -1031,7 +1031,7 @@ impl TryFrom<molecule_fiber::ClosingSigned> for ClosingSigned {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AddTlc {
     pub channel_id: Hash256,
     pub tlc_id: u64,
