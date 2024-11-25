@@ -39,7 +39,7 @@ pub(crate) struct OpenChannelParams {
     #[serde_as(as = "U128Hex")]
     funding_amount: u128,
 
-    /// Whether this is a public channel (will be broadcasted to network, and can be used to forward TLCs), an optional parameter (default value false).
+    /// Whether this is a public channel (will be broadcasted to network, and can be used to forward TLCs), an optional parameter, default value is true.
     public: Option<bool>,
 
     /// The type script of the UDT to fund the channel with, an optional parameter.
@@ -159,7 +159,7 @@ pub(crate) struct Channel {
     /// The received balance of the channel
     #[serde_as(as = "U128Hex")]
     received_tlc_balance: u128,
-    /// The time the channel was created at
+    /// The time the channel was created at, in milliseconds from UNIX epoch
     #[serde_as(as = "U64Hex")]
     created_at: u64,
 }
@@ -262,14 +262,16 @@ pub struct GetPaymentCommandResult {
     pub payment_hash: Hash256,
     /// The status of the payment
     pub status: PaymentSessionStatus,
-    #[serde_as(as = "U128Hex")]
-    /// The time the payment was created at
-    created_at: u128,
-    #[serde_as(as = "U128Hex")]
-    /// The time the payment was last updated at
-    pub last_updated_at: u128,
+    #[serde_as(as = "U64Hex")]
+    /// The time the payment was created at, in milliseconds from UNIX epoch
+    created_at: u64,
+    #[serde_as(as = "U64Hex")]
+    /// The time the payment was last updated at, in milliseconds from UNIX epoch
+    pub last_updated_at: u64,
     /// The error message if the payment failed
     pub failed_error: Option<String>,
+    /// fee paid for the payment
+    pub fee: u128,
 }
 
 #[serde_as]
@@ -285,9 +287,13 @@ pub(crate) struct SendPaymentCommandParams {
     /// the hash to use within the payment's HTLC
     payment_hash: Option<Hash256>,
 
-    /// the htlc expiry delta should be used to set the timelock for the final hop
+    /// the TLC expiry delta should be used to set the timelock for the final hop, in milliseconds
     #[serde_as(as = "Option<U64Hex>")]
-    final_htlc_expiry_delta: Option<u64>,
+    final_tlc_expiry_delta: Option<u64>,
+
+    /// the TLC expiry limit for the whole payment, in milliseconds
+    #[serde_as(as = "Option<U64Hex>")]
+    tlc_expiry_limit: Option<u64>,
 
     /// the encoded invoice to send to the recipient
     invoice: Option<String>,
@@ -312,6 +318,11 @@ pub(crate) struct SendPaymentCommandParams {
 
     /// allow self payment, default is false
     allow_self_payment: Option<bool>,
+
+    /// dry_run for payment, used for check whether we can build valid router and the fee for this payment,
+    /// it's useful for the sender to double check the payment before sending it to the network,
+    /// default is false
+    dry_run: Option<bool>,
 }
 
 /// RPC module for channel management.
@@ -402,7 +413,7 @@ where
                 OpenChannelCommand {
                     peer_id: params.peer_id.clone(),
                     funding_amount: params.funding_amount,
-                    public: params.public.unwrap_or(false),
+                    public: params.public.unwrap_or(true),
                     shutdown_script: params.shutdown_script.clone().map(|s| s.into()),
                     commitment_delay_epoch: params
                         .commitment_delay_epoch
@@ -474,7 +485,7 @@ where
                         remote_balance: state.get_remote_balance(),
                         offered_tlc_balance: state.get_offered_tlc_balance(),
                         received_tlc_balance: state.get_received_tlc_balance(),
-                        created_at: state.get_created_at_in_microseconds(),
+                        created_at: state.get_created_at_in_millis(),
                     })
             })
             .collect();
@@ -618,7 +629,8 @@ where
                     target_pubkey: params.target_pubkey,
                     amount: params.amount,
                     payment_hash: params.payment_hash,
-                    final_htlc_expiry_delta: params.final_htlc_expiry_delta,
+                    final_tlc_expiry_delta: params.final_tlc_expiry_delta,
+                    tlc_expiry_limit: params.tlc_expiry_limit,
                     invoice: params.invoice.clone(),
                     timeout: params.timeout,
                     max_fee_amount: params.max_fee_amount,
@@ -626,6 +638,7 @@ where
                     keysend: params.keysend,
                     udt_type_script: params.udt_type_script.clone().map(|s| s.into()),
                     allow_self_payment: params.allow_self_payment.unwrap_or(false),
+                    dry_run: params.dry_run.unwrap_or(false),
                 },
                 rpc_reply,
             ))
@@ -636,6 +649,7 @@ where
             created_at: response.created_at,
             last_updated_at: response.last_updated_at,
             failed_error: response.failed_error,
+            fee: response.fee,
         })
     }
 
@@ -655,6 +669,7 @@ where
             last_updated_at: response.last_updated_at,
             created_at: response.created_at,
             failed_error: response.failed_error,
+            fee: response.fee,
         })
     }
 }
