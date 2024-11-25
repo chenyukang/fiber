@@ -276,12 +276,6 @@ impl SentMessagesCache {
         self.cache.put(Self::get_message_hash(message), ());
     }
 
-    fn insert_iter<'a, I: IntoIterator<Item = &'a BroadcastMessage>>(&mut self, messages: I) {
-        for message in messages {
-            self.insert(&message);
-        }
-    }
-
     fn contains(&self, message: &BroadcastMessage) -> bool {
         self.cache.contains(&Self::get_message_hash(message))
     }
@@ -289,6 +283,7 @@ impl SentMessagesCache {
 
 #[derive(Default)]
 struct PeerState {
+    session: SessionId,
     // The filter is a cursor that the peer sent to us. We will only send messages to the peer
     // that are newer than the cursor. If the peer has not sent us a filter, we will not actively
     // send messages to the peer. If the peer sends us a new filter, we will update this field,
@@ -311,6 +306,42 @@ struct PeerState {
     sent_messages_cache: SentMessagesCache,
 }
 
+impl PeerState {
+    fn new(session: SessionId) -> Self {
+        Self {
+            session,
+            filter: Default::default(),
+            biggest_cursor_sent: Default::default(),
+            sent_messages_cache: Default::default(),
+        }
+    }
+
+    fn should_send_message(&self, message: &BroadcastMessageWithTimestamp) -> bool {
+        match self.filter {
+            Some(ref filter) => {
+                let cursor = message.cursor();
+                &cursor > &filter
+                    && (self.biggest_cursor_sent < cursor
+                        || !self
+                            .sent_messages_cache
+                            .contains(&&BroadcastMessage::from(message.clone())))
+            }
+            None => return false,
+        }
+    }
+
+    fn update_for_messages(&mut self, messages: &[BroadcastMessageWithTimestamp]) {
+        for message in messages {
+            let cursor = message.cursor();
+            if &cursor > &self.biggest_cursor_sent {
+                self.biggest_cursor_sent = cursor;
+            }
+            let message = BroadcastMessage::from(message.clone());
+            self.sent_messages_cache.insert(&message);
+        }
+    }
+}
+
 pub(crate) struct GossipActorState<S> {
     store: S,
     chain_actor: ActorRef<CkbChainMessage>,
@@ -324,7 +355,6 @@ pub(crate) struct GossipActorState<S> {
     is_syncing: bool,
     // Messages that are pending to be broadcasted to the network.
     pending_broadcast_messages: HashMap<BroadcastMessage, u64>,
-    peer_session_map: HashMap<PeerId, SessionId>,
     peer_states: HashMap<PeerId, PeerState>,
     // The last BroadcastMessagesFilter we sent to a peer. We will maintain
     // a number of filters for each peer, so that we can receive the latest
@@ -332,12 +362,27 @@ pub(crate) struct GossipActorState<S> {
     my_filter_map: HashMap<PeerId, Cursor>,
 }
 
+async fn send_message_to_session(
+    control: &ServiceAsyncControl,
+    session_id: SessionId,
+    message: GossipMessage,
+) -> crate::Result<()> {
+    control
+        .send_message_to(session_id, GOSSIP_PROTOCOL_ID, message.to_molecule_bytes())
+        .await?;
+    Ok(())
+}
+
 impl<S> GossipActorState<S>
 where
     S: GossipMessageStore + Send + Sync + 'static,
 {
+    fn is_peer_connected(&self, peer_id: &PeerId) -> bool {
+        self.peer_states.contains_key(peer_id)
+    }
+
     fn get_peer_session(&self, peer_id: &PeerId) -> Option<SessionId> {
-        self.peer_session_map.get(peer_id).cloned()
+        self.peer_states.get(peer_id).map(|s| s.session)
     }
 
     fn get_latest_cursor(&self) -> Cursor {
@@ -377,9 +422,7 @@ where
         session_id: SessionId,
         message: GossipMessage,
     ) -> crate::Result<()> {
-        self.control
-            .send_message_to(session_id, GOSSIP_PROTOCOL_ID, message.to_molecule_bytes())
-            .await?;
+        send_message_to_session(&self.control, session_id, message).await?;
         Ok(())
     }
 
@@ -828,7 +871,6 @@ where
             inflight_gets: Default::default(),
             is_syncing: true,
             pending_broadcast_messages: Default::default(),
-            peer_session_map: Default::default(),
             peer_states: Default::default(),
             my_filter_map: Default::default(),
         };
@@ -843,7 +885,7 @@ where
     ) -> Result<(), ActorProcessingErr> {
         match message {
             GossipActorMessage::PeerConnected(peer_id, pubkey, session) => {
-                if state.peer_session_map.contains_key(&peer_id) {
+                if state.is_peer_connected(&peer_id) {
                     warn!(
                         "Repeated connection from {:?} for gossip protocol",
                         &peer_id
@@ -854,17 +896,16 @@ where
                     "Saving gossip peer pubkey and session: peer {:?}, pubkey {:?}, session {:?}",
                     &peer_id, &pubkey, &session.id
                 );
-                state.peer_session_map.insert(peer_id.clone(), session.id);
                 state
                     .peer_states
-                    .insert(peer_id.clone(), Default::default());
+                    .insert(peer_id.clone(), PeerState::new(session.id));
             }
             GossipActorMessage::PeerDisconnected(peer_id, session) => {
                 debug!(
                     "Peer disconnected: peer {:?}, session {:?}",
                     &peer_id, &session.id
                 );
-                let _ = state.peer_session_map.remove(&peer_id);
+                let _ = state.peer_states.remove(&peer_id);
             }
             GossipActorMessage::ProcessBroadcastMessage(message) => {
                 if let Err(error) = state
@@ -885,14 +926,13 @@ where
                 {
                     Ok(broadcast_message) => {
                         // This is our own message, so we will broadcast it to all peers immediately.
-                        for (peer, session) in &state.peer_session_map {
-                            let peer_cursor =
-                                state.peer_states.get(peer).and_then(|s| s.filter.as_ref());
-                            match peer_cursor {
+                        for (peer, peer_state) in &state.peer_states {
+                            let session = peer_state.session;
+                            match &peer_state.filter {
                                 Some(cursor) if cursor < &broadcast_message.cursor() => {
                                     state
                                         .send_message_to_session(
-                                            *session,
+                                            session,
                                             GossipMessage::BroadcastMessagesFilterResult(
                                                 broadcast_message
                                                     .create_broadcast_messages_filter_result(),
@@ -903,7 +943,7 @@ where
                                 _ => {
                                     debug!(
                                         "Ignoring broadcast message for peer {:?}: {:?} as its cursor is {:?}",
-                                        peer, &broadcast_message, peer_cursor
+                                        peer, &broadcast_message, &peer_state.filter
                                     );
                                 }
                             }
@@ -922,7 +962,7 @@ where
             }
             GossipActorMessage::TickNetworkMaintenance => {
                 debug!("Network maintenance ticked, current state: num of peers: {}, inflight requests: {}, is syncing: {}",
-                    state.peer_session_map.len(), state.inflight_gets.len(), state.is_syncing);
+                    state.peer_states.len(), state.inflight_gets.len(), state.is_syncing);
 
                 let now = now_timestamp();
 
@@ -933,7 +973,7 @@ where
                 let current_num_peers = state.inflight_gets.len();
                 if current_num_peers < NUM_SIMULTANEOUS_GET_REQUESTS && state.is_syncing {
                     let peers = state
-                        .peer_session_map
+                        .peer_states
                         .keys()
                         .take(NUM_SIMULTANEOUS_GET_REQUESTS - current_num_peers)
                         .cloned()
@@ -946,12 +986,12 @@ where
 
                 state
                     .my_filter_map
-                    .retain(|k, _| state.peer_session_map.contains_key(k));
+                    .retain(|k, _| state.peer_states.contains_key(k));
 
                 let current_num_peers = state.my_filter_map.len();
                 if current_num_peers < NUM_PEERS_TO_RECEIVE_BROADCASTS && !state.is_syncing {
                     let peers = state
-                        .peer_session_map
+                        .peer_states
                         .keys()
                         .take(NUM_PEERS_TO_RECEIVE_BROADCASTS - current_num_peers)
                         .cloned()
@@ -974,37 +1014,26 @@ where
                     "Trying to rebroadcast pending messages to peers: {:?}",
                     &broadcast_messages
                 );
-                for (peer, session) in &state.peer_session_map {
-                    let (filter_cursor, peer_state) = match state
-                        .peer_states
-                        .get(peer)
-                        .and_then(|s| s.filter.as_ref().map(|f| (f, s)))
-                    {
-                        Some((filter, state)) => (filter, state),
-                        _ => {
-                            continue;
-                        }
-                    };
+                for peer_state in state.peer_states.values_mut() {
                     let messages = broadcast_messages
                         .iter()
-                        .filter_map(|m| {
-                            let c = m.cursor();
-                            let m = BroadcastMessage::from(m.clone());
-                            (&c > filter_cursor || !peer_state.sent_messages_cache.contains(&m))
-                                .then_some(m)
-                        })
+                        .filter_map(|m| peer_state.should_send_message(&m).then_some(m.clone()))
                         .collect::<Vec<_>>();
+                    if messages.is_empty() {
+                        continue;
+                    }
+                    peer_state.update_for_messages(messages.as_slice());
                     for chunk in messages.chunks(DEFAULT_NUM_OF_BROADCAST_MESSAGE as usize) {
-                        state
-                            .send_message_to_session(
-                                *session,
-                                GossipMessage::BroadcastMessagesFilterResult(
-                                    BroadcastMessagesFilterResult {
-                                        messages: chunk.to_vec(),
-                                    },
-                                ),
-                            )
-                            .await?;
+                        send_message_to_session(
+                            &state.control,
+                            peer_state.session,
+                            GossipMessage::BroadcastMessagesFilterResult(
+                                BroadcastMessagesFilterResult {
+                                    messages: chunk.into_iter().cloned().map(Into::into).collect(),
+                                },
+                            ),
+                        )
+                        .await?;
                     }
                 }
             }
@@ -1015,46 +1044,45 @@ where
                         after_cursor,
                     }) => {
                         check_chain_hash(&chain_hash)?;
-                        let mut biggest_cursor_sent = after_cursor.clone();
-                        let mut sent_messages_cache = SentMessagesCache::new();
+                        let peer_state = match state.peer_states.get_mut(&peer_id) {
+                            Some(peer_state) => {
+                                peer_state.filter = Some(after_cursor.clone());
+                                peer_state.biggest_cursor_sent = after_cursor.clone();
+                                peer_state
+                            }
+                            None => {
+                                warn!(
+                                    "Received BroadcastMessagesFilter from unknown peer: {:?}",
+                                    &peer_id
+                                );
+                                return Ok(());
+                            }
+                        };
                         // Immediately send existing messages after the cursor in the store to the peer.
                         loop {
                             let messages = state.store.get_broadcast_messages(
-                                &biggest_cursor_sent,
+                                &peer_state.biggest_cursor_sent,
                                 Some(DEFAULT_NUM_OF_BROADCAST_MESSAGE),
                             );
-                            match messages.last() {
-                                Some(last_message) => {
-                                    biggest_cursor_sent = last_message.cursor();
-                                }
-                                None => {
-                                    break;
-                                }
+                            if messages.is_empty() {
+                                break;
                             }
-                            let messages = messages
-                                .into_iter()
-                                .map(Into::into)
-                                .collect::<Vec<BroadcastMessage>>();
-                            sent_messages_cache.insert_iter(&messages);
-                            let result = GossipMessage::BroadcastMessagesFilterResult(
-                                BroadcastMessagesFilterResult { messages },
+                            peer_state.update_for_messages(messages.as_slice());
+                            let message = GossipMessage::BroadcastMessagesFilterResult(
+                                BroadcastMessagesFilterResult {
+                                    messages: messages.iter().map(|m| m.clone().into()).collect(),
+                                },
                             );
-                            if let Err(error) = state.send_message_to_peer(&peer_id, result).await {
-                                error!(
+                            if let Err(error) =
+                                send_message_to_session(&state.control, peer_state.session, message)
+                                    .await
+                            {
+                                warn!(
                                     "Failed to send BroadcastMessagesFilterResult to peer {:?}: {:?}",
                                     &peer_id, error
                                 );
-                                break;
                             }
                         }
-                        state.peer_states.insert(
-                            peer_id,
-                            PeerState {
-                                filter: Some(after_cursor),
-                                biggest_cursor_sent,
-                                sent_messages_cache,
-                            },
-                        );
                     }
                     GossipMessage::BroadcastMessagesFilterResult(
                         BroadcastMessagesFilterResult { messages },
