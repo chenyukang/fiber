@@ -381,6 +381,7 @@ where
                 Ok(())
             }
             FiberChannelMessage::CommitmentSigned(commitment_signed) => {
+                self.flush_staging_tlc_operations(state).await;
                 state.handle_commitment_signed_message(commitment_signed, &self.network)?;
                 if let ChannelState::SigningCommitment(flags) = state.state {
                     if !flags.contains(SigningCommitmentFlags::OUR_COMMITMENT_SIGNED_SENT) {
@@ -400,6 +401,7 @@ where
                             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                     }
                 }
+                self.try_to_apply_add_tlcs(state).await;
                 self.try_to_forward_pending_tlc(state).await;
                 self.try_to_settle_down_tlc(state);
                 self.try_to_send_remove_tlcs(state).await;
@@ -476,71 +478,17 @@ where
                 Ok(())
             }
             FiberChannelMessage::AddTlc(add_tlc) => {
-                let tlc_id = add_tlc.tlc_id;
-                let tlc_count = state.tlcs.len();
-                if let Err(e) = self.handle_add_tlc_peer_message(state, add_tlc).await {
-                    // we assume that TLC was not inserted into our state,
-                    // so we can safely send RemoveTlc message to the peer
-                    // note this new add_tlc may be trying to add a duplicate tlc,
-                    // so we use tlc count to make sure no new tlc was added
-                    // and only send RemoveTlc message to peer if the TLC is not in our state
-                    error!("Error handling AddTlc message: {:?}", e);
-                    assert!(tlc_count == state.tlcs.len());
-                    let error_detail = self.get_tlc_detail_error(state, &e).await;
-                    if state.get_received_tlc(tlc_id).is_none() {
-                        self.network
-                            .send_message(NetworkActorMessage::new_command(
-                                NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
-                                    state.get_remote_peer_id(),
-                                    FiberMessage::remove_tlc(RemoveTlc {
-                                        channel_id: state.get_id(),
-                                        tlc_id,
-                                        reason: RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
-                                            error_detail,
-                                        )),
-                                    }),
-                                )),
-                            ))
-                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                    }
-                    return Err(e);
-                }
+                state.check_for_tlc_update(Some(add_tlc.amount))?;
+                state
+                    .staging_tlc_operations
+                    .push(TlcOperation::AddTlc(add_tlc.clone()));
                 Ok(())
             }
             FiberChannelMessage::RemoveTlc(remove_tlc) => {
                 state.check_for_tlc_update(None)?;
-                let channel_id = state.get_id();
-
-                let remove_reason = remove_tlc.reason.clone();
-                let tlc_details = state
-                    .remove_tlc_with_reason(TLCId::Offered(remove_tlc.tlc_id), &remove_reason)?;
-                if let (
-                    Some(ref udt_type_script),
-                    RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill { payment_preimage }),
-                ) = (state.funding_udt_type_script.clone(), &remove_reason)
-                {
-                    let mut tlc = tlc_details.tlc.clone();
-                    tlc.payment_preimage = Some(*payment_preimage);
-                    self.subscribers
-                        .settled_tlcs_subscribers
-                        .send(TlcNotification {
-                            tlc,
-                            channel_id,
-                            script: udt_type_script.clone(),
-                        });
-                }
-                if tlc_details.tlc.previous_tlc.is_none() {
-                    // only the original sender of the TLC should send `TlcRemoveReceived` event
-                    // because only the original sender cares about the TLC event to settle the payment
-                    self.network
-                        .send_message(NetworkActorMessage::new_event(
-                            NetworkActorEvent::TlcRemoveReceived(
-                                tlc_details.tlc.payment_hash,
-                                remove_reason,
-                            ),
-                        ))
-                        .expect("myself alive");
-                }
+                state
+                    .staging_tlc_operations
+                    .push(TlcOperation::RemoveTlc(remove_tlc.clone()));
                 Ok(())
             }
             FiberChannelMessage::Shutdown(shutdown) => {
@@ -701,6 +649,44 @@ where
         )
     }
 
+    async fn flush_staging_tlc_operations(&self, state: &mut ChannelActorState) {
+        let operations = state.staging_tlc_operations.clone();
+        for operation in operations {
+            match operation {
+                TlcOperation::AddTlc(add_tlc) => {
+                    let _ = self
+                        .insert_tlc_from_peer_message(state, add_tlc)
+                        .await
+                        .map_err(|e| {
+                            error!("Error handling AddTlc command: {:?}", e);
+                        });
+                }
+                TlcOperation::RemoveTlc(remove_tlc) => {
+                    let _ = self
+                        .handle_remove_tlc_peer_message(state, remove_tlc)
+                        .await
+                        .map_err(|e| {
+                            error!("Error handling RemoveTlc command: {:?}", e);
+                        });
+                }
+            }
+        }
+    }
+
+    async fn try_to_apply_add_tlcs(&self, state: &mut ChannelActorState) {
+        let operations = std::mem::take(&mut state.staging_tlc_operations);
+        for operation in operations {
+            if let TlcOperation::AddTlc(add_tlc) = operation {
+                let _ = self
+                    .handle_add_tlc_peer_message(state, add_tlc)
+                    .await
+                    .map_err(|e| {
+                        error!("Error handling AddTlc command: {:?}", e);
+                    });
+            }
+        }
+    }
+
     async fn try_to_forward_pending_tlc(&self, state: &mut ChannelActorState) {
         let tlc_infos = state.get_tlcs_for_forwarding();
         for info in tlc_infos {
@@ -751,8 +737,8 @@ where
 
     fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState) {
         let tlcs = state.get_tlcs_for_settle_down();
-        let mut update_invoice_payment_hash = false;
         for tlc_info in tlcs {
+            let mut update_invoice_payment_hash = false;
             let tlc = tlc_info.tlc.clone();
             if let Some(invoice) = self.store.get_invoice(&tlc.payment_hash) {
                 let status = self.get_invoice_status(&invoice);
@@ -780,7 +766,6 @@ where
                     }
                 }
             }
-
             let preimage = if let Some(preimage) = tlc.payment_preimage {
                 preimage
             } else if let Some(preimage) = self.store.get_invoice_preimage(&tlc.payment_hash) {
@@ -797,7 +782,6 @@ where
                 }),
             };
             let result = self.handle_remove_tlc_command(state, command);
-            info!("try to settle down tlc: {:?} result: {:?}", &tlc, &result);
             if result.is_ok() && update_invoice_payment_hash {
                 let _ = self
                     .store
@@ -808,22 +792,18 @@ where
         }
     }
 
-    async fn handle_add_tlc_peer_message(
+    async fn check_tlc_from_peer_message(
         &self,
         state: &mut ChannelActorState,
         add_tlc: AddTlc,
     ) -> Result<(), ProcessingChannelError> {
-        state.check_for_tlc_update(Some(add_tlc.amount))?;
-        state.check_tlc_expiry(add_tlc.expiry)?;
-
-        // check the onion_packet is valid or not, if not, we should return an error.
-        // If there is a next hop, we should send the AddTlc message to the next hop.
-        // If this is the last hop, we should check the payment hash and amount and then
-        // try to fulfill the payment, find the corresponding payment preimage from payment hash.
-        let mut preimage = None;
-        let mut peeled_packet_bytes: Option<Vec<u8>> = None;
         let mut update_invoice_payment_hash: Option<Hash256> = None;
 
+        let tlc = state
+            .get_received_tlc(add_tlc.tlc_id)
+            .expect("tlc exists")
+            .tlc
+            .clone();
         if !add_tlc.onion_packet.is_empty() {
             // TODO: Here we call network actor to peel the onion packet. Indeed, this message is forwarded from
             // the network actor when it handles `FiberMessage::ChannelNormalOperation`. A better alternative is
@@ -870,10 +850,11 @@ where
                 // if this is the last hop, store the preimage.
                 // though we will RemoveTlcFulfill the TLC in try_to_settle_down_tlc function,
                 // here we can do error check early here for better error handling.
-                preimage = peeled_packet
+                let preimage = peeled_packet
                     .current
                     .preimage
                     .or_else(|| self.store.get_invoice_preimage(&add_tlc.payment_hash));
+                state.set_received_tlc_preimage(tlc.id.into(), preimage);
                 if let Some(preimage) = preimage {
                     let filled_payment_hash: Hash256 = add_tlc.hash_algorithm.hash(preimage).into();
                     if add_tlc.payment_hash != filled_payment_hash {
@@ -883,7 +864,7 @@ where
                     return Err(ProcessingChannelError::FinalIncorrectPaymentHash);
                 }
             } else {
-                peeled_packet_bytes = Some(peeled_packet.serialize());
+                state.set_received_tlc_peeled_packet(tlc.id.into(), peeled_packet.serialize());
                 assert!(received_amount >= forward_amount);
                 let forward_fee = received_amount.saturating_sub(forward_amount);
                 let fee_rate: u128 = state
@@ -903,9 +884,6 @@ where
             }
         }
 
-        let tlc =
-            state.create_inbounding_tlc(add_tlc.clone(), preimage, peeled_packet_bytes.clone())?;
-        state.insert_tlc(tlc.clone())?;
         if let Some(payment_hash) = update_invoice_payment_hash {
             self.store
                 .update_invoice_status(&payment_hash, CkbInvoiceStatus::Received)
@@ -921,11 +899,93 @@ where
                 });
         }
         warn!("created tlc: {:?}", &tlc);
+        Ok(())
+    }
+
+    async fn handle_add_tlc_peer_message(
+        &self,
+        state: &mut ChannelActorState,
+        add_tlc: AddTlc,
+    ) -> Result<(), ProcessingChannelError> {
+        state.check_tlc_expiry(add_tlc.expiry)?;
+
+        let tlc_id = add_tlc.tlc_id;
+        if let Err(e) = self.check_tlc_from_peer_message(state, add_tlc).await {
+            // we assume that TLC was not inserted into our state,
+            // so we can safely send RemoveTlc message to the peer
+            // note this new add_tlc may be trying to add a duplicate tlc,
+            // so we use tlc count to make sure no new tlc was added
+            // and only send RemoveTlc message to peer if the TLC is not in our state
+            error!(
+                "Error handling handle_add_tlc_peer_message message: {:?}",
+                e
+            );
+            let error_detail = self.get_tlc_detail_error(state, &e).await;
+            let reason = RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(error_detail));
+            let command = RemoveTlcCommand { id: tlc_id, reason };
+            self.handle_remove_tlc_command(state, command)?;
+            return Err(e);
+        }
 
         // TODO: here we didn't send any ack message to the peer.
         // The peer may falsely believe that we have already processed this message,
         // while we have crashed. We need a way to make sure that the peer will resend
         // this message, and our processing of this message is idempotent.
+        Ok(())
+    }
+
+    async fn insert_tlc_from_peer_message(
+        &self,
+        state: &mut ChannelActorState,
+        add_tlc: AddTlc,
+    ) -> Result<(), ProcessingChannelError> {
+        // check the onion_packet is valid or not, if not, we should return an error.
+        // If there is a next hop, we should send the AddTlc message to the next hop.
+        // If this is the last hop, we should check the payment hash and amount and then
+        // try to fulfill the payment, find the corresponding payment preimage from payment hash.
+
+        let tlc = state.create_inbounding_tlc(add_tlc.clone(), None, vec![].into())?;
+        state.insert_tlc(tlc.clone())?;
+
+        Ok(())
+    }
+
+    async fn handle_remove_tlc_peer_message(
+        &self,
+        state: &mut ChannelActorState,
+        remove_tlc: RemoveTlc,
+    ) -> Result<(), ProcessingChannelError> {
+        let channel_id = state.get_id();
+        let remove_reason = remove_tlc.reason.clone();
+        let tlc_details =
+            state.remove_tlc_with_reason(TLCId::Offered(remove_tlc.tlc_id), &remove_reason)?;
+        if let (
+            Some(ref udt_type_script),
+            RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill { payment_preimage }),
+        ) = (state.funding_udt_type_script.clone(), &remove_reason)
+        {
+            let mut tlc = tlc_details.tlc.clone();
+            tlc.payment_preimage = Some(*payment_preimage);
+            self.subscribers
+                .settled_tlcs_subscribers
+                .send(TlcNotification {
+                    tlc,
+                    channel_id,
+                    script: udt_type_script.clone(),
+                });
+        }
+        if tlc_details.tlc.previous_tlc.is_none() {
+            // only the original sender of the TLC should send `TlcRemoveReceived` event
+            // because only the original sender cares about the TLC event to settle the payment
+            self.network
+                .send_message(NetworkActorMessage::new_event(
+                    NetworkActorEvent::TlcRemoveReceived(
+                        tlc_details.tlc.payment_hash,
+                        remove_reason,
+                    ),
+                ))
+                .expect("myself alive");
+        }
         Ok(())
     }
 
@@ -3596,6 +3656,18 @@ impl ChannelActorState {
         }
     }
 
+    pub(crate) fn set_received_tlc_preimage(&mut self, tlc_id: u64, preimage: Option<Hash256>) {
+        if let Some(tlc) = self.tlcs.get_mut(&TLCId::Received(tlc_id)) {
+            tlc.tlc.payment_preimage = preimage;
+        }
+    }
+
+    pub(crate) fn set_received_tlc_peeled_packet(&mut self, tlc_id: u64, peeled_packet: Vec<u8>) {
+        if let Some(tlc) = self.tlcs.get_mut(&TLCId::Received(tlc_id)) {
+            tlc.tlc.onion_packet = peeled_packet;
+        }
+    }
+
     pub fn insert_tlc(&mut self, tlc: TLC) -> Result<DetailedTLCInfo, ProcessingChannelError> {
         let payment_hash = tlc.payment_hash;
         if let Some(tlc) = self
@@ -3744,6 +3816,7 @@ impl ChannelActorState {
                     }
                 };
                 current.removed_at = Some((removed_at, reason.clone()));
+                current.relay_status = TlcRelayStatus::Removed;
                 current
             }
         };
@@ -4617,7 +4690,7 @@ impl ChannelActorState {
         // can be broadcasted to the network if necessary
         let num = self.get_current_commitment_number(false);
 
-        debug!(
+        info!(
             "Successfully handled commitment signed message: {:?}, tx: {:?}",
             &commitment_signed, &tx
         );

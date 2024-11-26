@@ -905,7 +905,6 @@ fn test_send_payment_validate_htlc_expiry_delta() {
     };
 
     let result = SendPaymentData::new(send_command);
-    eprintln!("{:?}", result);
     assert!(result.is_err());
     assert!(result
         .unwrap_err()

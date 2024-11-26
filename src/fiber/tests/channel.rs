@@ -698,7 +698,6 @@ async fn test_network_send_payment_dry_run_can_still_query() {
         ))
     };
     let res = call!(node_a.network_actor, message).expect("node_a alive");
-    eprintln!("{:?}", res);
     assert!(res.is_ok());
 }
 
@@ -764,7 +763,6 @@ async fn test_network_send_payment_dry_run_will_not_create_payment_session() {
         ))
     };
     let res = call!(node_a.network_actor, message).expect("node_a alive");
-    eprintln!("{:?}", res);
     assert!(res.is_ok());
 }
 
