@@ -3664,6 +3664,9 @@ impl ChannelActorState {
 
     pub(crate) fn set_received_tlc_peeled_packet(&mut self, tlc_id: u64, peeled_packet: Vec<u8>) {
         if let Some(tlc) = self.tlcs.get_mut(&TLCId::Received(tlc_id)) {
+            if !peeled_packet.is_empty() {
+                tlc.relay_status = TlcRelayStatus::WaitingForward;
+            }
             tlc.tlc.onion_packet = peeled_packet;
         }
     }
@@ -3816,7 +3819,6 @@ impl ChannelActorState {
                     }
                 };
                 current.removed_at = Some((removed_at, reason.clone()));
-                current.relay_status = TlcRelayStatus::Removed;
                 current
             }
         };
