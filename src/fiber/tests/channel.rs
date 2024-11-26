@@ -378,6 +378,83 @@ async fn test_network_send_payment_normal_keysend_workflow() {
 }
 
 #[tokio::test]
+async fn test_network_send_previous_tlc_error() {
+    init_tracing();
+
+    let _span = tracing::info_span!("node", node = "test").entered();
+    let node_a_funding_amount = 100000000000;
+    let node_b_funding_amount = 6200000000;
+
+    let (node_a, node_b, new_channel_id) =
+        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, true)
+            .await;
+    // Wait for the channel announcement to be broadcasted
+    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+
+    // step1: try to send a invalid onion_packet with add_tlc
+    // ==================================================================================
+    let message = |rpc_reply| -> NetworkActorMessage {
+        NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
+            ChannelCommandWithId {
+                channel_id: new_channel_id,
+                command: ChannelCommand::AddTlc(
+                    AddTlcCommand {
+                        amount: 10000,
+                        preimage: None,
+                        payment_hash: Some(gen_sha256_hash()),
+                        expiry: DEFAULT_EXPIRY_DELTA + now_timestamp_as_millis_u64(),
+                        hash_algorithm: HashAlgorithm::Sha256,
+                        onion_packet: vec![1], // invalid onion packet
+                        previous_tlc: None,
+                    },
+                    rpc_reply,
+                ),
+            },
+        ))
+    };
+    let res = call!(node_a.network_actor, message).expect("node_a alive");
+    assert!(res.is_ok());
+    // sleep 2 seconds to make sure node_b processed handle_add_tlc_peer_message
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+
+    // step2: try to send the second valid payment, expect it to success
+    let message = |rpc_reply| -> NetworkActorMessage {
+        NetworkActorMessage::Command(NetworkActorCommand::SendPayment(
+            SendPaymentCommand {
+                target_pubkey: Some(node_b.pubkey),
+                amount: Some(10000),
+                payment_hash: None,
+                final_tlc_expiry_delta: None,
+                invoice: None,
+                timeout: None,
+                max_fee_amount: None,
+                max_parts: None,
+                keysend: Some(true),
+                udt_type_script: None,
+                allow_self_payment: false,
+                dry_run: false,
+                tlc_expiry_limit: None,
+            },
+            rpc_reply,
+        ))
+    };
+
+    let res = call!(node_a.network_actor, message).expect("node_a alive");
+    eprintln!("send payment {:?}", res);
+    assert!(res.is_ok());
+    let payment_hash = res.unwrap().payment_hash;
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    let message = |rpc_reply| -> NetworkActorMessage {
+        NetworkActorMessage::Command(NetworkActorCommand::GetPayment(payment_hash, rpc_reply))
+    };
+    let res = call!(node_a.network_actor, message).expect("node_a alive");
+    assert!(res.is_ok());
+    assert_eq!(res.unwrap().status, PaymentSessionStatus::Success);
+}
+
+#[tokio::test]
 async fn test_network_send_payment_keysend_with_payment_hash() {
     init_tracing();
 
