@@ -478,6 +478,8 @@ where
                 Ok(())
             }
             FiberChannelMessage::AddTlc(add_tlc) => {
+                // TODO: here we only check the error which sender didn't follow agreed rules,
+                //       if any error happened here we need go to shutdown procedure
                 state.check_for_tlc_update(Some(add_tlc.amount))?;
                 state
                     .staging_tlc_operations
