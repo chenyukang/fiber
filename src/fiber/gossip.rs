@@ -970,11 +970,17 @@ where
                     .inflight_gets
                     .retain(|_, (v, _)| now - *v < GET_REQUEST_TIMEOUT.as_millis() as u64);
 
+                let current_peers = state
+                    .inflight_gets
+                    .keys()
+                    .map(|p| p.0.clone())
+                    .collect::<Vec<_>>();
                 let current_num_peers = state.inflight_gets.len();
                 if current_num_peers < NUM_SIMULTANEOUS_GET_REQUESTS && state.is_syncing {
                     let peers = state
                         .peer_states
                         .keys()
+                        .filter(|p| !current_peers.contains(p))
                         .take(NUM_SIMULTANEOUS_GET_REQUESTS - current_num_peers)
                         .cloned()
                         .collect::<Vec<_>>();
@@ -993,6 +999,7 @@ where
                     let peers = state
                         .peer_states
                         .keys()
+                        .filter(|p| !state.my_filter_map.contains_key(p))
                         .take(NUM_PEERS_TO_RECEIVE_BROADCASTS - current_num_peers)
                         .cloned()
                         .collect::<Vec<_>>();
