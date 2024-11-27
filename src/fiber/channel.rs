@@ -2051,6 +2051,82 @@ pub enum TlcOperation {
     RemoveTlc(RemoveTlc),
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingTlcs {
+    tlcs: Vec<TlcOperation>,
+    committed_index: usize,
+    next_tlc_id: u64,
+}
+
+impl PendingTlcs {
+    fn new() -> Self {
+        Self {
+            tlcs: Vec::new(),
+            committed_index: 0,
+            next_tlc_id: 0,
+        }
+    }
+
+    pub fn add_tlc_operation(&mut self, tlc_op: TlcOperation) {
+        self.tlcs.push(tlc_op);
+    }
+
+    pub fn get_staging_tlcs(&self) -> &[TlcOperation] {
+        &self.tlcs[self.committed_index..]
+    }
+
+    pub fn get_committed_tlcs(&self) -> &[TlcOperation] {
+        &self.tlcs[..self.committed_index]
+    }
+
+    pub fn commit_tlcs(&mut self, tcls: &[TlcOperation]) {
+        //add or remove tlc from self.tlcs
+        self.committed_index = self.tlcs.len() - 1;
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct State {
+    local_pending_tlcs: PendingTlcs,
+    remote_pending_tlcs: PendingTlcs,
+}
+
+impl State {
+    pub fn add_local_tlc_operation(&mut self, tlc_op: TlcOperation) {
+        self.local_pending_tlcs.add_tlc_operation(tlc_op);
+    }
+
+    pub fn add_remote_tlc_operation(&mut self, tlc_op: TlcOperation) {
+        self.remote_pending_tlcs.add_tlc_operation(tlc_op);
+    }
+
+    fn build_local_commitment(&self) {
+        let tlcs = self
+            .local_pending_tlcs
+            .get_staging_tlcs()
+            .into_iter()
+            .chain(self.remote_pending_tlcs.get_committed_tlcs().into_iter());
+    }
+
+    fn build_remote_commitment(&self) {
+        let tlcs = self
+            .remote_pending_tlcs
+            .get_staging_tlcs()
+            .into_iter()
+            .chain(self.local_pending_tlcs.get_committed_tlcs().into_iter());
+    }
+
+    fn commit_local_tlcs(&mut self) {
+        self.local_pending_tlcs
+            .commit_tlcs(self.remote_pending_tlcs.get_committed_tlcs());
+    }
+
+    fn commit_remote_tlcs(&mut self) {
+        self.remote_pending_tlcs
+            .commit_tlcs(self.local_pending_tlcs.get_committed_tlcs());
+    }
+}
+
 #[serde_as]
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ChannelActorState {
