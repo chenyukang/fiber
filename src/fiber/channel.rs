@@ -2044,7 +2044,7 @@ impl TLCId {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub enum TlcOperation {
     AddTlc(AddTlc),
     RemoveTlc(RemoveTlc),
@@ -2058,12 +2058,20 @@ pub struct PendingTlcs {
 }
 
 impl PendingTlcs {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             tlcs: Vec::new(),
             committed_index: 0,
             next_tlc_id: 0,
         }
+    }
+
+    pub fn next_tlc_id(&self) -> u64 {
+        self.next_tlc_id
+    }
+
+    pub fn increment_next_tlc_id(&mut self) {
+        self.next_tlc_id += 1;
     }
 
     pub fn add_tlc_operation(&mut self, tlc_op: TlcOperation) {
@@ -2079,7 +2087,26 @@ impl PendingTlcs {
     }
 
     pub fn commit_tlcs(&mut self, tcls: &[TlcOperation]) {
-        //add or remove tlc from self.tlcs
+        for tlc in tcls {
+            match tlc {
+                TlcOperation::AddTlc(add_tlc) => {
+                    if self.tlcs.iter().any(|t| t == tlc) {
+                        continue;
+                    } else {
+                        self.tlcs.push(TlcOperation::AddTlc(add_tlc.clone()));
+                    }
+                }
+                TlcOperation::RemoveTlc(remove_tlc) => {
+                    if let Some(index) = self
+                        .tlcs
+                        .iter()
+                        .position(|t| matches!(t, TlcOperation::AddTlc(add_tlc) if add_tlc.tlc_id == remove_tlc.tlc_id))
+                    {
+                        self.tlcs.remove(index);
+                    }
+                }
+            }
+        }
         self.committed_index = self.tlcs.len() - 1;
     }
 }

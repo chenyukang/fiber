@@ -1381,7 +1381,7 @@ impl TryFrom<molecule_fiber::RemoveTlcReason> for RemoveTlcReason {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RemoveTlc {
     pub channel_id: Hash256,
     pub tlc_id: u64,
