@@ -2086,28 +2086,20 @@ impl PendingTlcs {
         &self.tlcs[..self.committed_index]
     }
 
-    pub fn commit_tlcs(&mut self, tcls: &[TlcOperation]) {
+    pub fn commit_tlcs(&mut self, tcls: &[TlcOperation]) -> Vec<TlcOperation> {
+        let mut pending_tlcs = vec![];
         for tlc in tcls {
-            match tlc {
-                TlcOperation::AddTlc(add_tlc) => {
-                    if self.tlcs.iter().any(|t| t == tlc) {
-                        continue;
-                    } else {
-                        self.tlcs.push(TlcOperation::AddTlc(add_tlc.clone()));
-                    }
-                }
-                TlcOperation::RemoveTlc(remove_tlc) => {
-                    if let Some(index) = self
-                        .tlcs
-                        .iter()
-                        .position(|t| matches!(t, TlcOperation::AddTlc(add_tlc) if add_tlc.tlc_id == remove_tlc.tlc_id))
-                    {
-                        self.tlcs.remove(index);
-                    }
-                }
+            if self.tlcs.iter().any(|t| t == tlc) {
+                continue;
+            } else {
+                self.tlcs.push(tlc.clone());
             }
         }
+        for tlc_op in self.get_staging_tlcs() {
+            pending_tlcs.push(tlc_op.clone());
+        }
         self.committed_index = self.tlcs.len() - 1;
+        return pending_tlcs;
     }
 }
 
