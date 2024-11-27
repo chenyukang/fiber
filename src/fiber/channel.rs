@@ -2050,9 +2050,37 @@ pub enum TlcOperation {
     RemoveTlc(RemoveTlc),
 }
 
+impl TlcOperation {
+    pub fn tlc_id(&self) -> u64 {
+        match self {
+            TlcOperation::AddTlc(add_tlc) => add_tlc.tlc_id,
+            TlcOperation::RemoveTlc(remove_tlc) => remove_tlc.tlc_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct TlcInfo {
+    pub id: TLCId,
+    pub tlc_op: TlcOperation,
+}
+
+impl TlcInfo {
+    pub fn flip(&self) -> Self {
+        Self {
+            id: self.id.flip(),
+            tlc_op: self.tlc_op.clone(),
+        }
+    }
+
+    pub fn is_symmetric(&self, other: &Self) -> bool {
+        self.id == other.id.flip() && self.tlc_op == other.tlc_op
+    }
+}
+
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct PendingTlcs {
-    tlcs: Vec<TlcOperation>,
+    tlcs: Vec<TlcInfo>,
     committed_index: usize,
     next_tlc_id: u64,
 }
@@ -2074,19 +2102,19 @@ impl PendingTlcs {
         self.next_tlc_id += 1;
     }
 
-    pub fn add_tlc_operation(&mut self, tlc_op: TlcOperation) {
+    pub fn add_tlc_operation(&mut self, tlc_op: TlcInfo) {
         self.tlcs.push(tlc_op);
     }
 
-    pub fn get_staging_tlcs(&self) -> &[TlcOperation] {
+    pub fn get_staging_tlcs(&self) -> &[TlcInfo] {
         &self.tlcs[self.committed_index..]
     }
 
-    pub fn get_committed_tlcs(&self) -> &[TlcOperation] {
+    pub fn get_committed_tlcs(&self) -> &[TlcInfo] {
         &self.tlcs[..self.committed_index]
     }
 
-    pub fn commit_tlcs(&mut self, tcls: &[TlcOperation]) -> Vec<TlcOperation> {
+    pub fn commit_tlcs(&mut self, tcls: &[TlcInfo]) -> Vec<TlcInfo> {
         let mut pending_tlcs = vec![];
         for tlc in tcls {
             if self.tlcs.iter().any(|t| t == tlc) {
@@ -2111,14 +2139,38 @@ pub(crate) struct TlcState {
 
 impl TlcState {
     pub fn add_local_tlc_operation(&mut self, tlc_op: TlcOperation) {
-        self.local_pending_tlcs.add_tlc_operation(tlc_op);
+        let tlc_info = TlcInfo {
+            id: TLCId::Offered(tlc_op.tlc_id()),
+            tlc_op,
+        };
+        self.local_pending_tlcs.add_tlc_operation(tlc_info);
+    }
+
+    pub fn next_local_tlc_id(&self) -> u64 {
+        self.local_pending_tlcs.next_tlc_id()
+    }
+
+    pub fn increment_local_tlc_id(&mut self) {
+        self.local_pending_tlcs.increment_next_tlc_id();
+    }
+
+    pub fn next_remote_tlc_id(&self) -> u64 {
+        self.remote_pending_tlcs.next_tlc_id()
+    }
+
+    pub fn increment_remote_tlc_id(&mut self) {
+        self.remote_pending_tlcs.increment_next_tlc_id();
     }
 
     pub fn add_remote_tlc_operation(&mut self, tlc_op: TlcOperation) {
-        self.remote_pending_tlcs.add_tlc_operation(tlc_op);
+        let tlc_info = TlcInfo {
+            id: TLCId::Received(tlc_op.tlc_id()),
+            tlc_op,
+        };
+        self.remote_pending_tlcs.add_tlc_operation(tlc_info);
     }
 
-    pub fn build_local_commitment(&self) -> Vec<TlcOperation> {
+    pub fn build_local_commitment(&self) -> Vec<TlcInfo> {
         let tlcs = self
             .local_pending_tlcs
             .get_staging_tlcs()
@@ -2127,7 +2179,7 @@ impl TlcState {
         tlcs.map(|tlc| tlc.clone()).collect()
     }
 
-    pub fn build_remote_commitment(&self) -> Vec<TlcOperation> {
+    pub fn build_remote_commitment(&self) -> Vec<TlcInfo> {
         let tlcs = self
             .remote_pending_tlcs
             .get_staging_tlcs()
@@ -2136,12 +2188,12 @@ impl TlcState {
         tlcs.map(|tlc| tlc.clone()).collect()
     }
 
-    pub fn commit_local_tlcs(&mut self) -> Vec<TlcOperation> {
+    pub fn commit_local_tlcs(&mut self) -> Vec<TlcInfo> {
         self.local_pending_tlcs
             .commit_tlcs(self.remote_pending_tlcs.get_committed_tlcs())
     }
 
-    pub fn commit_remote_tlcs(&mut self) -> Vec<TlcOperation> {
+    pub fn commit_remote_tlcs(&mut self) -> Vec<TlcInfo> {
         self.remote_pending_tlcs
             .commit_tlcs(self.local_pending_tlcs.get_committed_tlcs())
     }

@@ -1,4 +1,4 @@
-use crate::fiber::channel::{TlcOperation, TlcState};
+use crate::fiber::channel::{TlcInfo, TlcOperation, TlcState};
 use crate::fiber::config::MAX_PAYMENT_TLC_EXPIRY_LIMIT;
 use crate::fiber::graph::PaymentSessionStatus;
 use crate::fiber::network::SendPaymentCommand;
@@ -56,6 +56,10 @@ fn test_derive_private_and_public_tlc_keys() {
     assert_eq!(derived_privkey.pubkey(), derived_pubkey);
 }
 
+fn is_symmetric(a: &[TlcInfo], b: &[TlcInfo]) -> bool {
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| a.is_symmetric(b))
+}
+
 #[test]
 fn test_pending_tlcs() {
     let mut tlc_state = TlcState::default();
@@ -87,7 +91,7 @@ fn test_pending_tlcs() {
     let tx1 = tlc_state.build_local_commitment();
     let tx2 = tlc_state_2.build_remote_commitment();
 
-    assert_eq!(tx1, tx2);
+    is_symmetric(&tx1, &tx2);
 
     let tlcs = tlc_state.commit_local_tlcs();
     assert_eq!(tlcs.len(), 2);
@@ -95,12 +99,35 @@ fn test_pending_tlcs() {
     let tlcs2 = tlc_state_2.commit_remote_tlcs();
     assert_eq!(tlcs2.len(), 2);
 
-    assert_eq!(tlcs, tlcs2);
+    is_symmetric(&tlcs, &tlcs2);
 
     let tlcs = tlc_state.commit_local_tlcs();
     assert_eq!(tlcs.len(), 0);
 
     let tlcs2 = tlc_state_2.commit_remote_tlcs();
+    assert_eq!(tlcs2.len(), 0);
+
+    tlc_state_2.add_local_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
+    tlc_state_2.add_local_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
+
+    tlc_state.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
+    tlc_state.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
+
+    let tx1 = tlc_state.build_remote_commitment();
+    let tx2 = tlc_state_2.build_local_commitment();
+
+    is_symmetric(&tx1, &tx2);
+
+    let tlcs = tlc_state.commit_remote_tlcs();
+    assert_eq!(tlcs.len(), 4);
+    let tlcs2 = tlc_state_2.commit_local_tlcs();
+    assert_eq!(tlcs2.len(), 4);
+
+    is_symmetric(&tlcs, &tlcs2);
+
+    let tlcs = tlc_state.commit_remote_tlcs();
+    assert_eq!(tlcs.len(), 0);
+    let tlcs2 = tlc_state_2.commit_local_tlcs();
     assert_eq!(tlcs2.len(), 0);
 }
 
