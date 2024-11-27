@@ -2050,7 +2050,7 @@ pub enum TlcOperation {
     RemoveTlc(RemoveTlc),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
 pub struct PendingTlcs {
     tlcs: Vec<TlcOperation>,
     committed_index: usize,
@@ -2098,18 +2098,18 @@ impl PendingTlcs {
         for tlc_op in self.get_staging_tlcs() {
             pending_tlcs.push(tlc_op.clone());
         }
-        self.committed_index = self.tlcs.len() - 1;
+        self.committed_index = self.tlcs.len();
         return pending_tlcs;
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct State {
+#[derive(Default, Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct TlcState {
     local_pending_tlcs: PendingTlcs,
     remote_pending_tlcs: PendingTlcs,
 }
 
-impl State {
+impl TlcState {
     pub fn add_local_tlc_operation(&mut self, tlc_op: TlcOperation) {
         self.local_pending_tlcs.add_tlc_operation(tlc_op);
     }
@@ -2118,30 +2118,32 @@ impl State {
         self.remote_pending_tlcs.add_tlc_operation(tlc_op);
     }
 
-    fn build_local_commitment(&self) {
+    pub fn build_local_commitment(&self) -> Vec<TlcOperation> {
         let tlcs = self
             .local_pending_tlcs
             .get_staging_tlcs()
             .into_iter()
             .chain(self.remote_pending_tlcs.get_committed_tlcs().into_iter());
+        tlcs.map(|tlc| tlc.clone()).collect()
     }
 
-    fn build_remote_commitment(&self) {
+    pub fn build_remote_commitment(&self) -> Vec<TlcOperation> {
         let tlcs = self
             .remote_pending_tlcs
             .get_staging_tlcs()
             .into_iter()
             .chain(self.local_pending_tlcs.get_committed_tlcs().into_iter());
+        tlcs.map(|tlc| tlc.clone()).collect()
     }
 
-    fn commit_local_tlcs(&mut self) {
+    pub fn commit_local_tlcs(&mut self) -> Vec<TlcOperation> {
         self.local_pending_tlcs
-            .commit_tlcs(self.remote_pending_tlcs.get_committed_tlcs());
+            .commit_tlcs(self.remote_pending_tlcs.get_committed_tlcs())
     }
 
-    fn commit_remote_tlcs(&mut self) {
+    pub fn commit_remote_tlcs(&mut self) -> Vec<TlcOperation> {
         self.remote_pending_tlcs
-            .commit_tlcs(self.local_pending_tlcs.get_committed_tlcs());
+            .commit_tlcs(self.local_pending_tlcs.get_committed_tlcs())
     }
 }
 

@@ -1,9 +1,11 @@
+use crate::fiber::channel::{TlcOperation, TlcState};
 use crate::fiber::config::MAX_PAYMENT_TLC_EXPIRY_LIMIT;
 use crate::fiber::graph::PaymentSessionStatus;
 use crate::fiber::network::SendPaymentCommand;
 use crate::fiber::tests::test_utils::{
     gen_rand_public_key, gen_sha256_hash, NetworkNodeConfigBuilder,
 };
+use crate::fiber::types::AddTlc;
 use crate::{
     ckb::contracts::{get_cell_deps, Contract},
     fiber::{
@@ -52,6 +54,54 @@ fn test_derive_private_and_public_tlc_keys() {
     let derived_privkey = derive_private_key(&privkey, &per_commitment_point);
     let derived_pubkey = derive_tlc_pubkey(&privkey.pubkey(), &per_commitment_point);
     assert_eq!(derived_privkey.pubkey(), derived_pubkey);
+}
+
+#[test]
+fn test_pending_tlcs() {
+    let mut tlc_state = TlcState::default();
+    let add_tlc1 = AddTlc {
+        amount: 10000,
+        channel_id: gen_sha256_hash(),
+        payment_hash: gen_sha256_hash(),
+        expiry: now_timestamp_as_millis_u64() + 1000,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: vec![1],
+        tlc_id: 0,
+    };
+    let add_tlc2 = AddTlc {
+        amount: 20000,
+        channel_id: gen_sha256_hash(),
+        payment_hash: gen_sha256_hash(),
+        expiry: now_timestamp_as_millis_u64() + 2000,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: vec![2],
+        tlc_id: 1,
+    };
+    tlc_state.add_local_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
+    tlc_state.add_local_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
+
+    let mut tlc_state_2 = TlcState::default();
+    tlc_state_2.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
+    tlc_state_2.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
+
+    let tx1 = tlc_state.build_local_commitment();
+    let tx2 = tlc_state_2.build_remote_commitment();
+
+    assert_eq!(tx1, tx2);
+
+    let tlcs = tlc_state.commit_local_tlcs();
+    assert_eq!(tlcs.len(), 2);
+
+    let tlcs2 = tlc_state_2.commit_remote_tlcs();
+    assert_eq!(tlcs2.len(), 2);
+
+    assert_eq!(tlcs, tlcs2);
+
+    let tlcs = tlc_state.commit_local_tlcs();
+    assert_eq!(tlcs.len(), 0);
+
+    let tlcs2 = tlc_state_2.commit_remote_tlcs();
+    assert_eq!(tlcs2.len(), 0);
 }
 
 #[tokio::test]
