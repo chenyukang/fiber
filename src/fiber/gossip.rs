@@ -1,13 +1,8 @@
-use std::{
-    collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
-    num::NonZeroUsize,
-};
+use std::collections::HashMap;
 
 use ckb_hash::blake2b_256;
 use ckb_jsonrpc_types::{Status, TxStatus};
 use ckb_types::packed::OutPoint;
-use lru::LruCache;
 use ractor::{
     async_trait as rasync_trait, call_t,
     concurrency::{timeout, Duration},
@@ -244,43 +239,6 @@ impl<S> GossipActor<S> {
     }
 }
 
-// This is used to prevent sending duplicate messages to the same peer.
-// It may report false negatives (i.e. we may have sent some messages, but it reports that we haven't).
-// Even though we wasted some bandwidth, it is not a big deal.
-// It will never report false positives (i.e. we haven't sent a message, but it reports that we have).
-// So we will never miss any messages.
-struct SentMessagesCache {
-    cache: LruCache<u64, ()>,
-}
-
-impl Default for SentMessagesCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SentMessagesCache {
-    fn new() -> Self {
-        Self {
-            cache: LruCache::new(NonZeroUsize::new(8092).unwrap()),
-        }
-    }
-
-    fn get_message_hash(message: &BroadcastMessage) -> u64 {
-        let mut s = DefaultHasher::new();
-        message.hash(&mut s);
-        s.finish()
-    }
-
-    fn insert(&mut self, message: &BroadcastMessage) {
-        self.cache.put(Self::get_message_hash(message), ());
-    }
-
-    fn contains(&self, message: &BroadcastMessage) -> bool {
-        self.cache.contains(&Self::get_message_hash(message))
-    }
-}
-
 #[derive(Default)]
 struct PeerState {
     session: SessionId,
@@ -296,14 +254,6 @@ struct PeerState {
     // we may have not sent the message to the peer. We will use SentMessagesCache to query if
     // we have sent the message to the peer. If we haven't, we will send the message to the peer.
     biggest_cursor_sent: Cursor,
-    // A cache of sent messages to prevent sending duplicate messages to the same peer.
-    // This only applies to BroadcastMessagesFilterResult.
-    // That means
-    // 1. When the peer requests messages via GetBroadcastMessages or QueryBroadcastMessages,
-    // we will always send the whole result.
-    // 2. Even if we've already sent peer messages via GetBroadcastMessagesResult or
-    // QueryBroadcastMessagesResult, we will still send them again with BroadcastMessagesFilterResult.
-    sent_messages_cache: SentMessagesCache,
 }
 
 impl PeerState {
@@ -312,7 +262,6 @@ impl PeerState {
             session,
             filter: Default::default(),
             biggest_cursor_sent: Default::default(),
-            sent_messages_cache: Default::default(),
         }
     }
 
@@ -320,11 +269,7 @@ impl PeerState {
         match self.filter {
             Some(ref filter) => {
                 let cursor = message.cursor();
-                &cursor > &filter
-                    && (self.biggest_cursor_sent < cursor
-                        || !self
-                            .sent_messages_cache
-                            .contains(&&BroadcastMessage::from(message.clone())))
+                &cursor > &filter && self.biggest_cursor_sent < cursor
             }
             None => return false,
         }
@@ -336,8 +281,6 @@ impl PeerState {
             if &cursor > &self.biggest_cursor_sent {
                 self.biggest_cursor_sent = cursor;
             }
-            let message = BroadcastMessage::from(message.clone());
-            self.sent_messages_cache.insert(&message);
         }
     }
 }
@@ -1139,7 +1082,11 @@ where
                 for chunk in pending_queries.chunks(MAX_NUM_OF_BROADCAST_MESSAGES as usize) {
                     let queries = chunk.to_vec();
                     let id = state.get_and_increment_request_id();
-                    for peer_state in state.peer_states.values().take(NUM_SIMULTANEOUS_GET_REQUESTS) {
+                    for peer_state in state
+                        .peer_states
+                        .values()
+                        .take(NUM_SIMULTANEOUS_GET_REQUESTS)
+                    {
                         let message =
                             GossipMessage::QueryBroadcastMessages(QueryBroadcastMessages {
                                 id,
