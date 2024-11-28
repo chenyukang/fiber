@@ -88,8 +88,8 @@ fn test_pending_tlcs() {
     tlc_state_2.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
     tlc_state_2.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
 
-    let tx1 = tlc_state.build_local_commitment();
-    let tx2 = tlc_state_2.build_remote_commitment();
+    let tx1 = tlc_state.get_tlcs_for_local();
+    let tx2 = tlc_state_2.get_tlcs_for_remote();
 
     is_symmetric(&tx1, &tx2);
 
@@ -113,8 +113,8 @@ fn test_pending_tlcs() {
     tlc_state.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
     tlc_state.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
 
-    let tx1 = tlc_state.build_remote_commitment();
-    let tx2 = tlc_state_2.build_local_commitment();
+    let tx1 = tlc_state.get_tlcs_for_remote();
+    let tx2 = tlc_state_2.get_tlcs_for_local();
 
     is_symmetric(&tx1, &tx2);
 

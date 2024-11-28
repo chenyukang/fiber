@@ -288,6 +288,7 @@ fn test_channel_actor_state_store() {
         id: gen_sha256_hash(),
         tlc_ids: Default::default(),
         tlcs: Default::default(),
+        tlc_state: Default::default(),
         local_shutdown_script: Script::default(),
         local_channel_public_keys: ChannelBasePublicKeys {
             funding_pubkey: generate_pubkey().into(),

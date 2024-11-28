@@ -1162,11 +1162,10 @@ where
         command: AddTlcCommand,
     ) -> Result<u64, ProcessingChannelError> {
         debug!("handle add tlc command : {:?}", &command);
-        state.check_ack_status_for_tlc()?;
         state.check_for_tlc_update(Some(command.amount), true)?;
         state.check_tlc_expiry(command.expiry)?;
         let tlc = state.create_outbounding_tlc(command);
-        state.insert_tlc(tlc.clone())?;
+        state.tlc_state.add_local_tlc(tlc.clone());
 
         debug!("Inserted tlc into channel state: {:?}", &tlc);
         // TODO: Note that since message sending is async,
@@ -1178,15 +1177,7 @@ where
         // Send tlc update message to peer.
         let msg = FiberMessageWithPeerId::new(
             state.get_remote_peer_id(),
-            FiberMessage::add_tlc(AddTlc {
-                channel_id: state.get_id(),
-                tlc_id: tlc.id.into(),
-                amount: tlc.amount,
-                payment_hash: tlc.payment_hash,
-                expiry: tlc.expiry,
-                hash_algorithm: tlc.hash_algorithm,
-                onion_packet: tlc.onion_packet,
-            }),
+            FiberMessage::add_tlc(tlc.get_add_tlc().expect("tlc is add_tlc").clone()),
         );
         debug!("Sending AddTlc message: {:?}", &msg);
         self.network
@@ -2076,6 +2067,37 @@ impl TlcInfo {
     pub fn is_symmetric(&self, other: &Self) -> bool {
         self.id == other.id.flip() && self.tlc_op == other.tlc_op
     }
+
+    pub fn is_offered(&self) -> bool {
+        self.id.is_offered()
+    }
+
+    pub fn is_received(&self) -> bool {
+        self.id.is_received()
+    }
+
+    pub fn amount(&self) -> u128 {
+        match &self.tlc_op {
+            TlcOperation::AddTlc(add_tlc) => add_tlc.amount,
+            TlcOperation::RemoveTlc(_) => 0,
+        }
+    }
+
+    pub fn payment_hash(&self) -> Hash256 {
+        match &self.tlc_op {
+            TlcOperation::AddTlc(add_tlc) => add_tlc.payment_hash,
+            TlcOperation::RemoveTlc(_) => {
+                unreachable!("RemoveTlc should not have payment hash")
+            }
+        }
+    }
+
+    pub fn get_add_tlc(&self) -> Option<&AddTlc> {
+        match &self.tlc_op {
+            TlcOperation::AddTlc(add_tlc) => Some(add_tlc),
+            TlcOperation::RemoveTlc(_) => None,
+        }
+    }
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -2114,6 +2136,14 @@ impl PendingTlcs {
         &self.tlcs[..self.committed_index]
     }
 
+    pub fn tlcs(&self) -> &[TlcInfo] {
+        &self.tlcs
+    }
+
+    pub fn push(&mut self, tlc: TlcInfo) {
+        self.tlcs.push(tlc);
+    }
+
     pub fn commit_tlcs(&mut self, tcls: &[TlcInfo]) -> Vec<TlcInfo> {
         let mut pending_tlcs = vec![];
         for tlc in tcls {
@@ -2146,6 +2176,14 @@ impl TlcState {
         self.local_pending_tlcs.add_tlc_operation(tlc_info);
     }
 
+    pub fn add_local_tlc(&mut self, tlc_info: TlcInfo) {
+        self.local_pending_tlcs.push(tlc_info);
+    }
+
+    pub fn add_remote_tlc(&mut self, tlc_info: TlcInfo) {
+        self.remote_pending_tlcs.push(tlc_info);
+    }
+
     pub fn next_local_tlc_id(&self) -> u64 {
         self.local_pending_tlcs.next_tlc_id()
     }
@@ -2170,7 +2208,7 @@ impl TlcState {
         self.remote_pending_tlcs.add_tlc_operation(tlc_info);
     }
 
-    pub fn build_local_commitment(&self) -> Vec<TlcInfo> {
+    pub fn get_tlcs_for_local(&self) -> Vec<TlcInfo> {
         let tlcs = self
             .local_pending_tlcs
             .get_staging_tlcs()
@@ -2179,13 +2217,21 @@ impl TlcState {
         tlcs.map(|tlc| tlc.clone()).collect()
     }
 
-    pub fn build_remote_commitment(&self) -> Vec<TlcInfo> {
+    pub fn get_tlcs_for_remote(&self) -> Vec<TlcInfo> {
         let tlcs = self
             .remote_pending_tlcs
             .get_staging_tlcs()
             .into_iter()
             .chain(self.local_pending_tlcs.get_committed_tlcs().into_iter());
         tlcs.map(|tlc| tlc.clone()).collect()
+    }
+
+    pub fn get_tlcs_with(&self, local_commitment: bool) -> Vec<TlcInfo> {
+        if local_commitment {
+            self.get_tlcs_for_local()
+        } else {
+            self.get_tlcs_for_remote()
+        }
     }
 
     pub fn commit_local_tlcs(&mut self) -> Vec<TlcInfo> {
@@ -2196,6 +2242,18 @@ impl TlcState {
     pub fn commit_remote_tlcs(&mut self) -> Vec<TlcInfo> {
         self.remote_pending_tlcs
             .commit_tlcs(self.local_pending_tlcs.get_committed_tlcs())
+    }
+
+    pub fn all_tlcs(&self) -> impl Iterator<Item = &TlcInfo> {
+        self.local_pending_tlcs
+            .tlcs()
+            .into_iter()
+            .chain(self.remote_pending_tlcs.tlcs().into_iter())
+            .into_iter()
+            .filter(|tlc| match tlc.tlc_op {
+                TlcOperation::AddTlc(_) => true,
+                TlcOperation::RemoveTlc(_) => false,
+            })
     }
 }
 
@@ -2294,6 +2352,8 @@ pub struct ChannelActorState {
     // See https://stackoverflow.com/questions/51276896/how-do-i-use-serde-to-serialize-a-hashmap-with-structs-as-keys-to-json
     #[serde_as(as = "Vec<(_, _)>")]
     pub tlcs: BTreeMap<TLCId, DetailedTLCInfo>,
+
+    pub tlc_state: TlcState,
 
     // The remote and local lock script for close channel, they are setup during the channel establishment.
     #[serde_as(as = "Option<EntityHex>")]
@@ -3019,6 +3079,7 @@ impl ChannelActorState {
             staging_tlc_operations: vec![],
             tlc_ids: Default::default(),
             tlcs: Default::default(),
+            tlc_state: Default::default(),
             local_shutdown_script: local_shutdown_script,
             local_channel_public_keys: local_base_pubkeys,
             signer,
@@ -3083,6 +3144,7 @@ impl ChannelActorState {
             staging_tlc_operations: vec![],
             tlc_ids: Default::default(),
             tlcs: Default::default(),
+            tlc_state: Default::default(),
             signer,
             local_channel_public_keys: local_pubkeys,
             max_tlc_number_in_flight,
@@ -3824,9 +3886,9 @@ impl ChannelActorState {
     pub fn insert_tlc(&mut self, tlc: TLC) -> Result<DetailedTLCInfo, ProcessingChannelError> {
         let payment_hash = tlc.payment_hash;
         if let Some(tlc) = self
-            .tlcs
-            .values()
-            .find(|tlc| tlc.tlc.payment_hash == payment_hash && tlc.removed_at.is_none())
+            .tlc_state
+            .all_tlcs()
+            .find(|tlc| tlc.payment_hash() == payment_hash)
         {
             return Err(ProcessingChannelError::InvalidParameter(format!(
                 "Trying to insert tlc with duplicate payment hash {:?} with tlc {:?}",
@@ -4203,6 +4265,26 @@ impl ChannelActorState {
         })
     }
 
+    pub fn get_active_offered_tlcs_new(
+        &self,
+        local_commitment: bool,
+    ) -> impl Iterator<Item = TlcInfo> {
+        self.tlc_state
+            .get_tlcs_with(local_commitment)
+            .into_iter()
+            .filter(|tlc| tlc.is_offered())
+    }
+
+    pub fn get_active_received_tlcs_new(
+        &self,
+        local_commitment: bool,
+    ) -> impl Iterator<Item = TlcInfo> {
+        self.tlc_state
+            .get_tlcs_with(local_commitment)
+            .into_iter()
+            .filter(|tlc| tlc.is_received())
+    }
+
     // Get the pubkeys for the tlc. Tlc pubkeys are the pubkeys held by each party
     // while this tlc was created (pubkeys are derived from the commitment number
     // when this tlc was created). The pubkeys returned here are sorted.
@@ -4412,17 +4494,17 @@ impl ChannelActorState {
         add_amount: u128,
         local: bool,
     ) -> Result<(), ProcessingChannelError> {
-        let active_tls_number = self.get_active_offered_tlcs(local).count()
-            + self.get_active_received_tlcs(local).count();
+        let active_tls_number = self.get_active_offered_tlcs_new(local).count()
+            + self.get_active_received_tlcs_new(local).count();
 
         if active_tls_number as u64 + 1 > self.max_tlc_number_in_flight {
             return Err(ProcessingChannelError::TlcNumberExceedLimit);
         }
 
         if self
-            .get_active_received_tlcs(local)
-            .chain(self.get_active_offered_tlcs(local))
-            .fold(0_u128, |sum, tlc| sum + tlc.tlc.amount)
+            .get_active_offered_tlcs_new(local)
+            .chain(self.get_active_received_tlcs_new(local))
+            .fold(0_u128, |sum, tlc| sum + tlc.amount())
             + add_amount
             > self.max_tlc_value_in_flight
         {
@@ -4432,7 +4514,7 @@ impl ChannelActorState {
         Ok(())
     }
 
-    pub fn create_outbounding_tlc(&self, command: AddTlcCommand) -> TLC {
+    pub fn create_outbounding_tlc(&self, command: AddTlcCommand) -> TlcInfo {
         // TODO: we are filling the user command with a new id here.
         // The advantage of this is that we don't need to burden the users to
         // provide a next id for each tlc. The disadvantage is that users may
@@ -4450,17 +4532,19 @@ impl ChannelActorState {
             .payment_hash
             .unwrap_or_else(|| command.hash_algorithm.hash(preimage).into());
 
-        TLC {
-            id: TLCId::Offered(id),
+        let add_tlc = AddTlc {
+            channel_id: self.get_id(),
+            tlc_id: id,
             amount: command.amount,
-            payment_hash,
+            payment_hash: payment_hash,
             expiry: command.expiry,
-            payment_preimage: Some(preimage),
             hash_algorithm: command.hash_algorithm,
             onion_packet: command.onion_packet,
-            previous_tlc: command
-                .previous_tlc
-                .map(|(channel_id, tlc_id)| (channel_id, TLCId::Received(tlc_id))),
+        };
+
+        TlcInfo {
+            id: TLCId::Offered(id),
+            tlc_op: TlcOperation::AddTlc(add_tlc),
         }
     }
 
