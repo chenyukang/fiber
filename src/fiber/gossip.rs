@@ -25,7 +25,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     ckb::{CkbChainMessage, GetBlockTimestampRequest, TraceTxRequest, TraceTxResponse},
     fiber::{network::DEFAULT_CHAIN_ACTOR_TIMEOUT, types::secp256k1_instance},
-    unwrap_or_return, Error,
+    now_timestamp, unwrap_or_return, Error,
 };
 
 use super::{
@@ -38,6 +38,10 @@ use super::{
         QueryBroadcastMessages, QueryBroadcastMessagesResult,
     },
 };
+
+const MAX_BROADCAST_MESSAGE_TIMESTAMP_DRIFT: Duration = Duration::from_secs(60);
+const MAX_BROADCAST_MESSAGE_TIMESTAMP_DRIFT_MILLIS: u64 =
+    MAX_BROADCAST_MESSAGE_TIMESTAMP_DRIFT.as_millis() as u64;
 
 const MAX_NUM_OF_BROADCAST_MESSAGES: u16 = 1000;
 pub(crate) const DEFAULT_NUM_OF_BROADCAST_MESSAGE: u16 = 100;
@@ -557,6 +561,14 @@ where
                 error
             })?;
 
+        if verified_message.timestamp()
+            > now_timestamp() + MAX_BROADCAST_MESSAGE_TIMESTAMP_DRIFT_MILLIS
+        {
+            return Err(Error::InvalidParameter(format!(
+                "Broadcast message timestamp is too far in the future: {:?}",
+                verified_message
+            )));
+        }
         self.store.save_broadcast_message(verified_message.clone());
 
         // If there is any messages related to this message that we haven't obtained yet, we will
