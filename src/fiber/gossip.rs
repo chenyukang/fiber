@@ -5,8 +5,8 @@ use ckb_jsonrpc_types::{Status, TxStatus};
 use ckb_types::packed::OutPoint;
 use ractor::{
     async_trait as rasync_trait, call_t,
-    concurrency::{spawn, timeout, Duration, JoinHandle},
-    Actor, ActorCell, ActorProcessingErr, ActorRef, ActorRuntime, SupervisionEvent,
+    concurrency::{timeout, Duration, JoinHandle},
+    Actor, ActorCell, ActorProcessingErr, ActorRef, ActorRuntime, MessagingErr, SupervisionEvent,
 };
 use secp256k1::Message;
 use tentacle::{
@@ -19,13 +19,13 @@ use tentacle::{
     traits::ServiceProtocol,
     SessionId,
 };
-use tokio::{sync::oneshot, time::sleep};
+use tokio::sync::oneshot;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     ckb::{CkbChainMessage, GetBlockTimestampRequest, TraceTxRequest, TraceTxResponse},
     fiber::{network::DEFAULT_CHAIN_ACTOR_TIMEOUT, types::secp256k1_instance},
-    now_timestamp, unwrap_or_return, Error,
+    unwrap_or_return, Error,
 };
 
 use super::{
@@ -44,7 +44,7 @@ pub(crate) const DEFAULT_NUM_OF_BROADCAST_MESSAGE: u16 = 100;
 
 const NUM_SIMULTANEOUS_GET_REQUESTS: usize = 1;
 const NUM_PEERS_TO_RECEIVE_BROADCASTS: usize = 3;
-const GET_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const GET_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub trait GossipMessageStore {
     /// The implementors should guarantee that the returned messages are sorted by timestamp in the ascending order.
@@ -213,9 +213,8 @@ pub(crate) enum GossipActorMessage {
 
     // The function of TickNetworkMaintenance is to maintain the network state.
     // Currently it will do the following things:
-    // 1. Check inflight requests to see if they are timed out. If so, resend the request to other peers.
-    // 2. Check if we have sufficient number of peers to receive broadcasts. If not, connect more peers.
-    // 3. Check if there are any pending broadcast messages. If so, broadcast them to the network.
+    // 1. Check if we have sufficient number of peers to receive broadcasts. If not, send more BroadcastMessageFilter.
+    // 2. Check if there are any pending broadcast messages. If so, broadcast them to the network.
     TickNetworkMaintenance,
 
     InitialSyncingFinished,
@@ -251,7 +250,13 @@ pub struct GossipSyncerState<S> {
     store: S,
     peers: HashMap<PeerId, SyncingPeerState>,
     request_id: u64,
-    inflight_requests: HashMap<u64, JoinHandle<()>>,
+    inflight_requests: HashMap<
+        u64,
+        (
+            PeerId,
+            JoinHandle<Result<(), MessagingErr<GossipSyncerMessage>>>,
+        ),
+    >,
 }
 
 impl<S> GossipSyncerState<S> {
@@ -302,8 +307,8 @@ impl<S> GossipSyncingActor<S> {
 pub(crate) enum GossipSyncerMessage {
     PeerConnected(PeerId),
     PeerDisconnected(PeerId),
-    RequestTimeout(PeerId, u64),
-    ResponseReceived(GetBroadcastMessagesResult),
+    RequestTimeout(u64),
+    ResponseReceived(PeerId, GetBroadcastMessagesResult),
     NewGetRequest(),
 }
 
@@ -335,29 +340,35 @@ where
                 state
                     .peers
                     .insert(peer_id, SyncingPeerState { failed_times: 0 });
-                // Send a new GetBroadcastMessages request to the newly-connected peer.
-                // If we have less than NUM_SIMULTANEOUS_GET_REQUESTS requests inflight.
-                if state.inflight_requests.len() < NUM_SIMULTANEOUS_GET_REQUESTS {
-                    let _ = myself.send_message(GossipSyncerMessage::NewGetRequest());
-                }
+                let _ = myself.send_message(GossipSyncerMessage::NewGetRequest());
             }
             GossipSyncerMessage::PeerDisconnected(peer_id) => {
                 let _ = state.peers.remove(&peer_id);
             }
-            GossipSyncerMessage::RequestTimeout(peer_id, request_id) => {
-                warn!(
-                    "GetBoradcastMessages request to peer timeout: peer {:?}, request {}",
-                    &peer_id, request_id
-                );
-                if let Some(peer) = state.peers.get_mut(&peer_id) {
-                    peer.failed_times += 1;
+            GossipSyncerMessage::RequestTimeout(request_id) => {
+                if let Some((peer_id, _)) = state.inflight_requests.remove(&request_id) {
+                    warn!(
+                        "GetBoradcastMessages request to peer timeout: peer {:?}, request {}",
+                        &peer_id, request_id
+                    );
+                    if let Some(peer) = state.peers.get_mut(&peer_id) {
+                        peer.failed_times += 1;
+                    }
                 }
                 myself
                     .send_message(GossipSyncerMessage::NewGetRequest())
                     .expect("gossip syncing actor alive");
             }
-            GossipSyncerMessage::ResponseReceived(result) => {
-                if let Some(handle) = state.inflight_requests.remove(&result.id) {
+            GossipSyncerMessage::ResponseReceived(peer_id, result) => {
+                if let Some((peer, handle)) = state.inflight_requests.remove(&result.id) {
+                    if &peer != &peer_id {
+                        warn!(
+                            "Received GetBroadcastMessages response from unexpected peer (possible malicious peer): expected {:?}, got {:?}",
+                            peer, peer_id
+                        );
+                        state.inflight_requests.insert(result.id, (peer, handle));
+                        return Ok(());
+                    }
                     handle.abort();
                     let messages = result.messages;
                     // If we are receiving an empty response, then the syncing process is finished.
@@ -402,6 +413,12 @@ where
                     after_cursor: latest_cursor,
                     count: DEFAULT_NUM_OF_BROADCAST_MESSAGE,
                 });
+                // Send a new GetBroadcastMessages request to the newly-connected peer.
+                // If we have less than NUM_SIMULTANEOUS_GET_REQUESTS requests inflight.
+                if state.inflight_requests.len() < NUM_SIMULTANEOUS_GET_REQUESTS {
+                    debug!("Not sending new GetBroadcastMessages request because there are already {} requests inflight (max {})", state.inflight_requests.len(), NUM_SIMULTANEOUS_GET_REQUESTS);
+                    return Ok(());
+                }
                 match state.select_a_node() {
                     Some(peer) => {
                         state
@@ -415,18 +432,15 @@ where
                             .expect("gossip actor alive");
                         let peer_id = peer.clone();
                         // Send a timeout message to myself after 20 seconds, which will resend the request to other peers.
-                        let handle = spawn(async move {
+                        let handle = myself.send_after(GET_REQUEST_TIMEOUT, move || {
                             // Send a timeout notification to myself after 20 seconds.
                             // If the request with the same request_id is completed before the timeout,
                             // we will cancel the timeout notification.
-                            sleep(Duration::from_secs(20)).await;
-                            myself
-                                .send_message(GossipSyncerMessage::RequestTimeout(
-                                    peer_id, request_id,
-                                ))
-                                .expect("gossip syncing actor alive");
+                            GossipSyncerMessage::RequestTimeout(request_id)
                         });
-                        state.inflight_requests.insert(request_id, handle);
+                        state
+                            .inflight_requests
+                            .insert(request_id, (peer_id, handle));
                     }
                     None => {
                         debug!("No suitable peer to send GetBroadcastMessages");
@@ -489,12 +503,10 @@ pub(crate) struct GossipActorState<S> {
     chain_actor: ActorRef<CkbChainMessage>,
     control: ServiceAsyncControl,
     next_request_id: u64,
-    // We sent a GetBroadcastMessages request to a peer, and we are waiting for the response.
-    // The key is (peer_id, request_id), and the value is the timestamp of the request and the cursor.
-    inflight_gets: HashMap<(PeerId, u64), (u64, Cursor)>,
-    // Whether the node is syncing with peers. If this is true, we will send GetBroadcastMessages
-    // requests to peers to sync with them. Otherwise, we will only send BroadcastMessagesFilter
-    // requests to peers and wait for them to send us BroadcastMessagesFilterResult.
+    // The actor that is responsible for syncing the gossip messages.
+    // On startup, we will create a GossipSyncerActor to sync the messages.
+    // But when the initial syncing is finished, we will stop the actor.
+    // And send BroadcastMessagesFilter to peers to receive the latest messages.
     gossip_sync_actor: Option<ActorRef<GossipSyncerMessage>>,
     // Messages that are pending to be broadcasted to the network.
     pending_broadcast_messages: HashMap<BroadcastMessage, u64>,
@@ -665,25 +677,6 @@ where
         let id = self.next_request_id;
         self.next_request_id += 1;
         id
-    }
-
-    async fn send_get_broadcast_messages(&mut self, peer_id: &PeerId) {
-        let id = self.get_and_increment_request_id();
-        let cursor = self.get_latest_cursor();
-        self.inflight_gets
-            .insert((peer_id.clone(), id), (now_timestamp(), cursor.clone()));
-        let message = GossipMessage::GetBroadcastMessages(GetBroadcastMessages {
-            id,
-            chain_hash: get_chain_hash(),
-            after_cursor: cursor.clone(),
-            count: DEFAULT_NUM_OF_BROADCAST_MESSAGE,
-        });
-        if let Err(error) = self.send_message_to_peer(peer_id, message).await {
-            error!(
-                "Failed to send GetBroadcastMessages to peer {:?}: {:?}",
-                &peer_id, error
-            );
-        }
     }
 
     async fn send_broadcast_message_filter(&mut self, peer_id: &PeerId) {
@@ -1111,7 +1104,6 @@ where
             chain_actor,
             control,
             next_request_id: 0,
-            inflight_gets: Default::default(),
             gossip_sync_actor: Some(syncing_actor),
             pending_broadcast_messages: Default::default(),
             pending_queries: Default::default(),
@@ -1233,34 +1225,11 @@ where
                 };
             }
             GossipActorMessage::TickNetworkMaintenance => {
-                debug!("Network maintenance ticked, current state: num of peers: {}, inflight requests: {}, is syncing: {}",
-                    state.peer_states.len(), state.inflight_gets.len(), state.is_syncing());
-
-                let now = now_timestamp();
-
-                state
-                    .inflight_gets
-                    .retain(|_, (v, _)| now - *v < GET_REQUEST_TIMEOUT.as_millis() as u64);
-
-                let current_peers = state
-                    .inflight_gets
-                    .keys()
-                    .map(|p| p.0.clone())
-                    .collect::<Vec<_>>();
-                let current_num_peers = state.inflight_gets.len();
-                if current_num_peers < NUM_SIMULTANEOUS_GET_REQUESTS && state.is_syncing() {
-                    let peers = state
-                        .peer_states
-                        .keys()
-                        .filter(|p| !current_peers.contains(p))
-                        .take(NUM_SIMULTANEOUS_GET_REQUESTS - current_num_peers)
-                        .cloned()
-                        .collect::<Vec<_>>();
-
-                    for peer_id in peers {
-                        state.send_get_broadcast_messages(&peer_id).await;
-                    }
-                }
+                debug!(
+                    "Network maintenance ticked, current state: num of peers: {}, is syncing: {}",
+                    state.peer_states.len(),
+                    state.is_syncing()
+                );
 
                 state
                     .my_filter_map
@@ -1427,7 +1396,9 @@ where
                     GossipMessage::GetBroadcastMessagesResult(result) => {
                         if let Some(syncing_actor) = &state.gossip_sync_actor {
                             syncing_actor
-                                .send_message(GossipSyncerMessage::ResponseReceived(result))
+                                .send_message(GossipSyncerMessage::ResponseReceived(
+                                    peer_id, result,
+                                ))
                                 .expect("gossip sync actor alive");
                         } else {
                             warn!(
