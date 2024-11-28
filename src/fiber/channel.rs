@@ -481,8 +481,8 @@ where
                 //       if any error happened here we need go to shutdown procedure
                 state.check_for_tlc_update(Some(add_tlc.amount), false)?;
                 state
-                    .staging_tlc_operations
-                    .push(TlcOperation::AddTlc(add_tlc.clone()));
+                    .tlc_state
+                    .add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc.clone()));
                 Ok(())
             }
             FiberChannelMessage::RemoveTlc(remove_tlc) => {
@@ -1168,11 +1168,6 @@ where
         state.tlc_state.add_local_tlc(tlc.clone());
 
         debug!("Inserted tlc into channel state: {:?}", &tlc);
-        // TODO: Note that since message sending is async,
-        // we can't guarantee anything about the order of message sending
-        // and state updating. And any of these may fail while the other succeeds.
-        // We may need to handle all these possibilities.
-        // To make things worse, we currently don't have a way to ACK all the messages.
 
         // Send tlc update message to peer.
         let msg = FiberMessageWithPeerId::new(
@@ -2064,6 +2059,32 @@ impl TlcInfo {
         }
     }
 
+    /// Get the value for the field `htlc_type` in commitment lock witness.
+    /// - Lowest 1 bit: 0 if the tlc is offered by the remote party, 1 otherwise.
+    /// - High 7 bits:
+    ///     - 0: ckb hash
+    ///     - 1: sha256
+    pub fn get_htlc_type(&self) -> u8 {
+        let add_tlc = self.get_add_tlc().expect("tlc is add_tlc");
+        let offered_flag = if self.is_offered() { 0u8 } else { 1u8 };
+        ((add_tlc.hash_algorithm as u8) << 1) + offered_flag
+    }
+
+    // FIXME: this is a temporary solution to get commitment numbers for TLCs
+    pub fn get_commitment_numbers(&self, _local: bool) -> CommitmentNumbers {
+        match &self.tlc_op {
+            TlcOperation::AddTlc(add_tlc) => CommitmentNumbers::new(),
+            TlcOperation::RemoveTlc(remove_tlc) => CommitmentNumbers::new(),
+        }
+    }
+
+    pub fn expiry(&self) -> u64 {
+        match &self.tlc_op {
+            TlcOperation::AddTlc(add_tlc) => add_tlc.expiry,
+            TlcOperation::RemoveTlc(_) => 0,
+        }
+    }
+
     pub fn is_symmetric(&self, other: &Self) -> bool {
         self.id == other.id.flip() && self.tlc_op == other.tlc_op
     }
@@ -2076,11 +2097,21 @@ impl TlcInfo {
         self.id.is_received()
     }
 
+    pub fn flip_mut(&mut self) {
+        self.id.flip_mut();
+    }
+
     pub fn amount(&self) -> u128 {
         match &self.tlc_op {
             TlcOperation::AddTlc(add_tlc) => add_tlc.amount,
             TlcOperation::RemoveTlc(_) => 0,
         }
+    }
+
+    fn get_hash(&self) -> ShortHash {
+        self.payment_hash().as_ref()[..20]
+            .try_into()
+            .expect("short hash from payment hash")
     }
 
     pub fn payment_hash(&self) -> Hash256 {
@@ -2168,6 +2199,25 @@ pub(crate) struct TlcState {
 }
 
 impl TlcState {
+    pub fn get_next_offering(&self) -> u64 {
+        self.local_pending_tlcs.next_tlc_id()
+    }
+
+    pub fn get(&self, id: &TLCId) -> Option<&TlcInfo> {
+        match id {
+            TLCId::Offered(id) => self
+                .local_pending_tlcs
+                .tlcs()
+                .iter()
+                .find(|tlc| tlc.id == TLCId::Offered(*id)),
+            TLCId::Received(id) => self
+                .remote_pending_tlcs
+                .tlcs()
+                .iter()
+                .find(|tlc| tlc.id == TLCId::Received(*id)),
+        }
+    }
+
     pub fn add_local_tlc_operation(&mut self, tlc_op: TlcOperation) {
         let tlc_info = TlcInfo {
             id: TLCId::Offered(tlc_op.tlc_id()),
@@ -2208,13 +2258,33 @@ impl TlcState {
         self.remote_pending_tlcs.add_tlc_operation(tlc_info);
     }
 
+    fn unify_tlcs<'a>(&self, tlcs: impl Iterator<Item = &'a TlcInfo>) -> Vec<TlcInfo> {
+        let mut add_tlcs: BTreeMap<TLCId, TlcInfo> = Default::default();
+        let mut remove_tlcs = vec![];
+        for tlc in tlcs {
+            match tlc.tlc_op {
+                TlcOperation::AddTlc(_) => {
+                    let _ = add_tlcs.insert(tlc.id.clone(), tlc.clone());
+                }
+                TlcOperation::RemoveTlc(_) => remove_tlcs.push(tlc.clone()),
+            }
+        }
+        for tlc in remove_tlcs {
+            let tlc_id = tlc.id.flip();
+            if let Some(tlc) = add_tlcs.remove(&tlc_id) {
+                debug!("Remove tlc: {:?}", tlc);
+            }
+        }
+        add_tlcs.values().map(|tlc| tlc.clone()).collect()
+    }
+
     pub fn get_tlcs_for_local(&self) -> Vec<TlcInfo> {
-        let tlcs = self
+        let all_tlcs = self
             .local_pending_tlcs
             .get_staging_tlcs()
             .into_iter()
             .chain(self.remote_pending_tlcs.get_committed_tlcs().into_iter());
-        tlcs.map(|tlc| tlc.clone()).collect()
+        self.unify_tlcs(all_tlcs)
     }
 
     pub fn get_tlcs_for_remote(&self) -> Vec<TlcInfo> {
@@ -2223,7 +2293,7 @@ impl TlcState {
             .get_staging_tlcs()
             .into_iter()
             .chain(self.local_pending_tlcs.get_committed_tlcs().into_iter());
-        tlcs.map(|tlc| tlc.clone()).collect()
+        self.unify_tlcs(tlcs)
     }
 
     pub fn get_tlcs_with(&self, local_commitment: bool) -> Vec<TlcInfo> {
@@ -3836,6 +3906,10 @@ impl ChannelActorState {
         self.tlc_ids.get_next_offering()
     }
 
+    pub fn get_next_offering_tlc_id_new(&self) -> u64 {
+        self.tlc_state.get_next_offering()
+    }
+
     pub fn get_next_received_tlc_id(&self) -> u64 {
         self.tlc_ids.get_next_received()
     }
@@ -3850,6 +3924,10 @@ impl ChannelActorState {
 
     pub fn get_offered_tlc(&self, tlc_id: u64) -> Option<&DetailedTLCInfo> {
         self.tlcs.get(&TLCId::Offered(tlc_id))
+    }
+
+    pub fn get_offered_tlc_new(&self, tlc_id: u64) -> Option<&TlcInfo> {
+        self.tlc_state.get(&TLCId::Offered(tlc_id))
     }
 
     pub fn get_received_tlc(&self, tlc_id: u64) -> Option<&DetailedTLCInfo> {
@@ -4317,36 +4395,62 @@ impl ChannelActorState {
         }
     }
 
+    pub fn get_tlc_pubkeys_new(&self, tlc: &TlcInfo, local: bool) -> (Pubkey, Pubkey) {
+        let is_offered = tlc.is_offered();
+        let CommitmentNumbers {
+            local: local_commitment_number,
+            remote: remote_commitment_number,
+        } = tlc.get_commitment_numbers(local);
+        debug!(
+            "Local commitment number: {}, remote commitment number: {}",
+            local_commitment_number, remote_commitment_number
+        );
+        let local_pubkey = derive_tlc_pubkey(
+            &self.get_local_channel_public_keys().tlc_base_key,
+            &self.get_local_commitment_point(remote_commitment_number),
+        );
+        let remote_pubkey = derive_tlc_pubkey(
+            &self.get_remote_channel_public_keys().tlc_base_key,
+            &self.get_remote_commitment_point(local_commitment_number),
+        );
+
+        if is_offered {
+            (local_pubkey, remote_pubkey)
+        } else {
+            (remote_pubkey, local_pubkey)
+        }
+    }
+
     pub fn get_active_received_tlc_with_pubkeys(
         &self,
         local: bool,
-    ) -> impl Iterator<Item = (&DetailedTLCInfo, Pubkey, Pubkey)> {
-        self.get_active_received_tlcs(local).map(move |tlc| {
-            let (k1, k2) = self.get_tlc_pubkeys(tlc, local);
-            (tlc, k1, k2)
-        })
+    ) -> Vec<(TlcInfo, Pubkey, Pubkey)> {
+        self.get_active_received_tlcs_new(local)
+            .map(move |tlc| {
+                let (k1, k2) = self.get_tlc_pubkeys_new(&tlc, local);
+                (tlc, k1, k2)
+            })
+            .collect()
     }
 
     pub fn get_active_offered_tlc_with_pubkeys(
         &self,
         local: bool,
-    ) -> impl Iterator<Item = (&DetailedTLCInfo, Pubkey, Pubkey)> {
-        self.get_active_offered_tlcs(local).map(move |tlc| {
-            let (k1, k2) = self.get_tlc_pubkeys(tlc, local);
-            (tlc, k1, k2)
-        })
+    ) -> Vec<(TlcInfo, Pubkey, Pubkey)> {
+        self.get_active_offered_tlcs_new(local)
+            .map(move |tlc| {
+                let (k1, k2) = self.get_tlc_pubkeys_new(&tlc, local);
+                (tlc, k1, k2)
+            })
+            .collect()
     }
 
     fn get_active_htlcs(&self, local: bool) -> Vec<u8> {
         // Build a sorted array of TLC so that both party can generate the same commitment transaction.
         let tlcs = {
             let (mut received_tlcs, mut offered_tlcs) = (
-                self.get_active_received_tlc_with_pubkeys(local)
-                    .map(|(tlc, local, remote)| (tlc.clone(), local, remote))
-                    .collect::<Vec<_>>(),
-                self.get_active_offered_tlc_with_pubkeys(local)
-                    .map(|(tlc, local, remote)| (tlc.clone(), local, remote))
-                    .collect::<Vec<_>>(),
+                self.get_active_received_tlc_with_pubkeys(local),
+                self.get_active_offered_tlc_with_pubkeys(local),
             );
             debug!("Received tlcs: {:?}", &received_tlcs);
             debug!("Offered tlcs: {:?}", &offered_tlcs);
@@ -4355,12 +4459,12 @@ impl ChannelActorState {
             } else {
                 for (tlc, _, _) in received_tlcs.iter_mut().chain(offered_tlcs.iter_mut()) {
                     // Need to flip these fields for the counterparty.
-                    tlc.tlc.flip_mut();
+                    tlc.flip_mut();
                 }
                 (offered_tlcs, received_tlcs)
             };
-            a.sort_by(|x, y| u64::from(x.0.tlc.id).cmp(&u64::from(y.0.tlc.id)));
-            b.sort_by(|x, y| u64::from(x.0.tlc.id).cmp(&u64::from(y.0.tlc.id)));
+            a.sort_by(|x, y| u64::from(x.0.id).cmp(&u64::from(y.0.id)));
+            b.sort_by(|x, y| u64::from(x.0.id).cmp(&u64::from(y.0.id)));
             [a, b].concat()
         };
         debug!("Sorted tlcs: {:?}", &tlcs);
@@ -4369,13 +4473,14 @@ impl ChannelActorState {
         } else {
             let mut result = vec![tlcs.len() as u8];
             for (tlc, local, remote) in tlcs {
-                result.extend_from_slice(&tlc.tlc.get_htlc_type().to_le_bytes());
-                result.extend_from_slice(&tlc.tlc.amount.to_le_bytes());
-                result.extend_from_slice(&tlc.tlc.get_hash());
+                assert!(tlc.get_add_tlc().is_some());
+                result.extend_from_slice(&tlc.get_htlc_type().to_le_bytes());
+                result.extend_from_slice(&tlc.amount().to_le_bytes());
+                result.extend_from_slice(&tlc.get_hash());
                 result.extend_from_slice(&local.serialize());
                 result.extend_from_slice(&remote.serialize());
                 result.extend_from_slice(
-                    &Since::new(SinceType::Timestamp, tlc.tlc.expiry, false)
+                    &Since::new(SinceType::Timestamp, tlc.expiry(), false)
                         .value()
                         .to_le_bytes(),
                 );
@@ -4521,9 +4626,9 @@ impl ChannelActorState {
         // inadvertently click the same button twice, and we will process the same
         // twice, the frontend needs to prevent this kind of behaviour.
         // Is this what we want?
-        let id = self.get_next_offering_tlc_id();
+        let id = self.get_next_offering_tlc_id_new();
         assert!(
-            self.get_offered_tlc(id).is_none(),
+            self.get_offered_tlc_new(id).is_none(),
             "Must not have the same id in pending offered tlcs"
         );
 
@@ -5784,12 +5889,12 @@ impl ChannelActorState {
 
     fn build_settlement_transaction_outputs(&self, local: bool) -> ([CellOutput; 2], [Bytes; 2]) {
         let received_tlc_value = self
-            .get_active_received_tlcs(local)
-            .map(|tlc| tlc.tlc.amount)
+            .get_active_received_tlcs_new(local)
+            .map(|tlc| tlc.amount())
             .sum::<u128>();
         let offered_tlc_value = self
-            .get_active_offered_tlcs(local)
-            .map(|tlc| tlc.tlc.amount)
+            .get_active_offered_tlcs_new(local)
+            .map(|tlc| tlc.amount())
             .sum::<u128>();
 
         let to_local_value =
@@ -6194,22 +6299,6 @@ impl TLC {
     // Change this tlc to the opposite side.
     pub fn flip_mut(&mut self) {
         self.id.flip_mut()
-    }
-
-    /// Get the value for the field `htlc_type` in commitment lock witness.
-    /// - Lowest 1 bit: 0 if the tlc is offered by the remote party, 1 otherwise.
-    /// - High 7 bits:
-    ///     - 0: ckb hash
-    ///     - 1: sha256
-    pub fn get_htlc_type(&self) -> u8 {
-        let offered_flag = if self.is_offered() { 0u8 } else { 1u8 };
-        ((self.hash_algorithm as u8) << 1) + offered_flag
-    }
-
-    fn get_hash(&self) -> ShortHash {
-        self.payment_hash.as_ref()[..20]
-            .try_into()
-            .expect("short hash from payment hash")
     }
 
     fn get_id(&self) -> u64 {
