@@ -603,11 +603,19 @@ impl GossipMessageStore for MemoryStore {
         &self,
         cursor: &Cursor,
     ) -> Option<BroadcastMessageWithTimestamp> {
+        let timestamp = cursor.timestamp;
         let map = self.gossip_messages_map.read().unwrap();
         // It is possible that the cursor is for a channel update of node2.
         let key1 = (cursor.message_id.clone(), true);
         let key2 = (cursor.message_id.clone(), false);
-        map.get(&key1).or_else(|| map.get(&key2)).cloned()
+        // It is possible that the user is querying an older message and we may have replaced the
+        // older message with a new one.
+        let get = |key| {
+            map.get(&key)
+                .and_then(|d| (d.timestamp() == timestamp).then_some(d))
+                .cloned()
+        };
+        get(key1).or_else(|| get(key2))
     }
 
     fn get_latest_broadcast_message_cursor(&self) -> Option<Cursor> {
