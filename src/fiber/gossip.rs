@@ -483,16 +483,6 @@ impl PeerState {
         self.filter.is_some()
     }
 
-    fn should_send_message(&self, message: &BroadcastMessageWithTimestamp) -> bool {
-        match self.filter {
-            Some(ref filter) => {
-                let cursor = message.cursor();
-                &cursor > &filter && self.after_cursor < cursor
-            }
-            None => return false,
-        }
-    }
-
     fn update_for_messages(&mut self, messages: &[BroadcastMessageWithTimestamp]) {
         for message in messages {
             let cursor = message.cursor();
@@ -711,6 +701,53 @@ async fn send_message_to_session(
         .send_message_to(session_id, GOSSIP_PROTOCOL_ID, message.to_molecule_bytes())
         .await?;
     Ok(())
+}
+
+// Check if we have already stored messages related to this broadcast message.
+// This function is called when we want to broadcast a message to the network.
+// This message is already verified and saved to the store. But we don't know if
+// we have stored messages related to this message. If we don't have related messages,
+// we should not broadcast this message to the network because other peers may
+// query the related messages from us if they don't have those messages.
+fn have_related_messages_in_store<S: GossipMessageStore>(
+    store: &S,
+    message: &BroadcastMessage,
+) -> bool {
+    match message {
+        BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
+            // There are two deadlocks here.
+            // 1). Channel updates depend on channel announcements, and channel announcements depend on channel updates.
+            // For our own channel announcements and channel updates, we can save them to the store first.
+            // But it is difficult to to avoid the following situation.
+            // 2). The channel announcement of one node depends on other node's announcements and channel updates.
+            // We must send our channel announcement to the peer even if we don't have the other node's announcements and channel updates.
+            // This is the reason why we shouldn't use this function to determine if we should broadcast our own messages to the network.
+            store
+                .get_latest_channel_update(&channel_announcement.channel_outpoint, true)
+                .is_some()
+                && store
+                    .get_latest_channel_update(&channel_announcement.channel_outpoint, false)
+                    .is_some()
+                && store
+                    .get_latest_node_announcement(&channel_announcement.node1_id)
+                    .is_some()
+                && store
+                    .get_latest_node_announcement(&channel_announcement.node2_id)
+                    .is_some()
+        }
+        BroadcastMessage::ChannelUpdate(channel_update) => {
+            // Channel updates are independent, we shouldn't rely on channel update in the other direction to
+            // broadcast channel update in this direction.
+            store
+                .get_latest_channel_announcement(&channel_update.channel_outpoint)
+                .is_some()
+        }
+        BroadcastMessage::NodeAnnouncement(_node_announcement) => {
+            // Node announcements can work independently (although it's not very useful (or even harmful) to
+            // broadcast a node without any channel).
+            true
+        }
+    }
 }
 
 pub(crate) struct GossipProtocolHandle {
@@ -1271,8 +1308,8 @@ where
                         peer_state.update_for_messages(&obtained_messages);
                         let messages = obtained_messages
                             .into_iter()
-                            .filter(|m| true)
                             .map(Into::into)
+                            .filter(|m| have_related_messages_in_store(&state.store, m))
                             .collect::<Vec<BroadcastMessage>>();
                         if messages.is_empty() {
                             break;
