@@ -382,30 +382,8 @@ where
                 Ok(())
             }
             FiberChannelMessage::CommitmentSigned(commitment_signed) => {
-                // build commitment tx and verify signature from remote, if passed send ACK for partner
-                state.handle_commitment_signed_message(commitment_signed, &self.network)?;
-                self.flush_staging_tlc_operations(state).await;
-                if let ChannelState::SigningCommitment(flags) = state.state {
-                    if !flags.contains(SigningCommitmentFlags::OUR_COMMITMENT_SIGNED_SENT) {
-                        // TODO: maybe we should send our commitment_signed message here.
-                        debug!("CommitmentSigned message received, but we haven't sent our commitment_signed message yet");
-                        // Notify outside observers.
-                        self.network
-                            .send_message(NetworkActorMessage::new_notification(
-                                NetworkServiceEvent::CommitmentSignaturePending(
-                                    state.get_remote_peer_id(),
-                                    state.get_id(),
-                                    state.get_current_commitment_number(false),
-                                ),
-                            ))
-                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                    }
-                }
-                //self.try_to_apply_add_tlcs(state).await;
-                self.try_to_forward_pending_tlc(state).await;
-                self.try_to_settle_down_tlc(state);
-                self.try_to_send_remove_tlcs(state).await;
-                Ok(())
+                self.handle_commitment_signed_peer_message(state, commitment_signed)
+                    .await
             }
             FiberChannelMessage::TxSignatures(tx_signatures) => {
                 // We're the one who sent tx_signature first, and we received a tx_signature message.
@@ -478,14 +456,7 @@ where
                 Ok(())
             }
             FiberChannelMessage::AddTlc(add_tlc) => {
-                // TODO: here we only check the error which sender didn't follow agreed rules,
-                //       if any error happened here we need go to shutdown procedure
-                state.check_for_tlc_update(Some(add_tlc.amount), false)?;
-                let tlc_info = state.create_inbounding_tlc(add_tlc, None, None)?;
-                state.check_insert_tlc(&tlc_info)?;
-                state.tlc_state.add_remote_tlc(tlc_info);
-                state.increment_next_received_tlc_id();
-                Ok(())
+                self.handle_add_tlc_peer_message(state, add_tlc)
             }
             FiberChannelMessage::RemoveTlc(_remove_tlc) => {
                 state.check_for_tlc_update(None, false)?;
@@ -652,13 +623,43 @@ where
         )
     }
 
+    async fn handle_commitment_signed_peer_message(
+        &self,
+        state: &mut ChannelActorState,
+        commitment_signed: CommitmentSigned,
+    ) -> Result<(), ProcessingChannelError> {
+        // build commitment tx and verify signature from remote, if passed send ACK for partner
+        state.handle_commitment_signed_message(commitment_signed, &self.network)?;
+        self.flush_staging_tlc_operations(state).await;
+        if let ChannelState::SigningCommitment(flags) = state.state {
+            if !flags.contains(SigningCommitmentFlags::OUR_COMMITMENT_SIGNED_SENT) {
+                // TODO: maybe we should send our commitment_signed message here.
+                debug!("CommitmentSigned message received, but we haven't sent our commitment_signed message yet");
+                // Notify outside observers.
+                self.network
+                    .send_message(NetworkActorMessage::new_notification(
+                        NetworkServiceEvent::CommitmentSignaturePending(
+                            state.get_remote_peer_id(),
+                            state.get_id(),
+                            state.get_current_commitment_number(false),
+                        ),
+                    ))
+                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+            }
+        }
+        self.try_to_forward_pending_tlc(state).await;
+        self.try_to_settle_down_tlc(state);
+        self.try_to_send_remove_tlcs(state).await;
+        Ok(())
+    }
+
     async fn flush_staging_tlc_operations(&self, state: &mut ChannelActorState) {
         let pending_apply_tlcs = state.tlc_state.commit_remote_tlcs();
         for tlc_info in pending_apply_tlcs {
             match tlc_info.tlc_op {
                 TlcOperation::AddTlc(add_tlc) => {
                     let _ = self
-                        .handle_add_tlc_peer_message(state, add_tlc)
+                        .apply_add_tlc_peer_message(state, add_tlc)
                         .await
                         .map_err(|e| {
                             error!("Error handling AddTlc command: {:?}", e);
@@ -666,7 +667,7 @@ where
                 }
                 TlcOperation::RemoveTlc(remove_tlc) => {
                     let _ = self
-                        .handle_remove_tlc_peer_message(state, remove_tlc)
+                        .apply_remove_tlc_peer_message(state, remove_tlc)
                         .await
                         .map_err(|e| {
                             error!("Error handling RemoveTlc command: {:?}", e);
@@ -891,7 +892,22 @@ where
         Ok(())
     }
 
-    async fn handle_add_tlc_peer_message(
+    fn handle_add_tlc_peer_message(
+        &self,
+        state: &mut ChannelActorState,
+        add_tlc: AddTlc,
+    ) -> Result<(), ProcessingChannelError> {
+        // TODO: here we only check the error which sender didn't follow agreed rules,
+        //       if any error happened here we need go to shutdown procedure
+        state.check_for_tlc_update(Some(add_tlc.amount), false)?;
+        let tlc_info = state.create_inbounding_tlc(add_tlc, None, None)?;
+        state.check_insert_tlc(&tlc_info)?;
+        state.tlc_state.add_remote_tlc(tlc_info);
+        state.increment_next_received_tlc_id();
+        Ok(())
+    }
+
+    async fn apply_add_tlc_peer_message(
         &self,
         state: &mut ChannelActorState,
         add_tlc: AddTlc,
@@ -923,7 +939,7 @@ where
         Ok(())
     }
 
-    async fn handle_remove_tlc_peer_message(
+    async fn apply_remove_tlc_peer_message(
         &self,
         state: &mut ChannelActorState,
         remove_tlc: RemoveTlc,
@@ -937,26 +953,23 @@ where
             RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill { payment_preimage }),
         ) = (state.funding_udt_type_script.clone(), &remove_reason)
         {
-            let mut tlc = tlc_details.tlc.clone();
+            let mut tlc = tlc_details.clone();
             tlc.payment_preimage = Some(*payment_preimage);
             // FIXME(tlcs)
-            // self.subscribers
-            //     .settled_tlcs_subscribers
-            //     .send(TlcNotification {
-            //         tlc,
-            //         channel_id,
-            //         script: udt_type_script.clone(),
-            //     });
+            self.subscribers
+                .settled_tlcs_subscribers
+                .send(TlcNotification {
+                    tlc,
+                    channel_id,
+                    script: udt_type_script.clone(),
+                });
         }
-        if tlc_details.tlc.previous_tlc.is_none() {
+        if tlc_details.previous_tlc.is_none() {
             // only the original sender of the TLC should send `TlcRemoveReceived` event
             // because only the original sender cares about the TLC event to settle the payment
             self.network
                 .send_message(NetworkActorMessage::new_event(
-                    NetworkActorEvent::TlcRemoveReceived(
-                        tlc_details.tlc.payment_hash,
-                        remove_reason,
-                    ),
+                    NetworkActorEvent::TlcRemoveReceived(tlc_details.payment_hash(), remove_reason),
                 ))
                 .expect("myself alive");
         }
@@ -1167,7 +1180,21 @@ where
     ) -> ProcessingChannelResult {
         state.check_ack_status_for_tlc()?;
         state.check_for_tlc_update(None, false)?;
-        let tlc = state.remove_tlc_with_reason(TLCId::Received(command.id), &command.reason)?;
+        let tlc_info = TlcInfo {
+            id: TLCId::Received(command.id),
+            tlc_op: TlcOperation::RemoveTlc(RemoveTlc {
+                channel_id: state.get_id(),
+                tlc_id: command.id,
+                reason: command.reason.clone(),
+            }),
+            created_at: state.get_current_commitment_numbers(),
+            creation_confirmed_at: None,
+            relay_status: TlcRelayStatus::NoForward,
+            payment_preimage: None,
+            removed_at: None,
+            previous_tlc: None,
+        };
+        state.tlc_state.add_local_tlc(tlc_info.clone());
         let msg = FiberMessageWithPeerId::new(
             state.get_remote_peer_id(),
             FiberMessage::remove_tlc(RemoveTlc {
@@ -1185,7 +1212,7 @@ where
         debug!(
             "Channel ({:?}) balance after removing tlc {:?}: local balance: {}, remote balance: {}",
             state.get_id(),
-            tlc,
+            tlc_info.tlc_op,
             state.to_local_amount,
             state.to_remote_amount
         );
@@ -2025,22 +2052,33 @@ pub struct TlcInfo {
     pub id: TLCId,
     pub tlc_op: TlcOperation,
     pub created_at: CommitmentNumbers,
+    pub removed_at: Option<(CommitmentNumbers, RemoveTlcReason)>,
     pub creation_confirmed_at: Option<CommitmentNumbers>,
     pub relay_status: TlcRelayStatus,
     pub payment_preimage: Option<Hash256>,
+    /// The previous tlc id if this tlc is a part of a multi-tlc payment.
+    /// Note: this is used to track the tlc chain for a multi-tlc payment,
+    ///       we need to know previous when removing tlc backwardly.
+    ///
+    /// Node A ---------> Node B ------------> Node C ----------> Node D
+    ///  tlc_1 <---> (tlc_1) (tlc_2) <---> (tlc_2) (tlc_3) <----> tlc_3
+    ///                ^^^^                 ^^^^
+    ///
+    pub previous_tlc: Option<(Hash256, TLCId)>,
 }
 
 impl TlcInfo {
-    pub fn flip(&self) -> Self {
-        Self {
-            id: self.id.flip(),
-            tlc_op: self.tlc_op.clone(),
-            created_at: self.created_at.clone(),
-            creation_confirmed_at: self.creation_confirmed_at.clone(),
-            relay_status: self.relay_status.clone(),
-            payment_preimage: self.payment_preimage.clone(),
-        }
-    }
+    // pub fn flip(&self) -> Self {
+    //     Self {
+    //         id: self.id.flip(),
+    //         tlc_op: self.tlc_op.clone(),
+    //         created_at: self.created_at.clone(),
+    //         creation_confirmed_at: self.creation_confirmed_at.clone(),
+    //         relay_status: self.relay_status.clone(),
+    //         payment_preimage: self.payment_preimage.clone(),
+    //         removed_at: self.removed_at.clone(),
+    //     }
+    // }
 
     /// Get the value for the field `htlc_type` in commitment lock witness.
     /// - Lowest 1 bit: 0 if the tlc is offered by the remote party, 1 otherwise.
@@ -2175,7 +2213,7 @@ impl PendingTlcs {
     }
 
     pub fn commit_tlcs(&mut self, tcls: &[TlcInfo]) -> Vec<TlcInfo> {
-        let mut pending_tlcs = vec![];
+        // FIXME(yukang)
         for tlc in tcls {
             if self.tlcs.iter().any(|t| t == tlc) {
                 continue;
@@ -2183,16 +2221,14 @@ impl PendingTlcs {
                 self.tlcs.push(tlc.clone());
             }
         }
-        for tlc_op in self.get_staging_tlcs() {
-            pending_tlcs.push(tlc_op.clone());
-        }
+        let pending_tlcs = self.get_staging_tlcs().to_vec();
         self.committed_index = self.tlcs.len();
         return pending_tlcs;
     }
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct TlcState {
+pub struct TlcState {
     local_pending_tlcs: PendingTlcs,
     remote_pending_tlcs: PendingTlcs,
 }
@@ -2232,22 +2268,6 @@ impl TlcState {
         }
     }
 
-    pub fn add_local_tlc_operation(
-        &mut self,
-        tlc_op: TlcOperation,
-        current_commitment_numbers: CommitmentNumbers,
-    ) {
-        let tlc_info = TlcInfo {
-            id: TLCId::Offered(tlc_op.tlc_id()),
-            tlc_op,
-            created_at: current_commitment_numbers,
-            creation_confirmed_at: None,
-            relay_status: TlcRelayStatus::NoForward,
-            payment_preimage: None,
-        };
-        self.local_pending_tlcs.add_tlc_operation(tlc_info);
-    }
-
     pub fn add_local_tlc(&mut self, tlc_info: TlcInfo) {
         self.local_pending_tlcs.push(tlc_info);
     }
@@ -2270,33 +2290,6 @@ impl TlcState {
 
     pub fn increment_remote_tlc_id(&mut self) {
         self.remote_pending_tlcs.increment_next_tlc_id();
-    }
-
-    pub fn add_remote_tlc_operation(
-        &mut self,
-        tlc_op: TlcOperation,
-        current_commitment_numbers: CommitmentNumbers,
-    ) {
-        let relay_status = match &tlc_op {
-            TlcOperation::AddTlc(tlc) => {
-                if !tlc.onion_packet.is_empty() {
-                    TlcRelayStatus::WaitingForward
-                } else {
-                    TlcRelayStatus::NoForward
-                }
-            }
-            _ => TlcRelayStatus::NoForward,
-        };
-
-        let tlc_info = TlcInfo {
-            id: TLCId::Received(tlc_op.tlc_id()),
-            tlc_op,
-            created_at: current_commitment_numbers,
-            creation_confirmed_at: None,
-            relay_status,
-            payment_preimage: None,
-        };
-        self.remote_pending_tlcs.add_tlc_operation(tlc_info);
     }
 
     fn unify_tlcs<'a>(&self, tlcs: impl Iterator<Item = &'a TlcInfo>) -> Vec<TlcInfo> {
@@ -4082,10 +4075,9 @@ impl ChannelActorState {
         &mut self,
         tlc_id: TLCId,
         reason: &RemoveTlcReason,
-    ) -> Result<DetailedTLCInfo, ProcessingChannelError> {
+    ) -> Result<TlcInfo, ProcessingChannelError> {
         let removed_at = self.get_current_commitment_numbers();
-
-        let tlc = match self.tlcs.get_mut(&tlc_id) {
+        let tlc = match self.tlc_state.get_mut(&tlc_id) {
             None => {
                 return Err(ProcessingChannelError::InvalidParameter(format!(
                     "Trying to remove non-existing tlc with id {:?}",
@@ -4093,6 +4085,7 @@ impl ChannelActorState {
                 )))
             }
             Some(current) => {
+                let add_tlc = current.get_add_tlc().expect("TlcInfo is AddTlc");
                 match &current.removed_at {
                     Some((current_removed_at, current_remove_reason))
                         if current_remove_reason == reason && removed_at == *current_removed_at =>
@@ -4100,7 +4093,9 @@ impl ChannelActorState {
                         debug!(
                             "Skipping removing of tlc {:?} as it is already removed at {:?} with the same reason {:?}", tlc_id, removed_at, reason
                         );
-                        return Ok(current.clone());
+                        return Err(ProcessingChannelError::RepeatedProcessing(
+                            "TLC is already removed".to_string(),
+                        ));
                     }
                     Some((current_remove_reason, current_removed_at)) => {
                         return Err(ProcessingChannelError::InvalidParameter(
@@ -4110,15 +4105,12 @@ impl ChannelActorState {
                     None => {
                         debug!(
                             "Inserting remove reason {:?} at commitment number {:?} for tlc {:?} hash_algorithm: {:?}",
-                            reason, removed_at, current, current.tlc.hash_algorithm
+                            reason, removed_at, current, add_tlc.hash_algorithm
                         );
                         if let RemoveTlcReason::RemoveTlcFulfill(fulfill) = reason {
-                            let filled_payment_hash: Hash256 = current
-                                .tlc
-                                .hash_algorithm
-                                .hash(fulfill.payment_preimage)
-                                .into();
-                            if current.tlc.payment_hash != filled_payment_hash {
+                            let filled_payment_hash: Hash256 =
+                                add_tlc.hash_algorithm.hash(fulfill.payment_preimage).into();
+                            if current.payment_hash() != filled_payment_hash {
                                 return Err(ProcessingChannelError::FinalIncorrectPreimage);
                             }
                         }
@@ -4670,6 +4662,10 @@ impl ChannelActorState {
             creation_confirmed_at: None,
             relay_status: TlcRelayStatus::NoForward,
             payment_preimage: None,
+            removed_at: None,
+            previous_tlc: command
+                .previous_tlc
+                .map(|(channel_id, tlc_id)| (channel_id, TLCId::Received(tlc_id))),
         }
     }
 
@@ -4694,6 +4690,8 @@ impl ChannelActorState {
             creation_confirmed_at: None,
             relay_status,
             payment_preimage,
+            removed_at: None,
+            previous_tlc: None,
         };
         Ok(tlc_info)
     }
@@ -6324,7 +6322,7 @@ impl TLC {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-enum TlcRelayStatus {
+pub enum TlcRelayStatus {
     NoForward,
     WaitingForward,
     WaitingRemove,
