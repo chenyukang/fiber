@@ -336,7 +336,7 @@ impl CchActor {
         state: &mut CchState,
         tlc_notification: TlcNotification,
     ) -> Result<()> {
-        let payment_hash = format!("{:#x}", tlc_notification.tlc.payment_hash);
+        let payment_hash = format!("{:#x}", tlc_notification.tlc.payment_hash());
         tracing::debug!("[inbounding tlc] payment hash: {}", payment_hash);
 
         let mut order = match state.orders_db.get_send_btc_order(&payment_hash).await {
@@ -349,7 +349,7 @@ impl CchActor {
             return Err(CchError::SendBTCOrderAlreadyPaid.into());
         }
 
-        if tlc_notification.tlc.amount < order.amount_sats {
+        if tlc_notification.tlc.amount() < order.amount_sats {
             // TODO: split the payment into multiple parts
             return Err(CchError::SendBTCReceivedAmountTooSmall.into());
         }
@@ -393,7 +393,7 @@ impl CchActor {
         state: &mut CchState,
         tlc_notification: TlcNotification,
     ) -> Result<()> {
-        let payment_hash = format!("{:#x}", tlc_notification.tlc.payment_hash);
+        let payment_hash = format!("{:#x}", tlc_notification.tlc.payment_hash());
         tracing::debug!("[settled tlc] payment hash: {}", payment_hash);
 
         match state.orders_db.get_receive_btc_order(&payment_hash).await {
