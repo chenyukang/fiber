@@ -1134,11 +1134,7 @@ where
                 state.update_state(ChannelState::SigningCommitment(flags));
                 state.maybe_transition_to_tx_signatures(flags, &self.network)?;
             }
-            CommitmentSignedFlags::ChannelReady() => {
-                // we are in ChannelReady state for TLC operations, after sending commitment_signed message,
-                // set the flag of waiting_tlc_ack to true, so that we don't handle TLC operations until we receive the ack.
-                state.waiting_tlc_ack = true;
-            }
+            CommitmentSignedFlags::ChannelReady() => {}
             CommitmentSignedFlags::PendingShutdown(_) => {
                 state.maybe_transition_to_shutdown(&self.network)?;
             }
@@ -1182,7 +1178,6 @@ where
         state: &mut ChannelActorState,
         command: RemoveTlcCommand,
     ) -> ProcessingChannelResult {
-        state.check_ack_status_for_tlc()?;
         state.check_for_tlc_update(None, false)?;
         let tlc_info = TlcInfo {
             id: TLCId::Received(command.id),
@@ -2408,10 +2403,6 @@ pub struct ChannelActorState {
     // An inbound channel is one where the counterparty is the funder of the channel.
     pub is_acceptor: bool,
 
-    // we are expecting ACK for the commitment_signed message,
-    // when we are in this state, we won't process any AddTlc and RemoveTlc commands.
-    pub waiting_tlc_ack: bool,
-
     // TODO: consider transaction fee while building the commitment transaction.
 
     // The invariant here is that the sum of `to_local_amount` and `to_remote_amount`
@@ -2585,8 +2576,6 @@ pub enum ProcessingChannelError {
     RepeatedProcessing(String),
     #[error("Invalid parameter: {0}")]
     InvalidParameter(String),
-    #[error("Unable to handle TLC command in waiting TLC ACK state")]
-    WaitingTlcAck,
     #[error("Capacity error: {0}")]
     CapacityError(#[from] CapacityError),
     #[error("Failed to spawn actor: {0}")]
@@ -3186,7 +3175,6 @@ impl ChannelActorState {
             funding_tx: None,
             funding_tx_confirmed_at: None,
             is_acceptor: true,
-            waiting_tlc_ack: false,
             funding_udt_type_script,
             to_local_amount: local_value,
             to_remote_amount: remote_value,
@@ -3250,7 +3238,6 @@ impl ChannelActorState {
             funding_tx_confirmed_at: None,
             funding_udt_type_script,
             is_acceptor: false,
-            waiting_tlc_ack: false,
             to_local_amount,
             to_remote_amount: 0,
             commitment_fee_rate,
@@ -4469,13 +4456,6 @@ impl ChannelActorState {
         Ok(())
     }
 
-    fn check_ack_status_for_tlc(&self) -> ProcessingChannelResult {
-        if self.waiting_tlc_ack {
-            return Err(ProcessingChannelError::WaitingTlcAck);
-        }
-        Ok(())
-    }
-
     fn check_for_tlc_update(
         &self,
         add_tlc_amount: Option<u128>,
@@ -5291,7 +5271,6 @@ impl ChannelActorState {
 
         self.update_state_on_raa_msg(true);
         self.append_remote_commitment_point(next_per_commitment_point);
-        self.waiting_tlc_ack = false;
 
         network
             .send_message(NetworkActorMessage::new_notification(
