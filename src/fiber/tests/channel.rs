@@ -1,11 +1,12 @@
-use crate::fiber::channel::{TlcInfo, TlcOperation, TlcState};
+use crate::fiber::channel::{
+    AddTlcInfo, CommitmentNumbers, TLCId, TlcKind, TlcRelayStatus, TlcState,
+};
 use crate::fiber::config::MAX_PAYMENT_TLC_EXPIRY_LIMIT;
 use crate::fiber::graph::PaymentSessionStatus;
 use crate::fiber::network::SendPaymentCommand;
 use crate::fiber::tests::test_utils::{
     gen_rand_public_key, gen_sha256_hash, NetworkNodeConfigBuilder,
 };
-use crate::fiber::types::AddTlc;
 use crate::{
     ckb::contracts::{get_cell_deps, Contract},
     fiber::{
@@ -56,42 +57,52 @@ fn test_derive_private_and_public_tlc_keys() {
     assert_eq!(derived_privkey.pubkey(), derived_pubkey);
 }
 
-fn is_symmetric(a: &[TlcInfo], b: &[TlcInfo]) -> bool {
-    a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| a.is_symmetric(b))
-}
-
 #[test]
 fn test_pending_tlcs() {
     let mut tlc_state = TlcState::default();
-    let add_tlc1 = AddTlc {
+    let add_tlc1 = AddTlcInfo {
         amount: 10000,
         channel_id: gen_sha256_hash(),
         payment_hash: gen_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 1000,
         hash_algorithm: HashAlgorithm::Sha256,
         onion_packet: vec![1],
-        tlc_id: 0,
+        tlc_id: TLCId::Offered(0),
+        created_at: CommitmentNumbers::default(),
+        removal_confirmed_at: None,
+        relay_status: TlcRelayStatus::NoForward,
+        removed_at: None,
+        creation_confirmed_at: None,
+        payment_preimage: None,
+        previous_tlc: None,
     };
-    let add_tlc2 = AddTlc {
+    let add_tlc2 = AddTlcInfo {
         amount: 20000,
         channel_id: gen_sha256_hash(),
         payment_hash: gen_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 2000,
         hash_algorithm: HashAlgorithm::Sha256,
         onion_packet: vec![2],
-        tlc_id: 1,
+        tlc_id: TLCId::Offered(1),
+        created_at: CommitmentNumbers::default(),
+        removal_confirmed_at: None,
+        relay_status: TlcRelayStatus::NoForward,
+        removed_at: None,
+        creation_confirmed_at: None,
+        payment_preimage: None,
+        previous_tlc: None,
     };
-    tlc_state.add_local_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
-    tlc_state.add_local_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
+    tlc_state.add_local_tlc(TlcKind::AddTlc(add_tlc1.clone()));
+    tlc_state.add_local_tlc(TlcKind::AddTlc(add_tlc2.clone()));
 
     let mut tlc_state_2 = TlcState::default();
-    tlc_state_2.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
-    tlc_state_2.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
+    tlc_state_2.add_remote_tlc(TlcKind::AddTlc(add_tlc1.clone()));
+    tlc_state_2.add_remote_tlc(TlcKind::AddTlc(add_tlc2.clone()));
 
     let tx1 = tlc_state.get_tlcs_for_local();
     let tx2 = tlc_state_2.get_tlcs_for_remote();
 
-    is_symmetric(&tx1, &tx2);
+    assert_eq!(tx1, tx2);
 
     let tlcs = tlc_state.commit_local_tlcs();
     assert_eq!(tlcs.len(), 2);
@@ -99,7 +110,7 @@ fn test_pending_tlcs() {
     let tlcs2 = tlc_state_2.commit_remote_tlcs();
     assert_eq!(tlcs2.len(), 2);
 
-    is_symmetric(&tlcs, &tlcs2);
+    assert_eq!(tx1, tx2);
 
     let tlcs = tlc_state.commit_local_tlcs();
     assert_eq!(tlcs.len(), 0);
@@ -107,23 +118,23 @@ fn test_pending_tlcs() {
     let tlcs2 = tlc_state_2.commit_remote_tlcs();
     assert_eq!(tlcs2.len(), 0);
 
-    tlc_state_2.add_local_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
-    tlc_state_2.add_local_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
+    tlc_state_2.add_local_tlc(TlcKind::AddTlc(add_tlc1.clone()));
+    tlc_state_2.add_local_tlc(TlcKind::AddTlc(add_tlc2.clone()));
 
-    tlc_state.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc1.clone()));
-    tlc_state.add_remote_tlc_operation(TlcOperation::AddTlc(add_tlc2.clone()));
+    tlc_state.add_remote_tlc(TlcKind::AddTlc(add_tlc1.clone()));
+    tlc_state.add_remote_tlc(TlcKind::AddTlc(add_tlc2.clone()));
 
     let tx1 = tlc_state.get_tlcs_for_remote();
     let tx2 = tlc_state_2.get_tlcs_for_local();
 
-    is_symmetric(&tx1, &tx2);
+    assert_eq!(tx1, tx2);
 
     let tlcs = tlc_state.commit_remote_tlcs();
-    assert_eq!(tlcs.len(), 4);
+    assert_eq!(tlcs.len(), 2);
     let tlcs2 = tlc_state_2.commit_local_tlcs();
-    assert_eq!(tlcs2.len(), 4);
+    assert_eq!(tlcs2.len(), 2);
 
-    is_symmetric(&tlcs, &tlcs2);
+    assert_eq!(tx1, tx2);
 
     let tlcs = tlc_state.commit_remote_tlcs();
     assert_eq!(tlcs.len(), 0);

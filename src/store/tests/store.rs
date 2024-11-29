@@ -282,12 +282,9 @@ fn test_channel_actor_state_store() {
         to_remote_amount: 100,
         commitment_fee_rate: 100,
         commitment_delay_epoch: 100,
-        waiting_tlc_ack: false,
-        staging_tlc_operations: vec![],
         funding_fee_rate: 100,
         id: gen_sha256_hash(),
         tlc_ids: Default::default(),
-        tlcs: Default::default(),
         tlc_state: Default::default(),
         local_shutdown_script: Script::default(),
         local_channel_public_keys: ChannelBasePublicKeys {
