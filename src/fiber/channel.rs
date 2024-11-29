@@ -458,12 +458,8 @@ where
             FiberChannelMessage::AddTlc(add_tlc) => {
                 self.handle_add_tlc_peer_message(state, add_tlc)
             }
-            FiberChannelMessage::RemoveTlc(_remove_tlc) => {
-                state.check_for_tlc_update(None, false)?;
-                // state
-                //     .staging_tlc_operations
-                //     .push(TlcOperation::RemoveTlc(remove_tlc.clone()));
-                Ok(())
+            FiberChannelMessage::RemoveTlc(remove_tlc) => {
+                self.handle_remove_tlc_peer_message(state, remove_tlc)
             }
             FiberChannelMessage::Shutdown(shutdown) => {
                 let flags = match state.state {
@@ -911,6 +907,30 @@ where
         Ok(())
     }
 
+    fn handle_remove_tlc_peer_message(
+        &self,
+        state: &mut ChannelActorState,
+        remove_tlc: RemoveTlc,
+    ) -> Result<(), ProcessingChannelError> {
+        state.check_for_tlc_update(None, false)?;
+        // TODO: here if we received a invalid remove tlc, it's maybe a malioucious peer,
+        // maybe we need to go through shutdown process for this error
+        state
+            .check_remove_tlc_with_reason(TLCId::Offered(remove_tlc.tlc_id), &remove_tlc.reason)?;
+        state.tlc_state.add_remote_tlc(TlcInfo {
+            id: TLCId::Received(remove_tlc.tlc_id),
+            tlc_op: TlcOperation::RemoveTlc(remove_tlc.clone()),
+            created_at: state.get_current_commitment_numbers(),
+            previous_tlc: None,
+            removed_at: None,
+            removal_confirmed_at: None,
+            creation_confirmed_at: None,
+            payment_preimage: None,
+            relay_status: TlcRelayStatus::NoForward,
+        });
+        Ok(())
+    }
+
     async fn apply_add_tlc_peer_message(
         &self,
         state: &mut ChannelActorState,
@@ -1179,6 +1199,7 @@ where
         command: RemoveTlcCommand,
     ) -> ProcessingChannelResult {
         state.check_for_tlc_update(None, false)?;
+        state.check_remove_tlc_with_reason(TLCId::Received(command.id), &command.reason)?;
         let tlc_info = TlcInfo {
             id: TLCId::Received(command.id),
             tlc_op: TlcOperation::RemoveTlc(RemoveTlc {
@@ -4456,6 +4477,34 @@ impl ChannelActorState {
         Ok(())
     }
 
+    // Check whether the reason is valid for removing the tlc.
+    fn check_remove_tlc_with_reason(
+        &self,
+        tlc_id: TLCId,
+        reason: &RemoveTlcReason,
+    ) -> ProcessingChannelResult {
+        if let Some(tlc) = self.tlc_state.get(&tlc_id) {
+            if tlc.removed_at.is_some() {
+                return Err(ProcessingChannelError::RepeatedProcessing(
+                    "TLC is already removed".to_string(),
+                ));
+            }
+            if let RemoveTlcReason::RemoveTlcFulfill(fulfill) = reason {
+                if let Some(preimage) = tlc.payment_preimage {
+                    if preimage != fulfill.payment_preimage {
+                        return Err(ProcessingChannelError::FinalIncorrectPreimage);
+                    }
+                }
+            }
+            Ok(())
+        } else {
+            return Err(ProcessingChannelError::InvalidParameter(format!(
+                "Trying to remove non-existing tlc with id {:?}",
+                tlc_id
+            )));
+        }
+    }
+
     fn check_for_tlc_update(
         &self,
         add_tlc_amount: Option<u128>,
@@ -5271,6 +5320,7 @@ impl ChannelActorState {
 
         self.update_state_on_raa_msg(true);
         self.append_remote_commitment_point(next_per_commitment_point);
+        self.tlc_state.commit_local_tlcs();
 
         network
             .send_message(NetworkActorMessage::new_notification(
