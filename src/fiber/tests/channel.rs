@@ -927,6 +927,7 @@ async fn test_send_payment_with_3_nodes() {
 async fn test_send_payment_fail_with_3_nodes_invalid_hash() {
     init_tracing();
     let _span = tracing::info_span!("node", node = "test").entered();
+
     let (node_a, _node_b, node_c, _, _) = create_3_nodes_with_established_channel(
         (100000000000, 100000000000),
         (100000000000, 100000000000),
@@ -1411,6 +1412,7 @@ async fn establish_channel_between_nodes(
         .get_tx_from_hash(funding_tx_outpoint.tx_hash())
         .await
         .expect("tx found");
+
     (new_channel_id, funding_tx)
 }
 
