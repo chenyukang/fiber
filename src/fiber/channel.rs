@@ -517,7 +517,7 @@ where
                     };
                     state.local_shutdown_info = Some(shutdown_info);
                     flags |= ShuttingDownFlags::OUR_SHUTDOWN_SENT;
-                    eprintln!("Auto accept shutdown ...");
+                    debug!("Auto accept shutdown ...");
                 }
                 state.update_state(ChannelState::ShuttingDown(flags));
                 state.maybe_transition_to_shutdown(&self.network)?;
@@ -643,7 +643,6 @@ where
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
             }
         }
-        self.try_to_forward_pending_tlc(state).await;
         self.try_to_settle_down_tlc(state);
         self.try_to_send_remove_tlcs(state).await;
         Ok(())
@@ -672,18 +671,6 @@ where
                         });
                 }
             }
-        }
-    }
-
-    async fn try_to_forward_pending_tlc(&self, state: &mut ChannelActorState) {
-        let tlc_infos = state.get_tlcs_for_forwarding();
-        for info in tlc_infos {
-            assert!(info.is_received());
-            eprintln!("debug try_to_forward_pending_tlc: {:?}", info);
-            let onion_packet = info.onion_packet.clone();
-            let _ = self
-                .handle_forward_onion_packet(state, onion_packet, info.tlc_id.into())
-                .await;
         }
     }
 
@@ -726,7 +713,6 @@ where
 
     fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState) {
         let tlcs = state.get_tlcs_for_settle_down();
-        eprintln!("try_to_settle_down_tlc: {:?}", tlcs);
         for tlc_info in tlcs {
             let mut update_invoice_payment_hash = false;
             let tlc = tlc_info.clone();
@@ -903,7 +889,9 @@ where
         state.check_for_tlc_update(Some(add_tlc.amount), false)?;
         let tlc_info = state.create_inbounding_tlc(add_tlc)?;
         state.check_insert_tlc(&tlc_info)?;
-        state.tlc_state.add_remote_tlc(TlcKind::AddTlc(tlc_info));
+        state
+            .tlc_state
+            .add_remote_tlc(TlcKind::AddTlc(tlc_info.clone()));
         state.increment_next_received_tlc_id();
         Ok(())
     }
@@ -936,7 +924,33 @@ where
         state.check_tlc_expiry(add_tlc.expiry)?;
 
         let tlc_id = add_tlc.tlc_id;
-        if let Err(e) = self.check_tlc_from_peer_message(state, add_tlc).await {
+        let mut error = None;
+        if let Err(e) = self
+            .check_tlc_from_peer_message(state, add_tlc.clone())
+            .await
+        {
+            error = Some(e);
+        }
+
+        let tlc = state
+            .get_received_tlc(add_tlc.tlc_id.into())
+            .expect("tlc exists")
+            .clone();
+
+        if !tlc.onion_packet.is_empty()
+            && tlc.previous_tlc.is_none()
+            && tlc.relay_status == TlcRelayStatus::WaitingForward
+            && tlc.payment_preimage.is_none()
+        {
+            if let Err(e) = self
+                .handle_forward_onion_packet(state, add_tlc.onion_packet, tlc_id.into())
+                .await
+            {
+                error = Some(e);
+            }
+        }
+
+        if let Some(e) = error {
             // we assume that TLC was not inserted into our state,
             // so we can safely send RemoveTlc message to the peer
             // note this new add_tlc may be trying to add a duplicate tlc,
@@ -1019,25 +1033,10 @@ where
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
         // If we failed to forward the onion packet, we should remove the tlc.
-        if let Err(res) = recv.await.expect("expect command replied") {
-            error!("Error forwarding onion packet: {:?}", res);
-            let (send, recv) = oneshot::channel::<Result<(), String>>();
-            let port = RpcReplyPort::from(send);
-            self.network
-                .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                        channel_id: state.get_id(),
-                        command: ChannelCommand::RemoveTlc(
-                            RemoveTlcCommand {
-                                id: added_tlc_id,
-                                reason: RemoveTlcReason::RemoveTlcFail(res),
-                            },
-                            port,
-                        ),
-                    }),
-                ))
-                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-            let _ = recv.await.expect("RemoveTlc command replied");
+        if let Err(_res) = recv.await.expect("expect command replied") {
+            return Err(ProcessingChannelError::PeelingOnionPacketError(
+                "failed to forward".to_string(),
+            ));
         }
         state.set_received_tlc_forwarded(added_tlc_id);
         Ok(())
@@ -2360,11 +2359,7 @@ impl TlcState {
         }
         for tlc in remove_tlcs {
             let tlc_id = tlc.tlc_id();
-            if let Some(tlc) = add_tlcs.remove(&tlc_id) {
-                debug!("Remove tlc: {:?}", tlc);
-            } else {
-                panic!("Remove tlc not found: {:?}", tlc);
-            }
+            let _ = add_tlcs.remove(&tlc_id);
         }
         add_tlcs.values().map(|tlc| tlc.clone()).collect()
     }
@@ -2403,9 +2398,9 @@ impl TlcState {
 
     pub fn all_tlcs(&self) -> impl Iterator<Item = &AddTlcInfo> {
         self.local_pending_tlcs
-            .tlcs()
+            .get_committed_tlcs()
             .into_iter()
-            .chain(self.remote_pending_tlcs.tlcs().into_iter())
+            .chain(self.remote_pending_tlcs.get_committed_tlcs().into_iter())
             .into_iter()
             .filter_map(|tlc| match tlc {
                 TlcKind::AddTlc(info) => Some(info),
@@ -3786,22 +3781,6 @@ impl ChannelActorState {
             .collect()
     }
 
-    fn get_tlcs_for_forwarding(&self) -> Vec<AddTlcInfo> {
-        self.tlc_state
-            .all_tlcs()
-            .filter(|tlc| {
-                tlc.is_received()
-                    && tlc.creation_confirmed_at.is_some()
-                    && tlc.removed_at.is_none()
-                    && tlc.previous_tlc.is_none()
-                    && tlc.relay_status == TlcRelayStatus::WaitingForward
-                    && tlc.payment_preimage.is_none()
-                    && !tlc.onion_packet.is_empty()
-            })
-            .cloned()
-            .collect()
-    }
-
     fn get_tlcs_for_sending_remove_tlcs(&self) -> Vec<AddTlcInfo> {
         self.tlc_state
             .all_tlcs()
@@ -4024,6 +4003,7 @@ impl ChannelActorState {
     pub(crate) fn set_received_tlc_preimage(&mut self, tlc_id: u64, preimage: Option<Hash256>) {
         if let Some(tlc) = self.tlc_state.get_mut(&TLCId::Received(tlc_id)) {
             tlc.payment_preimage = preimage;
+            tlc.onion_packet = Vec::new();
         }
     }
 
@@ -4156,7 +4136,6 @@ impl ChannelActorState {
                         }
                     }
                 };
-                eprintln!("now remove tlc {:?} with reason: {:?}", tlc_id, reason);
                 self.tlc_state
                     .set_tlc_remove(tlc_id, removed_at, reason.clone());
                 current
@@ -4715,7 +4694,7 @@ impl ChannelActorState {
         };
 
         if !flags.contains(ShuttingDownFlags::AWAITING_PENDING_TLCS) || self.any_tlc_pending() {
-            eprintln!(
+            debug!(
                 "Will not shutdown the channel because we require all tlcs resolved and both parties sent the Shutdown message, current state: {:?}, pending tlcs: {:?}",
                 &self.state,
                 &self.tlc_state.all_tlcs().collect::<Vec<_>>()
