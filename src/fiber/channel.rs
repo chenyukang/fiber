@@ -4044,7 +4044,7 @@ impl ChannelActorState {
         if let Some(tlc) = self
             .tlc_state
             .all_tlcs()
-            .find(|tlc| tlc.payment_hash == payment_hash)
+            .find(|tlc| tlc.payment_hash == payment_hash && tlc.removed_at.is_none())
         {
             return Err(ProcessingChannelError::InvalidParameter(format!(
                 "Trying to insert tlc with duplicate payment hash {:?} with tlc {:?}",
