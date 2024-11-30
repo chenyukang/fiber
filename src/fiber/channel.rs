@@ -517,7 +517,7 @@ where
                     };
                     state.local_shutdown_info = Some(shutdown_info);
                     flags |= ShuttingDownFlags::OUR_SHUTDOWN_SENT;
-                    debug!("Auto accept shutdown ...");
+                    eprintln!("Auto accept shutdown ...");
                 }
                 state.update_state(ChannelState::ShuttingDown(flags));
                 state.maybe_transition_to_shutdown(&self.network)?;
@@ -4156,6 +4156,7 @@ impl ChannelActorState {
                         }
                     }
                 };
+                eprintln!("now remove tlc {:?} with reason: {:?}", tlc_id, reason);
                 self.tlc_state
                     .set_tlc_remove(tlc_id, removed_at, reason.clone());
                 current
@@ -4437,11 +4438,9 @@ impl ChannelActorState {
     }
 
     fn any_tlc_pending(&self) -> bool {
-        self.tlc_state.all_tlcs().any(|tlc| {
-            tlc.creation_confirmed_at.is_none()
-                || tlc.removal_confirmed_at.is_none()
-                || tlc.removed_at.is_none()
-        })
+        self.tlc_state
+            .all_tlcs()
+            .any(|tlc| tlc.creation_confirmed_at.is_none() || tlc.removed_at.is_none())
     }
 
     pub fn get_local_funding_pubkey(&self) -> &Pubkey {
@@ -4716,7 +4715,7 @@ impl ChannelActorState {
         };
 
         if !flags.contains(ShuttingDownFlags::AWAITING_PENDING_TLCS) || self.any_tlc_pending() {
-            debug!(
+            eprintln!(
                 "Will not shutdown the channel because we require all tlcs resolved and both parties sent the Shutdown message, current state: {:?}, pending tlcs: {:?}",
                 &self.state,
                 &self.tlc_state.all_tlcs().collect::<Vec<_>>()
