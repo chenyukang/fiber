@@ -2145,9 +2145,7 @@ impl TlcKind {
     pub fn tlc_id(&self) -> TLCId {
         match self {
             TlcKind::AddTlc(info) => info.tlc_id,
-            TlcKind::RemoveTlc(_remove_tlc) => {
-                unreachable!("RemoveTlc should not get tlc_id")
-            }
+            TlcKind::RemoveTlc(remove_tlc) => remove_tlc.tlc_id,
         }
     }
 
@@ -2371,9 +2369,11 @@ impl TlcState {
             }
         }
         for tlc in remove_tlcs {
-            let tlc_id = tlc.tlc_id().flip();
+            let tlc_id = tlc.tlc_id();
             if let Some(tlc) = add_tlcs.remove(&tlc_id) {
                 debug!("Remove tlc: {:?}", tlc);
+            } else {
+                panic!("Remove tlc not found: {:?}", tlc);
             }
         }
         add_tlcs.values().map(|tlc| tlc.clone()).collect()

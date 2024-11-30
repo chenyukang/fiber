@@ -1,5 +1,5 @@
 use crate::fiber::channel::{
-    AddTlcInfo, CommitmentNumbers, TLCId, TlcKind, TlcRelayStatus, TlcState,
+    AddTlcInfo, CommitmentNumbers, RemoveTlcInfo, TLCId, TlcKind, TlcRelayStatus, TlcState,
 };
 use crate::fiber::config::MAX_PAYMENT_TLC_EXPIRY_LIMIT;
 use crate::fiber::graph::PaymentSessionStatus;
@@ -140,6 +140,65 @@ fn test_pending_tlcs() {
     assert_eq!(tlcs.len(), 0);
     let tlcs2 = tlc_state_2.commit_local_tlcs();
     assert_eq!(tlcs2.len(), 0);
+}
+
+#[test]
+fn test_pending_tlcs_with_remove_tlc() {
+    let mut tlc_state = TlcState::default();
+    let add_tlc1 = AddTlcInfo {
+        amount: 10000,
+        channel_id: gen_sha256_hash(),
+        payment_hash: gen_sha256_hash(),
+        expiry: now_timestamp_as_millis_u64() + 1000,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: vec![1],
+        tlc_id: TLCId::Offered(0),
+        created_at: CommitmentNumbers::default(),
+        removal_confirmed_at: None,
+        relay_status: TlcRelayStatus::NoForward,
+        removed_at: None,
+        creation_confirmed_at: None,
+        payment_preimage: None,
+        previous_tlc: None,
+    };
+    let add_tlc2 = AddTlcInfo {
+        amount: 20000,
+        channel_id: gen_sha256_hash(),
+        payment_hash: gen_sha256_hash(),
+        expiry: now_timestamp_as_millis_u64() + 2000,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: vec![2],
+        tlc_id: TLCId::Offered(1),
+        created_at: CommitmentNumbers::default(),
+        removal_confirmed_at: None,
+        relay_status: TlcRelayStatus::NoForward,
+        removed_at: None,
+        creation_confirmed_at: None,
+        payment_preimage: None,
+        previous_tlc: None,
+    };
+    let remote_tlc = RemoveTlcInfo {
+        channel_id: gen_sha256_hash(),
+        tlc_id: TLCId::Offered(0),
+        reason: RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill {
+            payment_preimage: gen_sha256_hash(),
+        }),
+    };
+
+    tlc_state.add_local_tlc(TlcKind::AddTlc(add_tlc1.clone()));
+    tlc_state.add_local_tlc(TlcKind::AddTlc(add_tlc2.clone()));
+    tlc_state.add_local_tlc(TlcKind::RemoveTlc(remote_tlc.clone()));
+
+    let tx1 = tlc_state.get_tlcs_for_local();
+    assert_eq!(tx1.len(), 1);
+    let first = &tx1[0];
+    assert_eq!(first.tlc_id(), TLCId::Offered(1));
+
+    let tx1 = tlc_state.commit_local_tlcs();
+    assert_eq!(tx1.len(), 3);
+
+    let all_tlcs: Vec<&AddTlcInfo> = tlc_state.all_tlcs().collect();
+    assert_eq!(all_tlcs.len(), 2);
 }
 
 #[tokio::test]
