@@ -4494,10 +4494,10 @@ impl ChannelActorState {
                 ));
             }
             if let RemoveTlcReason::RemoveTlcFulfill(fulfill) = reason {
-                if let Some(preimage) = tlc.payment_preimage {
-                    if preimage != fulfill.payment_preimage {
-                        return Err(ProcessingChannelError::FinalIncorrectPreimage);
-                    }
+                let filled_payment_hash: Hash256 =
+                    tlc.hash_algorithm.hash(fulfill.payment_preimage).into();
+                if tlc.payment_hash != filled_payment_hash {
+                    return Err(ProcessingChannelError::FinalIncorrectPreimage);
                 }
             }
             Ok(())

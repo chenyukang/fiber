@@ -1530,6 +1530,9 @@ async fn do_test_remove_tlc_with_wrong_hash_algorithm(
     dbg!("Sleeping for some time to wait for the RemoveTlc processed by both party");
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
+    let preimage = [2; 32];
+    // create a new payment hash
+    let digest = correct_algorithm.hash(&preimage);
     let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
         NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
             ChannelCommandWithId {
