@@ -731,7 +731,7 @@ where
                         let error_code = match status {
                             CkbInvoiceStatus::Expired => TlcErrorCode::InvoiceExpired,
                             CkbInvoiceStatus::Cancelled => TlcErrorCode::InvoiceCancelled,
-                            _ => unreachable!(),
+                            _ => unreachable!("unexpected invoice status"),
                         };
                         let command = RemoveTlcCommand {
                             id: tlc.tlc_id.into(),
@@ -2404,7 +2404,8 @@ impl TlcState {
     }
 
     pub fn all_tlcs_mut(&mut self) -> impl Iterator<Item = &mut AddTlcInfo> {
-        self.local_pending_tlcs
+        let res = self
+            .local_pending_tlcs
             .tlcs_mut()
             .iter_mut()
             .chain(self.remote_pending_tlcs.tlcs_mut().iter_mut())
@@ -2412,7 +2413,13 @@ impl TlcState {
             .filter_map(|tlc| match tlc {
                 TlcKind::AddTlc(info) => Some(info),
                 TlcKind::RemoveTlc(..) => None,
-            })
+            });
+        // remove duplicated tlcs
+        let mut tlc_map = BTreeMap::new();
+        for tlc in res {
+            tlc_map.insert(tlc.tlc_id, tlc);
+        }
+        tlc_map.into_iter().map(|(_, v)| v)
     }
 
     pub fn apply_tlc_remove(
@@ -3772,7 +3779,7 @@ impl ChannelActorState {
         self.tlc_state
             .all_tlcs()
             .filter(|tlc| {
-                tlc.is_received() && tlc.removed_at.is_none() && tlc.payment_preimage.is_some()
+                tlc.is_received() && tlc.removed_at.is_none() && tlc.onion_packet.is_empty()
             })
             .cloned()
             .collect()
@@ -5328,13 +5335,9 @@ impl ChannelActorState {
         self.update_state_on_raa_msg(true);
         self.append_remote_commitment_point(next_per_commitment_point);
         let staging_tlcs = self.tlc_state.commit_local_tlcs();
-        eprintln!("ACK Committing local tlcs: {:?}", staging_tlcs);
         for tlc in staging_tlcs {
-            match tlc {
-                TlcKind::RemoveTlc(remove_tlc) => {
-                    let _ = self.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_tlc.reason)?;
-                }
-                _ => {}
+            if let TlcKind::RemoveTlc(remove_tlc) = tlc {
+                self.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_tlc.reason)?;
             }
         }
 
