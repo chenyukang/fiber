@@ -703,7 +703,7 @@ where
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                 let res = recv.await.expect("remove tlc replied");
-                info!("remove tlc from previous channel: {:?}", &res);
+                eprintln!("remove tlc from previous channel: {:?}", &res);
             } else {
                 unreachable!("remove tlc without previous tlc");
             }
@@ -713,6 +713,7 @@ where
 
     fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState) {
         let tlcs = state.get_tlcs_for_settle_down();
+        eprintln!("try to set down: {:?}", tlcs);
         for tlc_info in tlcs {
             let mut update_invoice_payment_hash = false;
             let tlc = tlc_info.clone();
@@ -943,7 +944,7 @@ where
             && tlc.payment_preimage.is_none()
         {
             if let Err(e) = self
-                .handle_forward_onion_packet(state, add_tlc.onion_packet, tlc_id.into())
+                .handle_forward_onion_packet(state, tlc.onion_packet, tlc_id.into())
                 .await
             {
                 error = Some(e);
@@ -2202,6 +2203,7 @@ impl PendingTlcs {
     }
 
     pub fn push(&mut self, tlc: TlcKind) {
+        assert!(!self.tlcs.iter().any(|t| t == &tlc));
         self.tlcs.push(tlc);
     }
 
@@ -2229,6 +2231,15 @@ impl PendingTlcs {
             TlcKind::AddTlc(info) if info.tlc_id == *tlc_id => Some(info),
             _ => None,
         })
+    }
+
+    pub fn drop_remove_tlc(&mut self, tlc_id: &TLCId) {
+        assert_eq!(self.committed_index, self.tlcs.len());
+        self.tlcs.retain(|tlc| match tlc {
+            TlcKind::RemoveTlc(info) => info.tlc_id != *tlc_id,
+            _ => true,
+        });
+        self.committed_index = self.tlcs.len();
     }
 }
 
@@ -2397,7 +2408,8 @@ impl TlcState {
     }
 
     pub fn all_tlcs(&self) -> impl Iterator<Item = &AddTlcInfo> {
-        self.local_pending_tlcs
+        let res = self
+            .local_pending_tlcs
             .get_committed_tlcs()
             .into_iter()
             .chain(self.remote_pending_tlcs.get_committed_tlcs().into_iter())
@@ -2405,7 +2417,13 @@ impl TlcState {
             .filter_map(|tlc| match tlc {
                 TlcKind::AddTlc(info) => Some(info),
                 TlcKind::RemoveTlc(..) => None,
-            })
+            });
+        // remove duplicated tlcs
+        let mut tlc_map = BTreeMap::new();
+        for tlc in res {
+            tlc_map.insert(tlc.tlc_id, tlc);
+        }
+        tlc_map.into_iter().map(|(_, v)| v)
     }
 
     pub fn all_tlcs_mut(&mut self) -> impl Iterator<Item = &mut AddTlcInfo> {
@@ -2430,9 +2448,13 @@ impl TlcState {
             tlc.removed_at = Some((removed_at, reason.clone()));
         }
 
+        self.local_pending_tlcs.drop_remove_tlc(&tlc_id);
+
         if let Some(tlc) = self.remote_pending_tlcs.get_mut(&tlc_id) {
             tlc.removed_at = Some((removed_at, reason));
         }
+
+        self.remote_pending_tlcs.drop_remove_tlc(&tlc_id);
     }
 }
 
@@ -4583,6 +4605,14 @@ impl ChannelActorState {
             .payment_hash
             .unwrap_or_else(|| command.hash_algorithm.hash(preimage).into());
 
+        let relay_status = {
+            if !command.onion_packet.is_empty() {
+                TlcRelayStatus::WaitingRemove
+            } else {
+                TlcRelayStatus::NoForward
+            }
+        };
+
         TlcKind::AddTlc(AddTlcInfo {
             channel_id: self.get_id(),
             tlc_id: TLCId::Offered(id),
@@ -4593,7 +4623,7 @@ impl ChannelActorState {
             onion_packet: command.onion_packet,
             created_at: self.get_current_commitment_numbers(),
             creation_confirmed_at: None,
-            relay_status: TlcRelayStatus::NoForward,
+            relay_status,
             payment_preimage: None,
             removed_at: None,
             removal_confirmed_at: None,
@@ -5323,6 +5353,7 @@ impl ChannelActorState {
         self.update_state_on_raa_msg(true);
         self.append_remote_commitment_point(next_per_commitment_point);
         let staging_tlcs = self.tlc_state.commit_local_tlcs();
+        eprintln!("ACK Committing local tlcs: {:?}", staging_tlcs);
         for tlc in staging_tlcs {
             match tlc {
                 TlcKind::RemoveTlc(remove_tlc) => {
