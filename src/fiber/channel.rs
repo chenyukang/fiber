@@ -654,12 +654,14 @@ where
         for tlc_info in pending_apply_tlcs {
             match tlc_info {
                 TlcKind::AddTlc(add_tlc) => {
-                    let _ = self
-                        .apply_add_tlc_peer_message(state, add_tlc)
-                        .await
-                        .map_err(|e| {
-                            error!("Error handling AddTlc command: {:?}", e);
-                        });
+                    if add_tlc.is_received() {
+                        let _ = self
+                            .apply_add_tlc_peer_message(state, add_tlc)
+                            .await
+                            .map_err(|e| {
+                                error!("Error handling AddTlc command: {:?}", e);
+                            });
+                    }
                 }
                 TlcKind::RemoveTlc(remove_tlc) => {
                     let _ = self
@@ -677,6 +679,7 @@ where
         let tlc_infos = state.get_tlcs_for_forwarding();
         for info in tlc_infos {
             assert!(info.is_received());
+            eprintln!("debug try_to_forward_pending_tlc: {:?}", info);
             let onion_packet = info.onion_packet.clone();
             let _ = self
                 .handle_forward_onion_packet(state, onion_packet, info.tlc_id.into())
@@ -723,6 +726,7 @@ where
 
     fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState) {
         let tlcs = state.get_tlcs_for_settle_down();
+        eprintln!("try_to_settle_down_tlc: {:?}", tlcs);
         for tlc_info in tlcs {
             let mut update_invoice_payment_hash = false;
             let tlc = tlc_info.clone();
@@ -773,8 +777,6 @@ where
                     .store
                     .update_invoice_status(&tlc.payment_hash, CkbInvoiceStatus::Paid);
             }
-            // we only handle one tlc at a time.
-            break;
         }
     }
 
@@ -887,7 +889,7 @@ where
                     script: udt_type_script.clone(),
                 });
         }
-        warn!("handled add_tlc tlc: {:?}", &tlc);
+        warn!("finished check tlc for peer message: {:?}", &tlc);
         Ok(())
     }
 
@@ -899,7 +901,7 @@ where
         // TODO: here we only check the error which sender didn't follow agreed rules,
         //       if any error happened here we need go to shutdown procedure
         state.check_for_tlc_update(Some(add_tlc.amount), false)?;
-        let tlc_info = state.create_inbounding_tlc(add_tlc, None, None)?;
+        let tlc_info = state.create_inbounding_tlc(add_tlc)?;
         state.check_insert_tlc(&tlc_info)?;
         state.tlc_state.add_remote_tlc(TlcKind::AddTlc(tlc_info));
         state.increment_next_received_tlc_id();
@@ -976,7 +978,6 @@ where
         {
             let mut tlc = tlc_details.clone();
             tlc.payment_preimage = Some(*payment_preimage);
-            // FIXME(tlcs)
             self.subscribers
                 .settled_tlcs_subscribers
                 .send(TlcNotification {
@@ -1975,43 +1976,6 @@ impl CommitmentNumbers {
     }
 }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
-pub struct TLCIds {
-    pub offering: u64,
-    pub received: u64,
-}
-
-impl Default for TLCIds {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl TLCIds {
-    pub fn new() -> Self {
-        Self {
-            offering: 0,
-            received: 0,
-        }
-    }
-
-    pub fn get_next_offering(&self) -> u64 {
-        self.offering
-    }
-
-    pub fn get_next_received(&self) -> u64 {
-        self.received
-    }
-
-    pub fn increment_offering(&mut self) {
-        self.offering += 1;
-    }
-
-    pub fn increment_received(&mut self) {
-        self.received += 1;
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum TLCId {
     Offered(u64),
@@ -2243,7 +2207,6 @@ impl PendingTlcs {
     }
 
     pub fn commit_tlcs(&mut self, tcls: &[TlcKind]) -> Vec<TlcKind> {
-        // FIXME(yukang)
         for tlc in tcls {
             if self.tlcs.iter().any(|t| t == tlc) {
                 continue;
@@ -2254,6 +2217,13 @@ impl PendingTlcs {
         let pending_tlcs = self.get_staging_tlcs().to_vec();
         self.committed_index = self.tlcs.len();
         return pending_tlcs;
+    }
+
+    pub fn get_mut(&mut self, tlc_id: &TLCId) -> Option<&mut AddTlcInfo> {
+        self.tlcs.iter_mut().find_map(|tlc| match tlc {
+            TlcKind::AddTlc(info) if info.tlc_id == *tlc_id => Some(info),
+            _ => None,
+        })
     }
 }
 
@@ -2266,6 +2236,18 @@ pub struct TlcState {
 impl TlcState {
     pub fn get_next_offering(&self) -> u64 {
         self.local_pending_tlcs.next_tlc_id()
+    }
+
+    pub fn get_next_received(&self) -> u64 {
+        self.remote_pending_tlcs.next_tlc_id()
+    }
+
+    pub fn increment_offering(&mut self) {
+        self.local_pending_tlcs.increment_next_tlc_id();
+    }
+
+    pub fn increment_received(&mut self) {
+        self.remote_pending_tlcs.increment_next_tlc_id();
     }
 
     pub fn get(&self, id: &TLCId) -> Option<&AddTlcInfo> {
@@ -2347,17 +2329,19 @@ impl TlcState {
         let mut remove_tlcs = vec![];
         for tlc in committed_tlcs {
             match tlc {
-                TlcKind::AddTlc(..) => {
-                    let _ = add_tlcs.insert(tlc.tlc_id(), tlc.clone());
+                TlcKind::AddTlc(info) => {
+                    if info.removed_at.is_none() {
+                        let _ = add_tlcs.insert(tlc.tlc_id(), tlc.clone());
+                    }
                 }
                 TlcKind::RemoveTlc(..) => {
-                    unreachable!("RemoveTlc should not be in committed tlcs")
+                    //unreachable!("RemoveTlc should not be in committed tlcs")
                 }
             }
         }
         for tlc in staging_tlcs {
             match tlc {
-                TlcKind::AddTlc(..) => {
+                TlcKind::AddTlc(_info) => {
                     // If the tlc is already in the committed tlcs, we should not add it again.
                     // committed tlcs always have the latest tlc information
                     if add_tlcs.contains_key(&tlc.tlc_id()) {
@@ -2433,6 +2417,21 @@ impl TlcState {
                 TlcKind::AddTlc(info) => Some(info),
                 TlcKind::RemoveTlc(..) => None,
             })
+    }
+
+    pub fn set_tlc_remove(
+        &mut self,
+        tlc_id: TLCId,
+        removed_at: CommitmentNumbers,
+        reason: RemoveTlcReason,
+    ) {
+        if let Some(tlc) = self.local_pending_tlcs.get_mut(&tlc_id) {
+            tlc.removed_at = Some((removed_at, reason.clone()));
+        }
+
+        if let Some(tlc) = self.remote_pending_tlcs.get_mut(&tlc_id) {
+            tlc.removed_at = Some((removed_at, reason));
+        }
     }
 }
 
@@ -2515,9 +2514,6 @@ pub struct ChannelActorState {
 
     // Below are fields that are only usable after the channel is funded,
     // (or at some point of the state).
-
-    // The id of next offering/received tlc, must increment by 1 for each new tlc.
-    pub tlc_ids: TLCIds,
 
     // all the TLC related information
     pub tlc_state: TlcState,
@@ -3240,7 +3236,6 @@ impl ChannelActorState {
             commitment_delay_epoch,
             funding_fee_rate,
             id: channel_id,
-            tlc_ids: Default::default(),
             tlc_state: Default::default(),
             local_shutdown_script: local_shutdown_script,
             local_channel_public_keys: local_base_pubkeys,
@@ -3302,7 +3297,6 @@ impl ChannelActorState {
             commitment_delay_epoch,
             funding_fee_rate,
             id: temp_channel_id,
-            tlc_ids: Default::default(),
             tlc_state: Default::default(),
             signer,
             local_channel_public_keys: local_pubkeys,
@@ -3780,7 +3774,7 @@ impl ChannelActorState {
         self.tlc_state
             .all_tlcs()
             .filter(|tlc| {
-                tlc.is_received() && tlc.removed_at.is_none() && tlc.onion_packet.is_empty()
+                tlc.is_received() && tlc.removed_at.is_none() && tlc.payment_preimage.is_some()
             })
             .cloned()
             .collect()
@@ -3795,6 +3789,7 @@ impl ChannelActorState {
                     && tlc.removed_at.is_none()
                     && tlc.previous_tlc.is_none()
                     && tlc.relay_status == TlcRelayStatus::WaitingForward
+                    && tlc.payment_preimage.is_none()
                     && !tlc.onion_packet.is_empty()
             })
             .cloned()
@@ -3985,23 +3980,19 @@ impl ChannelActorState {
     }
 
     pub fn get_next_offering_tlc_id(&self) -> u64 {
-        self.tlc_ids.get_next_offering()
-    }
-
-    pub fn get_next_offering_tlc_id_new(&self) -> u64 {
         self.tlc_state.get_next_offering()
     }
 
     pub fn get_next_received_tlc_id(&self) -> u64 {
-        self.tlc_ids.get_next_received()
+        self.tlc_state.get_next_received()
     }
 
     pub fn increment_next_offered_tlc_id(&mut self) {
-        self.tlc_ids.increment_offering();
+        self.tlc_state.increment_offering();
     }
 
     pub fn increment_next_received_tlc_id(&mut self) {
-        self.tlc_ids.increment_received();
+        self.tlc_state.increment_received();
     }
 
     pub fn get_offered_tlc(&self, tlc_id: u64) -> Option<&AddTlcInfo> {
@@ -4120,7 +4111,7 @@ impl ChannelActorState {
         reason: &RemoveTlcReason,
     ) -> Result<AddTlcInfo, ProcessingChannelError> {
         let removed_at = self.get_current_commitment_numbers();
-        let tlc = match self.tlc_state.get_mut(&tlc_id) {
+        let tlc = match self.tlc_state.get(&tlc_id).cloned() {
             None => {
                 return Err(ProcessingChannelError::InvalidParameter(format!(
                     "Trying to remove non-existing tlc with id {:?}",
@@ -4159,7 +4150,8 @@ impl ChannelActorState {
                         }
                     }
                 };
-                current.removed_at = Some((removed_at, reason.clone()));
+                self.tlc_state
+                    .set_tlc_remove(tlc_id, removed_at, reason.clone());
                 current
             }
         };
@@ -4596,7 +4588,7 @@ impl ChannelActorState {
         // inadvertently click the same button twice, and we will process the same
         // twice, the frontend needs to prevent this kind of behaviour.
         // Is this what we want?
-        let id = self.get_next_offering_tlc_id_new();
+        let id = self.get_next_offering_tlc_id();
         assert!(
             self.get_offered_tlc(id).is_none(),
             "Must not have the same id in pending offered tlcs"
@@ -4630,11 +4622,9 @@ impl ChannelActorState {
     pub fn create_inbounding_tlc(
         &self,
         message: AddTlc,
-        payment_preimage: Option<Hash256>,
-        onion_packet: Option<Vec<u8>>,
     ) -> Result<AddTlcInfo, ProcessingChannelError> {
         let relay_status = {
-            if onion_packet.is_some() {
+            if !message.onion_packet.is_empty() {
                 TlcRelayStatus::WaitingForward
             } else {
                 TlcRelayStatus::NoForward
@@ -4648,11 +4638,11 @@ impl ChannelActorState {
             payment_hash: message.payment_hash,
             expiry: message.expiry,
             hash_algorithm: message.hash_algorithm,
-            onion_packet: onion_packet.unwrap_or_default(),
+            onion_packet: message.onion_packet,
             created_at: self.get_current_commitment_numbers(),
             creation_confirmed_at: None,
             relay_status,
-            payment_preimage,
+            payment_preimage: None,
             removed_at: None,
             removal_confirmed_at: None,
             previous_tlc: None,
@@ -5348,7 +5338,15 @@ impl ChannelActorState {
 
         self.update_state_on_raa_msg(true);
         self.append_remote_commitment_point(next_per_commitment_point);
-        self.tlc_state.commit_local_tlcs();
+        let staging_tlcs = self.tlc_state.commit_local_tlcs();
+        for tlc in staging_tlcs {
+            match tlc {
+                TlcKind::RemoveTlc(remove_tlc) => {
+                    let _ = self.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_tlc.reason)?;
+                }
+                _ => {}
+            }
+        }
 
         network
             .send_message(NetworkActorMessage::new_notification(

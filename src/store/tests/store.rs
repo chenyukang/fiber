@@ -284,7 +284,6 @@ fn test_channel_actor_state_store() {
         commitment_delay_epoch: 100,
         funding_fee_rate: 100,
         id: gen_sha256_hash(),
-        tlc_ids: Default::default(),
         tlc_state: Default::default(),
         local_shutdown_script: Script::default(),
         local_channel_public_keys: ChannelBasePublicKeys {
