@@ -2207,14 +2207,20 @@ impl PendingTlcs {
     }
 
     pub fn commit_tlcs(&mut self, tcls: &[TlcKind]) -> Vec<TlcKind> {
+        let pending_tlcs = self.get_staging_tlcs().to_vec();
         for tlc in tcls {
-            if self.tlcs.iter().any(|t| t == tlc) {
+            if self.tlcs.iter().any(|t| match (t, tlc) {
+                (TlcKind::AddTlc(info1), TlcKind::AddTlc(info2)) => info1.tlc_id == info2.tlc_id,
+                (TlcKind::RemoveTlc(info1), TlcKind::RemoveTlc(info2)) => {
+                    info1.tlc_id == info2.tlc_id
+                }
+                _ => false,
+            }) {
                 continue;
             } else {
                 self.tlcs.push(tlc.clone());
             }
         }
-        let pending_tlcs = self.get_staging_tlcs().to_vec();
         self.committed_index = self.tlcs.len();
         return pending_tlcs;
     }
