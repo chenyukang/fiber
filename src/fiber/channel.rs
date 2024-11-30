@@ -645,6 +645,7 @@ where
         }
         self.try_to_settle_down_tlc(state);
         self.try_to_send_remove_tlcs(state).await;
+        state.update_state_on_raa_msg(false);
         Ok(())
     }
 
@@ -3758,7 +3759,7 @@ impl ChannelActorState {
 
         // Note that we must update channel state here to update commitment number,
         // so that next step will obtain the correct commitmen point.
-        self.update_state_on_raa_msg(false);
+        self.increment_remote_commitment_number();
         let point = self.get_current_local_commitment_point();
 
         network
@@ -3806,12 +3807,6 @@ impl ChannelActorState {
     // This may fill in the creation_confirmed_at and removal_confirmed_at fields
     // of the tlcs. And update the to_local_amount and to_remote_amount.
     fn update_state_on_raa_msg(&mut self, is_received: bool) {
-        if is_received {
-            self.increment_local_commitment_number();
-        } else {
-            self.increment_remote_commitment_number();
-        }
-
         // If this revoke_and_ack message is received from the counterparty,
         // then we should be operating on remote commitment numbers.
         let commitment_numbers = self.get_current_commitment_numbers();
@@ -5332,7 +5327,7 @@ impl ChannelActorState {
             [partial_signature, signature2],
         )?;
 
-        self.update_state_on_raa_msg(true);
+        self.increment_local_commitment_number();
         self.append_remote_commitment_point(next_per_commitment_point);
         let staging_tlcs = self.tlc_state.commit_local_tlcs();
         for tlc in staging_tlcs {
@@ -5340,6 +5335,7 @@ impl ChannelActorState {
                 self.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_tlc.reason)?;
             }
         }
+        self.update_state_on_raa_msg(true);
 
         network
             .send_message(NetworkActorMessage::new_notification(
