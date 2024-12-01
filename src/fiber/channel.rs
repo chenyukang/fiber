@@ -640,10 +640,7 @@ where
                 TlcKind::AddTlc(add_tlc) => {
                     if add_tlc.is_received() {
                         if let Err(e) = self.apply_add_tlc_operation(state, &add_tlc).await {
-                            error!(
-                                "Error handling handle_add_tlc_peer_message message: {:?}",
-                                e
-                            );
+                            error!("Error handling apply add_tlc message: {:?}", e);
                             let error_detail = self.get_tlc_detail_error(state, &e).await;
                             let reason =
                                 RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(error_detail));
@@ -696,7 +693,7 @@ where
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                 let res = recv.await.expect("remove tlc replied");
-                eprintln!("remove tlc from previous channel: {:?}", &res);
+                debug!("remove tlc from previous channel: {:?}", &res);
             } else {
                 unreachable!("remove tlc without previous tlc");
             }
