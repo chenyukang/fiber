@@ -627,22 +627,6 @@ where
         // build commitment tx and verify signature from remote, if passed send ACK for partner
         state.handle_commitment_signed_message(commitment_signed, &self.network)?;
         self.flush_staging_tlc_operations(state).await;
-        if let ChannelState::SigningCommitment(flags) = state.state {
-            if !flags.contains(SigningCommitmentFlags::OUR_COMMITMENT_SIGNED_SENT) {
-                // TODO: maybe we should send our commitment_signed message here.
-                debug!("CommitmentSigned message received, but we haven't sent our commitment_signed message yet");
-                // Notify outside observers.
-                self.network
-                    .send_message(NetworkActorMessage::new_notification(
-                        NetworkServiceEvent::CommitmentSignaturePending(
-                            state.get_remote_peer_id(),
-                            state.get_id(),
-                            state.get_current_commitment_number(false),
-                        ),
-                    ))
-                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-            }
-        }
         self.try_to_settle_down_tlc(state);
         self.try_to_send_remove_tlcs(state).await;
         state.update_state_on_raa_msg(false);
@@ -5048,6 +5032,23 @@ impl ChannelActorState {
                         );
                     }
                 }
+            }
+        }
+
+        if let ChannelState::SigningCommitment(flags) = self.state {
+            if !flags.contains(SigningCommitmentFlags::OUR_COMMITMENT_SIGNED_SENT) {
+                // TODO: maybe we should send our commitment_signed message here.
+                debug!("CommitmentSigned message received, but we haven't sent our commitment_signed message yet");
+                // Notify outside observers.
+                network
+                    .send_message(NetworkActorMessage::new_notification(
+                        NetworkServiceEvent::CommitmentSignaturePending(
+                            self.get_remote_peer_id(),
+                            self.get_id(),
+                            self.get_current_commitment_number(false),
+                        ),
+                    ))
+                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
             }
         }
         Ok(())
