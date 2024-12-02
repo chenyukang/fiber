@@ -284,6 +284,7 @@ fn test_pending_tlcs_with_remove_tlc() {
     assert_eq!(tx1.len(), 3);
 
     let all_tlcs: Vec<&AddTlcInfo> = tlc_state.all_commited_tlcs().collect();
+    eprintln!("all_tlcs: {:?}", all_tlcs);
     assert_eq!(all_tlcs.len(), 2);
 }
 

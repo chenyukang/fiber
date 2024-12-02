@@ -2201,27 +2201,27 @@ impl PendingTlcs {
     }
 
     pub fn push(&mut self, tlc: TlcKind) {
-        assert!(!self.tlcs.iter().any(|t| t == &tlc));
+        assert!(!self.is_tlc_present(&tlc));
         self.tlcs.push(tlc);
     }
 
+    fn is_tlc_present(&self, tlc: &TlcKind) -> bool {
+        self.tlcs.iter().any(|t| match (t, tlc) {
+            (TlcKind::AddTlc(info1), TlcKind::AddTlc(info2)) => info1.tlc_id == info2.tlc_id,
+            (TlcKind::RemoveTlc(info1), TlcKind::RemoveTlc(info2)) => info1.tlc_id == info2.tlc_id,
+            _ => false,
+        })
+    }
+
     pub fn commit_tlcs(&mut self, committed_tlcs: &[TlcKind]) -> Vec<TlcKind> {
-        let pending_tlcs = self.get_staging_tlcs().to_vec();
+        let staging_tlcs = self.get_staging_tlcs().to_vec();
         for tlc in committed_tlcs {
-            if self.tlcs.iter().any(|t| match (t, tlc) {
-                (TlcKind::AddTlc(info1), TlcKind::AddTlc(info2)) => info1.tlc_id == info2.tlc_id,
-                (TlcKind::RemoveTlc(info1), TlcKind::RemoveTlc(info2)) => {
-                    info1.tlc_id == info2.tlc_id
-                }
-                _ => false,
-            }) {
-                continue;
-            } else {
+            if !self.is_tlc_present(tlc) {
                 self.tlcs.push(tlc.clone());
             }
         }
         self.committed_index = self.tlcs.len();
-        return pending_tlcs;
+        return staging_tlcs;
     }
 
     pub fn get_mut(&mut self, tlc_id: &TLCId) -> Option<&mut AddTlcInfo> {
