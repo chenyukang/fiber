@@ -534,6 +534,26 @@ impl NetworkActorStateStore for MemoryStore {
     }
 }
 
+impl MemoryStore {
+    fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
+        let is_node_1 = match &message {
+            BroadcastMessageWithTimestamp::ChannelUpdate(msg) if msg.is_update_of_node_2() => false,
+            _ => true,
+        };
+        let key = (message.message_id(), is_node_1);
+        match self.gossip_messages_map.read().unwrap().get(&key) {
+            Some(old) if old.timestamp() > message.timestamp() => {
+                return;
+            }
+            _ => {}
+        }
+        self.gossip_messages_map
+            .write()
+            .unwrap()
+            .insert(key, message);
+    }
+}
+
 impl GossipMessageStore for MemoryStore {
     fn get_broadcast_messages_iter(
         &self,
@@ -579,24 +599,6 @@ impl GossipMessageStore for MemoryStore {
         self.save_broadcast_message(BroadcastMessageWithTimestamp::NodeAnnouncement(
             node_announcement,
         ));
-    }
-
-    fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
-        let is_node_1 = match &message {
-            BroadcastMessageWithTimestamp::ChannelUpdate(msg) if msg.is_update_of_node_2() => false,
-            _ => true,
-        };
-        let key = (message.message_id(), is_node_1);
-        match self.gossip_messages_map.read().unwrap().get(&key) {
-            Some(old) if old.timestamp() > message.timestamp() => {
-                return;
-            }
-            _ => {}
-        }
-        self.gossip_messages_map
-            .write()
-            .unwrap()
-            .insert(key, message);
     }
 
     fn get_broadcast_message_with_cursor(

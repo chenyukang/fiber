@@ -120,20 +120,6 @@ pub trait GossipMessageStore {
         }
     }
 
-    fn save_broadcast_message(&self, message: BroadcastMessageWithTimestamp) {
-        match message {
-            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement) => {
-                self.save_channel_announcement(timestamp, channel_announcement)
-            }
-            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
-                self.save_channel_update(channel_update)
-            }
-            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
-                self.save_node_announcement(node_announcement)
-            }
-        }
-    }
-
     fn save_channel_announcement(&self, timestamp: u64, channel_announcement: ChannelAnnouncement);
 
     fn save_channel_update(&self, channel_update: ChannelUpdate);
@@ -426,7 +412,7 @@ where
                             Ok(verified_message) => {
                                 // To simplify things, we don't query missing messages related to this message.
                                 // We just save the verified messages to the store.
-                                state.store.save_broadcast_message(verified_message.clone());
+                                save_broadcast_message(&state.store, verified_message.clone());
                             }
                             Err(error) => {
                                 error!("Failed to verify and save broadcast message: {:?}", error);
@@ -581,6 +567,58 @@ impl<S: GossipMessageStore + Sync> SubscribableGossipMessageStore
         }
     }
 }
+
+impl<S: GossipMessageStore> GossipMessageStore for ExtendedGossipMessageStore<S> {
+    fn get_broadcast_messages_iter(
+        &self,
+        after_cursor: &Cursor,
+    ) -> impl IntoIterator<Item = BroadcastMessageWithTimestamp> {
+        self.store.get_broadcast_messages_iter(after_cursor)
+    }
+
+    fn save_channel_announcement(&self, timestamp: u64, channel_announcement: ChannelAnnouncement) {
+        self.store
+            .save_channel_announcement(timestamp, channel_announcement)
+    }
+
+    fn save_channel_update(&self, channel_update: ChannelUpdate) {
+        self.store.save_channel_update(channel_update)
+    }
+
+    fn save_node_announcement(&self, node_announcement: NodeAnnouncement) {
+        self.store.save_node_announcement(node_announcement)
+    }
+
+    fn get_broadcast_message_with_cursor(
+        &self,
+        cursor: &Cursor,
+    ) -> Option<BroadcastMessageWithTimestamp> {
+        self.store.get_broadcast_message_with_cursor(cursor)
+    }
+
+    fn get_latest_broadcast_message_cursor(&self) -> Option<Cursor> {
+        self.store.get_latest_broadcast_message_cursor()
+    }
+
+    fn get_latest_channel_announcement_timestamp(&self, outpoint: &OutPoint) -> Option<u64> {
+        self.store
+            .get_latest_channel_announcement_timestamp(outpoint)
+    }
+
+    fn get_latest_channel_update_timestamp(
+        &self,
+        outpoint: &OutPoint,
+        is_node1: bool,
+    ) -> Option<u64> {
+        self.store
+            .get_latest_channel_update_timestamp(outpoint, is_node1)
+    }
+
+    fn get_latest_node_announcement_timestamp(&self, pk: &Pubkey) -> Option<u64> {
+        self.store.get_latest_node_announcement_timestamp(pk)
+    }
+}
+
 pub struct ExtendedGossipMessageStoreState<S> {
     store: S,
     next_id: u64,
@@ -729,7 +767,7 @@ where
                 verified_message
             )));
         }
-        self.store.save_broadcast_message(verified_message.clone());
+        save_broadcast_message(&self.store, verified_message.clone());
 
         // If there is any messages related to this message that we haven't obtained yet, we will
         // add them to pending_queries, which would be processed later.
@@ -923,6 +961,23 @@ fn have_related_messages_in_store<S: GossipMessageStore>(
 pub(crate) struct GossipProtocolHandle {
     actor: ActorRef<GossipActorMessage>,
     sender: Option<oneshot::Sender<ServiceAsyncControl>>,
+}
+
+fn save_broadcast_message<S: GossipMessageStore>(
+    store: &S,
+    message: BroadcastMessageWithTimestamp,
+) {
+    match message {
+        BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement) => {
+            store.save_channel_announcement(timestamp, channel_announcement)
+        }
+        BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+            store.save_channel_update(channel_update)
+        }
+        BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+            store.save_node_announcement(node_announcement)
+        }
+    }
 }
 
 async fn verify_broadcast_message<S: GossipMessageStore>(
