@@ -7,6 +7,7 @@ use crate::fiber::network::SendPaymentCommand;
 use crate::fiber::tests::test_utils::{
     gen_rand_public_key, gen_sha256_hash, NetworkNodeConfigBuilder,
 };
+use crate::fiber::types::TlcErrorCode;
 use crate::{
     ckb::contracts::{get_cell_deps, Contract},
     fiber::{
@@ -143,6 +144,91 @@ fn test_pending_tlcs() {
 }
 
 #[test]
+fn test_pending_tlcs_duplicated_tlcs() {
+    let mut tlc_state = TlcState::default();
+    let add_tlc1 = AddTlcInfo {
+        amount: 10000,
+        channel_id: gen_sha256_hash(),
+        payment_hash: gen_sha256_hash(),
+        expiry: now_timestamp_as_millis_u64() + 1000,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: vec![1],
+        tlc_id: TLCId::Offered(0),
+        created_at: CommitmentNumbers::default(),
+        removal_confirmed_at: None,
+        relay_status: TlcRelayStatus::NoForward,
+        removed_at: None,
+        creation_confirmed_at: None,
+        payment_preimage: None,
+        previous_tlc: None,
+    };
+    tlc_state.add_local_tlc(TlcKind::AddTlc(add_tlc1.clone()));
+
+    let mut tlc_state_2 = TlcState::default();
+    tlc_state_2.add_remote_tlc(TlcKind::AddTlc(add_tlc1.clone()));
+
+    let tx1 = tlc_state.get_tlcs_for_local();
+    let tx2 = tlc_state_2.get_tlcs_for_remote();
+
+    assert_eq!(tx1, tx2);
+
+    let tlcs = tlc_state.commit_local_tlcs();
+    assert_eq!(tlcs.len(), 1);
+
+    let tlcs2 = tlc_state_2.commit_remote_tlcs();
+    assert_eq!(tlcs2.len(), 1);
+
+    assert_eq!(tx1, tx2);
+
+    let tlcs = tlc_state.commit_local_tlcs();
+    assert_eq!(tlcs.len(), 0);
+
+    let tlcs2 = tlc_state_2.commit_remote_tlcs();
+    assert_eq!(tlcs2.len(), 0);
+
+    let add_tlc2 = AddTlcInfo {
+        amount: 20000,
+        channel_id: gen_sha256_hash(),
+        payment_hash: gen_sha256_hash(),
+        expiry: now_timestamp_as_millis_u64() + 2000,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: vec![2],
+        tlc_id: TLCId::Offered(1),
+        created_at: CommitmentNumbers::default(),
+        removal_confirmed_at: None,
+        relay_status: TlcRelayStatus::NoForward,
+        removed_at: None,
+        creation_confirmed_at: None,
+        payment_preimage: None,
+        previous_tlc: None,
+    };
+
+    tlc_state_2.add_local_tlc(TlcKind::AddTlc(add_tlc2.clone()));
+    tlc_state.add_remote_tlc(TlcKind::AddTlc(add_tlc2.clone()));
+
+    let tx1 = tlc_state.get_tlcs_for_remote();
+    let tx2 = tlc_state_2.get_tlcs_for_local();
+
+    assert_eq!(tx1, tx2);
+
+    let tlcs = tlc_state.commit_remote_tlcs();
+    assert_eq!(tlcs.len(), 1);
+    let tlcs2 = tlc_state_2.commit_local_tlcs();
+    assert_eq!(tlcs2.len(), 1);
+    assert_eq!(tx1, tx2);
+
+    let tlcs = tlc_state.commit_remote_tlcs();
+    assert_eq!(tlcs.len(), 0);
+    let tlcs2 = tlc_state_2.commit_local_tlcs();
+    assert_eq!(tlcs2.len(), 0);
+
+    let committed_tlcs1 = tlc_state.all_commited_tlcs().collect::<Vec<_>>();
+    eprintln!("committed tlcs1: {:?}", committed_tlcs1);
+    let committed_tlcs2 = tlc_state_2.all_commited_tlcs().collect::<Vec<_>>();
+    eprintln!("committed tlcs2: {:?}", committed_tlcs2);
+}
+
+#[test]
 fn test_pending_tlcs_with_remove_tlc() {
     let mut tlc_state = TlcState::default();
     let add_tlc1 = AddTlcInfo {
@@ -197,7 +283,7 @@ fn test_pending_tlcs_with_remove_tlc() {
     let tx1 = tlc_state.commit_local_tlcs();
     assert_eq!(tx1.len(), 3);
 
-    let all_tlcs: Vec<&AddTlcInfo> = tlc_state.all_tlcs().collect();
+    let all_tlcs: Vec<&AddTlcInfo> = tlc_state.all_commited_tlcs().collect();
     assert_eq!(all_tlcs.len(), 2);
 }
 
@@ -1642,6 +1728,92 @@ async fn do_test_remove_tlc_with_expiry_error() {
     .expect("node_b alive");
 
     assert!(add_tlc_result.is_err());
+}
+
+#[tokio::test]
+async fn do_test_add_tlc_duplicated() {
+    let node_a_funding_amount = 100000000000;
+    let node_b_funding_amount = 6200000000;
+
+    let (node_a, _node_b, new_channel_id) =
+        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, false)
+            .await;
+
+    let preimage = [1; 32];
+    let digest = HashAlgorithm::CkbHash.hash(&preimage);
+    let tlc_amount = 1000000000;
+
+    for i in 1..=2 {
+        eprintln!("Adding TLC #{}", i);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        // add tlc command with expiry soon
+        let add_tlc_command = AddTlcCommand {
+            amount: tlc_amount,
+            hash_algorithm: HashAlgorithm::CkbHash,
+            payment_hash: Some(digest.into()),
+            expiry: now_timestamp_as_millis_u64() + 10,
+            preimage: None,
+            onion_packet: vec![],
+            previous_tlc: None,
+        };
+        let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
+                ChannelCommandWithId {
+                    channel_id: new_channel_id,
+                    command: ChannelCommand::AddTlc(add_tlc_command, rpc_reply),
+                },
+            ))
+        })
+        .expect("node_b alive");
+        if i == 1 {
+            assert!(add_tlc_result.is_ok());
+        }
+        if i == 2 {
+            assert!(add_tlc_result.is_err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn do_test_add_tlc_limit() {
+    let node_a_funding_amount = 100000000000;
+    let node_b_funding_amount = 6200000000;
+
+    let (node_a, _node_b, new_channel_id) =
+        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, false)
+            .await;
+
+    let tlc_amount = 1000000000;
+
+    for i in 1..=100 {
+        eprintln!("Adding TLC #{}", i);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let add_tlc_command = AddTlcCommand {
+            amount: tlc_amount,
+            hash_algorithm: HashAlgorithm::CkbHash,
+            payment_hash: gen_sha256_hash().into(),
+            expiry: now_timestamp_as_millis_u64() + 100000000,
+            preimage: None,
+            onion_packet: vec![],
+            previous_tlc: None,
+        };
+        let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
+                ChannelCommandWithId {
+                    channel_id: new_channel_id,
+                    command: ChannelCommand::AddTlc(add_tlc_command, rpc_reply),
+                },
+            ))
+        })
+        .expect("node_b alive");
+        if let Err(err) = add_tlc_result {
+            let code = err.decode().unwrap();
+            eprintln!("Error: {:?}", code);
+            assert_eq!(code.error_code, TlcErrorCode::TemporaryChannelFailure);
+            break;
+        }
+        assert!(add_tlc_result.is_ok());
+    }
 }
 
 #[tokio::test]
