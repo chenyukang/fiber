@@ -632,7 +632,6 @@ where
         // build commitment tx and verify signature from remote, if passed send ACK for partner
         state.handle_commitment_signed_message(commitment_signed, &self.network)?;
         self.flush_staging_tlc_operations(state).await;
-        self.try_to_settle_down_tlc(state);
         self.try_to_send_remove_tlcs(state).await;
         state.update_state_on_raa_msg(false);
         Ok(())
@@ -705,58 +704,60 @@ where
         }
     }
 
-    fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState) {
-        let tlcs = state.get_tlcs_for_settle_down();
-        for tlc_info in tlcs {
-            let mut update_invoice_payment_hash = false;
-            let tlc = tlc_info.clone();
-            if let Some(invoice) = self.store.get_invoice(&tlc.payment_hash) {
-                let status = self.get_invoice_status(&invoice);
-                match status {
-                    CkbInvoiceStatus::Expired | CkbInvoiceStatus::Cancelled => {
-                        let error_code = match status {
-                            CkbInvoiceStatus::Expired => TlcErrorCode::InvoiceExpired,
-                            CkbInvoiceStatus::Cancelled => TlcErrorCode::InvoiceCancelled,
-                            _ => unreachable!("unexpected invoice status"),
-                        };
-                        let command = RemoveTlcCommand {
-                            id: tlc.tlc_id.into(),
-                            reason: RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(TlcErr::new(
-                                error_code,
-                            ))),
-                        };
-                        let result = self.handle_remove_tlc_command(state, command);
-                        info!("try to settle down tlc: {:?} result: {:?}", &tlc, &result);
-                    }
-                    CkbInvoiceStatus::Paid => {
-                        unreachable!("Paid invoice shold not be paid again");
-                    }
-                    _ => {
-                        update_invoice_payment_hash = true;
-                    }
+    fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState, tlc_id: u64) {
+        let tlc_info = state.get_received_tlc(tlc_id).expect("expect tlc");
+        let preimage = tlc_info
+            .payment_preimage
+            .or_else(|| self.store.get_invoice_preimage(&tlc_info.payment_hash));
+
+        let preimage = if let Some(preimage) = preimage {
+            preimage
+        } else {
+            return;
+        };
+
+        let mut update_invoice_payment_hash = false;
+        let tlc = tlc_info.clone();
+        if let Some(invoice) = self.store.get_invoice(&tlc.payment_hash) {
+            let status = self.get_invoice_status(&invoice);
+            match status {
+                CkbInvoiceStatus::Expired | CkbInvoiceStatus::Cancelled => {
+                    let error_code = match status {
+                        CkbInvoiceStatus::Expired => TlcErrorCode::InvoiceExpired,
+                        CkbInvoiceStatus::Cancelled => TlcErrorCode::InvoiceCancelled,
+                        _ => unreachable!("unexpected invoice status"),
+                    };
+                    let command = RemoveTlcCommand {
+                        id: tlc.tlc_id.into(),
+                        reason: RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(TlcErr::new(
+                            error_code,
+                        ))),
+                    };
+                    let result = self.handle_remove_tlc_command(state, command);
+                    info!("try to settle down tlc: {:?} result: {:?}", &tlc, &result);
+                }
+                CkbInvoiceStatus::Paid => {
+                    unreachable!("Paid invoice shold not be paid again");
+                }
+                _ => {
+                    update_invoice_payment_hash = true;
                 }
             }
-            let preimage = if let Some(preimage) = tlc.payment_preimage {
-                preimage
-            } else if let Some(preimage) = self.store.get_invoice_preimage(&tlc.payment_hash) {
-                preimage
-            } else {
-                // here maybe the tlc is not the last hop, we can not settle down it now.
-                // maybe we should exclude it from the settle down list.
-                continue;
-            };
-            let command = RemoveTlcCommand {
+        }
+
+        let result = self.handle_remove_tlc_command(
+            state,
+            RemoveTlcCommand {
                 id: tlc.tlc_id.into(),
                 reason: RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill {
                     payment_preimage: preimage,
                 }),
-            };
-            let result = self.handle_remove_tlc_command(state, command);
-            if result.is_ok() && update_invoice_payment_hash {
-                let _ = self
-                    .store
-                    .update_invoice_status(&tlc.payment_hash, CkbInvoiceStatus::Paid);
-            }
+            },
+        );
+        if result.is_ok() && update_invoice_payment_hash {
+            let _ = self
+                .store
+                .update_invoice_status(&tlc.payment_hash, CkbInvoiceStatus::Paid);
         }
     }
 
@@ -815,12 +816,13 @@ where
                     .current
                     .payment_preimage
                     .or_else(|| self.store.get_invoice_preimage(&add_tlc.payment_hash));
-                state.set_received_tlc_preimage(add_tlc.tlc_id.into(), preimage);
+
                 if let Some(preimage) = preimage {
                     let filled_payment_hash: Hash256 = add_tlc.hash_algorithm.hash(preimage).into();
                     if add_tlc.payment_hash != filled_payment_hash {
                         return Err(ProcessingChannelError::FinalIncorrectPreimage);
                     }
+                    state.set_received_tlc_preimage(add_tlc.tlc_id.into(), Some(preimage));
                 } else {
                     return Err(ProcessingChannelError::FinalIncorrectPaymentHash);
                 }
@@ -860,6 +862,12 @@ where
                     script: udt_type_script.clone(),
                 });
         }
+
+        // we don't need to settle down the tlc if it is not the last hop here,
+        // some e2e tests are calling AddTlc manually, so we can not use onion packet to
+        // check whether it's the last hop here, maybe need to revisit in future.
+        self.try_to_settle_down_tlc(state, add_tlc.tlc_id.into());
+
         warn!("finished check tlc for peer message: {:?}", &add_tlc);
         Ok(())
     }
@@ -3764,15 +3772,6 @@ impl ChannelActorState {
                 )),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-    }
-
-    fn get_tlcs_for_settle_down(&self) -> Vec<AddTlcInfo> {
-        self.tlc_state
-            .all_tlcs()
-            // any better method to filter out the middle hop tlcs?
-            .filter(|tlc| tlc.is_received() && tlc.removed_at.is_none())
-            .cloned()
-            .collect()
     }
 
     fn get_tlcs_for_sending_remove_tlcs(&self) -> Vec<AddTlcInfo> {
