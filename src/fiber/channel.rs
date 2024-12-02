@@ -1487,9 +1487,9 @@ where
 
                 self.network
                     .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
-                            update,
-                        )),
+                        NetworkActorCommand::BroadcastMessages(vec![
+                            BroadcastMessage::ChannelUpdate(update),
+                        ]),
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
@@ -2629,9 +2629,9 @@ impl ChannelActorState {
 
         network
             .send_message(NetworkActorMessage::new_command(
-                NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
+                NetworkActorCommand::BroadcastMessages(vec![BroadcastMessage::ChannelUpdate(
                     channel_update,
-                )),
+                )]),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
     }
@@ -4628,26 +4628,15 @@ impl ChannelActorState {
             self.on_channel_ready(network).await;
 
             debug!(
-                "Broadcasting channel announcement message {:?}",
-                &channel_announcement,
+                "Broadcasting channel announcement {:?} and channel update {:?}",
+                &channel_announcement, &channel_update
             );
             network
                 .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelAnnouncement(
-                        channel_announcement,
-                    )),
-                ))
-                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-            debug!(
-                "Broadcasting channel update message to peers: {:?}",
-                &channel_update
-            );
-
-            network
-                .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::BroadcastMessage(BroadcastMessage::ChannelUpdate(
-                        channel_update,
-                    )),
+                    NetworkActorCommand::BroadcastMessages(vec![
+                        BroadcastMessage::ChannelAnnouncement(channel_announcement),
+                        BroadcastMessage::ChannelUpdate(channel_update),
+                    ]),
                 ))
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
         }

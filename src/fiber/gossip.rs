@@ -227,7 +227,7 @@ pub(crate) enum GossipActorMessage {
     // In production, we process GossipMessage from the network.
     ProcessBroadcastMessage(BroadcastMessage),
     // Broadcast a BroadcastMessage created by us to the network.
-    BroadcastMessage(BroadcastMessage),
+    BroadcastMessages(Vec<BroadcastMessage>),
     // Received GossipMessage from a peer
     GossipMessage(GossipMessageWithPeerId),
 }
@@ -1221,47 +1221,49 @@ where
                     );
                 }
             }
-            GossipActorMessage::BroadcastMessage(message) => {
-                debug!("Trying to broadcast message: {:?}", &message);
-                match state
-                    .verify_and_save_broadcast_message(message.clone())
-                    .await
-                {
-                    Ok(broadcast_message) => {
-                        // This is our own message, so we will broadcast it to all peers immediately.
-                        for (peer, peer_state) in &state.peer_states {
-                            let session = peer_state.session;
-                            match &peer_state.filter {
-                                Some(cursor) if cursor < &broadcast_message.cursor() => {
-                                    state
-                                        .send_message_to_session(
-                                            session,
-                                            GossipMessage::BroadcastMessagesFilterResult(
-                                                broadcast_message
-                                                    .create_broadcast_messages_filter_result(),
-                                            ),
-                                        )
-                                        .await?;
-                                }
-                                _ => {
-                                    debug!(
+            GossipActorMessage::BroadcastMessages(messages) => {
+                debug!("Trying to broadcast message: {:?}", &messages);
+                for message in messages {
+                    match state
+                        .verify_and_save_broadcast_message(message.clone())
+                        .await
+                    {
+                        Ok(broadcast_message) => {
+                            // This is our own message, so we will broadcast it to all peers immediately.
+                            for (peer, peer_state) in &state.peer_states {
+                                let session = peer_state.session;
+                                match &peer_state.filter {
+                                    Some(cursor) if cursor < &broadcast_message.cursor() => {
+                                        state
+                                            .send_message_to_session(
+                                                session,
+                                                GossipMessage::BroadcastMessagesFilterResult(
+                                                    broadcast_message
+                                                        .create_broadcast_messages_filter_result(),
+                                                ),
+                                            )
+                                            .await?;
+                                    }
+                                    _ => {
+                                        debug!(
                                         "Ignoring broadcast message for peer {:?}: {:?} as its cursor is {:?}",
                                         peer, &broadcast_message, &peer_state.filter
                                     );
+                                    }
                                 }
                             }
                         }
-                    }
-                    Err(error) => {
-                        // This should never happen because we have already verified the message before broadcasting.
-                        // But it is possible that we failed to obtain the block timestamp for the message.
-                        error!(
-                            "Failed to verify and save broadcast message {:?}: {:?}",
-                            &message, &error
-                        );
-                        return Ok(());
-                    }
-                };
+                        Err(error) => {
+                            // This should never happen because we have already verified the message before broadcasting.
+                            // But it is possible that we failed to obtain the block timestamp for the message.
+                            error!(
+                                "Failed to verify and save broadcast message {:?}: {:?}",
+                                &message, &error
+                            );
+                            return Ok(());
+                        }
+                    };
+                }
             }
             GossipActorMessage::TickNetworkMaintenance => {
                 debug!(

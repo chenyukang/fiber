@@ -219,7 +219,7 @@ pub enum NetworkActorCommand {
     // Process a broadcast message from the network.
     ProcessBroadcastMessage(BroadcastMessage),
     // Broadcast our BroadcastMessage to the network.
-    BroadcastMessage(BroadcastMessage),
+    BroadcastMessages(Vec<BroadcastMessage>),
     // Broadcast local information to the network.
     BroadcastLocalInfo(LocalInfoKind),
     SignMessage([u8; 32], RpcReplyPort<EcdsaSignature>),
@@ -1164,10 +1164,10 @@ where
                     .gossip_actor
                     .send_message(GossipActorMessage::ProcessBroadcastMessage(message));
             }
-            NetworkActorCommand::BroadcastMessage(message) => {
+            NetworkActorCommand::BroadcastMessages(message) => {
                 let _ = state
                     .gossip_actor
-                    .send_message(GossipActorMessage::BroadcastMessage(message));
+                    .send_message(GossipActorMessage::BroadcastMessages(message));
             }
             NetworkActorCommand::SignMessage(message, reply) => {
                 let signature = state.private_key.sign(message);
@@ -1199,9 +1199,9 @@ where
                     let message = state.get_or_create_new_node_announcement_message();
                     myself
                         .send_message(NetworkActorMessage::new_command(
-                            NetworkActorCommand::BroadcastMessage(
+                            NetworkActorCommand::BroadcastMessages(vec![
                                 BroadcastMessage::NodeAnnouncement(message),
-                            ),
+                            ]),
                         ))
                         .expect(ASSUME_NETWORK_MYSELF_ALIVE);
                 }
@@ -2224,7 +2224,9 @@ where
                 remote_peer_id, &message
             );
             let _ = self.network.send_message(NetworkActorMessage::new_command(
-                NetworkActorCommand::BroadcastMessage(BroadcastMessage::NodeAnnouncement(message)),
+                NetworkActorCommand::BroadcastMessages(vec![BroadcastMessage::NodeAnnouncement(
+                    message,
+                )]),
             ));
         } else {
             debug!(
@@ -2788,7 +2790,7 @@ where
         // Save our own NodeInfo to the network graph.
         let node_announcement = state.get_or_create_new_node_announcement_message();
         myself.send_message(NetworkActorMessage::new_command(
-            NetworkActorCommand::BroadcastMessage(BroadcastMessage::NodeAnnouncement(
+            NetworkActorCommand::ProcessBroadcastMessage(BroadcastMessage::NodeAnnouncement(
                 node_announcement.clone(),
             )),
         ))?;
