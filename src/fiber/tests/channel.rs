@@ -230,6 +230,7 @@ fn test_pending_tlcs_duplicated_tlcs() {
     eprintln!("committed tlcs1: {:?}", committed_tlcs1);
     let committed_tlcs2 = tlc_state_2.all_commited_tlcs().collect::<Vec<_>>();
     eprintln!("committed tlcs2: {:?}", committed_tlcs2);
+    assert_eq!(committed_tlcs1, committed_tlcs2);
 }
 
 #[test]
@@ -290,7 +291,6 @@ fn test_pending_tlcs_with_remove_tlc() {
     assert_eq!(tx1.len(), 3);
 
     let all_tlcs: Vec<&AddTlcInfo> = tlc_state.all_commited_tlcs().collect();
-    eprintln!("all_tlcs: {:?}", all_tlcs);
     assert_eq!(all_tlcs.len(), 2);
 }
 
@@ -699,7 +699,6 @@ async fn test_network_send_previous_tlc_error() {
     };
 
     let res = call!(node_a.network_actor, message).expect("node_a alive");
-    eprintln!("send payment {:?}", res);
     assert!(res.is_ok());
     let payment_hash = res.unwrap().payment_hash;
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -1764,7 +1763,6 @@ async fn do_test_add_tlc_duplicated() {
     let tlc_amount = 1000000000;
 
     for i in 1..=2 {
-        eprintln!("Adding TLC #{}", i);
         std::thread::sleep(std::time::Duration::from_millis(400));
         // add tlc command with expiry soon
         let add_tlc_command = AddTlcCommand {
@@ -1830,7 +1828,6 @@ async fn do_test_add_tlc_waiting_ack() {
             // we are sending AddTlc constantly, so we should get a TemporaryChannelFailure
             assert!(add_tlc_result.is_err());
             let code = add_tlc_result.unwrap_err().decode().unwrap();
-            eprintln!("Error: {:?}", code);
             assert_eq!(code.error_code, TlcErrorCode::TemporaryChannelFailure);
         } else {
             assert!(add_tlc_result.is_ok());
@@ -1860,7 +1857,6 @@ async fn do_test_add_tlc_number_limit() {
     let tlc_amount = 1000000000;
 
     for i in 1..=max_tlc_number + 1 {
-        eprintln!("Adding TLC #{}", i);
         std::thread::sleep(std::time::Duration::from_millis(400));
         let add_tlc_command = AddTlcCommand {
             amount: tlc_amount,
@@ -1884,7 +1880,6 @@ async fn do_test_add_tlc_number_limit() {
         if i == max_tlc_number + 1 {
             assert!(add_tlc_result.is_err());
             let code = add_tlc_result.unwrap_err().decode().unwrap();
-            eprintln!("Error: {:?}", code);
             assert_eq!(code.error_code, TlcErrorCode::TemporaryChannelFailure);
         } else {
             assert!(add_tlc_result.is_ok());
@@ -1914,7 +1909,6 @@ async fn do_test_add_tlc_value_limit() {
     let tlc_amount = 1000000000;
 
     for i in 1..=max_tlc_number + 1 {
-        eprintln!("Adding TLC #{}", i);
         std::thread::sleep(std::time::Duration::from_millis(400));
         let add_tlc_command = AddTlcCommand {
             amount: tlc_amount,
@@ -1939,7 +1933,6 @@ async fn do_test_add_tlc_value_limit() {
         if i == max_tlc_number + 1 {
             assert!(add_tlc_result.is_err());
             let code = add_tlc_result.unwrap_err().decode().unwrap();
-            eprintln!("Error: {:?}", code);
             assert_eq!(code.error_code, TlcErrorCode::TemporaryChannelFailure);
         } else {
             assert!(add_tlc_result.is_ok());
