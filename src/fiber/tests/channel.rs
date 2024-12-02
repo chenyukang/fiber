@@ -1,6 +1,5 @@
 use crate::fiber::channel::{
     AddTlcInfo, CommitmentNumbers, RemoveTlcInfo, TLCId, TlcKind, TlcRelayStatus, TlcState,
-    DEFAULT_MAX_TLC_NUMBER_IN_FLIGHT,
 };
 use crate::fiber::config::MAX_PAYMENT_TLC_EXPIRY_LIMIT;
 use crate::fiber::graph::PaymentSessionStatus;
@@ -468,9 +467,11 @@ async fn test_public_channel_saved_to_the_other_nodes_graph() {
     let (_channel_id, funding_tx) = establish_channel_between_nodes(
         &mut node1,
         &mut node2,
+        true,
         node1_funding_amount,
         node2_funding_amount,
-        true,
+        None,
+        None,
     )
     .await;
     let status = node3.submit_tx(funding_tx).await;
@@ -508,9 +509,11 @@ async fn test_public_channel_with_unconfirmed_funding_tx() {
     let (_channel_id, _funding_tx) = establish_channel_between_nodes(
         &mut node1,
         &mut node2,
+        true,
         node1_funding_amount,
         node2_funding_amount,
-        true,
+        None,
+        None,
     )
     .await;
 
@@ -1411,9 +1414,11 @@ async fn test_channel_commitment_tx_after_add_tlc_sha256() {
 async fn establish_channel_between_nodes(
     node_a: &mut NetworkNode,
     node_b: &mut NetworkNode,
+    public: bool,
     node_a_funding_amount: u128,
     node_b_funding_amount: u128,
-    public: bool,
+    max_tlc_number_in_flight: Option<u64>,
+    max_tlc_value_in_flight: Option<u128>,
 ) -> (Hash256, TransactionView) {
     let message = |rpc_reply| {
         NetworkActorMessage::Command(NetworkActorCommand::OpenChannel(
@@ -1430,8 +1435,8 @@ async fn establish_channel_between_nodes(
                 tlc_min_value: None,
                 tlc_max_value: None,
                 tlc_fee_proportional_millionths: None,
-                max_tlc_number_in_flight: None,
-                max_tlc_value_in_flight: None,
+                max_tlc_number_in_flight,
+                max_tlc_value_in_flight,
             },
             rpc_reply,
         ))
@@ -1513,9 +1518,11 @@ async fn create_nodes_with_established_channel(
     let (channel_id, _funding_tx) = establish_channel_between_nodes(
         &mut node_a,
         &mut node_b,
+        public,
         node_a_funding_amount,
         node_b_funding_amount,
-        public,
+        None,
+        None,
     )
     .await;
 
@@ -1532,9 +1539,11 @@ async fn create_3_nodes_with_established_channel(
     let (channel_id_ab, funding_tx_ab) = establish_channel_between_nodes(
         &mut node_a,
         &mut node_b,
+        public,
         channel_1_amount_a,
         channel_1_amount_b,
-        public,
+        None,
+        None,
     )
     .await;
 
@@ -1544,9 +1553,11 @@ async fn create_3_nodes_with_established_channel(
     let (channel_id_bc, funding_tx_bc) = establish_channel_between_nodes(
         &mut node_b,
         &mut node_c,
+        public,
         channel_2_amount_b,
         channel_2_amount_c,
-        public,
+        None,
+        None,
     )
     .await;
 
@@ -1776,7 +1787,7 @@ async fn do_test_add_tlc_duplicated() {
 }
 
 #[tokio::test]
-async fn do_test_add_tlc_limit() {
+async fn do_test_add_tlc_waiting_ack() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
@@ -1786,7 +1797,7 @@ async fn do_test_add_tlc_limit() {
 
     let tlc_amount = 1000000000;
 
-    for i in 1..=100 {
+    for i in 1..=2 {
         eprintln!("Adding TLC #{}", i);
         std::thread::sleep(std::time::Duration::from_millis(400));
         let add_tlc_command = AddTlcCommand {
@@ -1807,14 +1818,124 @@ async fn do_test_add_tlc_limit() {
             ))
         })
         .expect("node_b alive");
-        if let Err(err) = add_tlc_result {
-            assert_eq!(i, DEFAULT_MAX_TLC_NUMBER_IN_FLIGHT + 1);
-            let code = err.decode().unwrap();
+        if i == 2 {
+            // we are sending AddTlc constantly, so we should get a TemporaryChannelFailure
+            assert!(add_tlc_result.is_err());
+            let code = add_tlc_result.unwrap_err().decode().unwrap();
             eprintln!("Error: {:?}", code);
             assert_eq!(code.error_code, TlcErrorCode::TemporaryChannelFailure);
-            break;
+        } else {
+            assert!(add_tlc_result.is_ok());
         }
-        assert!(add_tlc_result.is_ok());
+    }
+}
+
+#[tokio::test]
+async fn do_test_add_tlc_number_limit() {
+    let node_a_funding_amount = 100000000000;
+    let node_b_funding_amount = 6200000000;
+
+    let [mut node_a, mut node_b] = NetworkNode::new_n_interconnected_nodes().await;
+
+    let max_tlc_number = 3;
+    let (new_channel_id, _funding_tx) = establish_channel_between_nodes(
+        &mut node_a,
+        &mut node_b,
+        true,
+        node_a_funding_amount,
+        node_b_funding_amount,
+        Some(3),
+        None,
+    )
+    .await;
+
+    let tlc_amount = 1000000000;
+
+    for i in 1..=max_tlc_number + 1 {
+        eprintln!("Adding TLC #{}", i);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let add_tlc_command = AddTlcCommand {
+            amount: tlc_amount,
+            hash_algorithm: HashAlgorithm::CkbHash,
+            payment_hash: gen_sha256_hash().into(),
+            expiry: now_timestamp_as_millis_u64() + 100000000,
+            preimage: None,
+            onion_packet: vec![],
+            previous_tlc: None,
+        };
+        let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
+                ChannelCommandWithId {
+                    channel_id: new_channel_id,
+                    command: ChannelCommand::AddTlc(add_tlc_command, rpc_reply),
+                },
+            ))
+        })
+        .expect("node_b alive");
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        if i == max_tlc_number + 1 {
+            assert!(add_tlc_result.is_err());
+            let code = add_tlc_result.unwrap_err().decode().unwrap();
+            eprintln!("Error: {:?}", code);
+            assert_eq!(code.error_code, TlcErrorCode::TemporaryChannelFailure);
+        } else {
+            assert!(add_tlc_result.is_ok());
+        }
+    }
+}
+
+#[tokio::test]
+async fn do_test_add_tlc_value_limit() {
+    let node_a_funding_amount = 100000000000;
+    let node_b_funding_amount = 6200000000;
+
+    let [mut node_a, mut node_b] = NetworkNode::new_n_interconnected_nodes().await;
+
+    let max_tlc_number = 3;
+    let (new_channel_id, _funding_tx) = establish_channel_between_nodes(
+        &mut node_a,
+        &mut node_b,
+        true,
+        node_a_funding_amount,
+        node_b_funding_amount,
+        None,
+        Some(3000000000),
+    )
+    .await;
+
+    let tlc_amount = 1000000000;
+
+    for i in 1..=max_tlc_number + 1 {
+        eprintln!("Adding TLC #{}", i);
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let add_tlc_command = AddTlcCommand {
+            amount: tlc_amount,
+            hash_algorithm: HashAlgorithm::CkbHash,
+            payment_hash: gen_sha256_hash().into(),
+            expiry: now_timestamp_as_millis_u64() + 100000000,
+            preimage: None,
+            onion_packet: vec![],
+            previous_tlc: None,
+        };
+        let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
+            NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
+                ChannelCommandWithId {
+                    channel_id: new_channel_id,
+                    command: ChannelCommand::AddTlc(add_tlc_command, rpc_reply),
+                },
+            ))
+        })
+        .expect("node_b alive");
+        // sleep for a while to make sure the AddTlc processed by both party
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        if i == max_tlc_number + 1 {
+            assert!(add_tlc_result.is_err());
+            let code = add_tlc_result.unwrap_err().decode().unwrap();
+            eprintln!("Error: {:?}", code);
+            assert_eq!(code.error_code, TlcErrorCode::TemporaryChannelFailure);
+        } else {
+            assert!(add_tlc_result.is_ok());
+        }
     }
 }
 

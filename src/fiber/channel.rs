@@ -585,9 +585,8 @@ where
             }
             ProcessingChannelError::TlcAmountIsTooLow => TlcErrorCode::AmountBelowMinimum,
             ProcessingChannelError::TlcNumberExceedLimit
-            | ProcessingChannelError::TlcValueInflightExceedLimit => {
-                TlcErrorCode::TemporaryChannelFailure
-            }
+            | ProcessingChannelError::TlcValueInflightExceedLimit
+            | ProcessingChannelError::WaitingTlcAck => TlcErrorCode::TemporaryChannelFailure,
             ProcessingChannelError::InvalidState(_) => match state.state {
                 // we can not revert back up `ChannelReady` after `ShuttingDown`
                 ChannelState::Closed(_) | ChannelState::ShuttingDown(_) => {
@@ -603,8 +602,14 @@ where
                 // otherwise, channel maybe not ready
                 _ => TlcErrorCode::TemporaryChannelFailure,
             },
-            // TODO: there maybe more error types here
-            _ => TlcErrorCode::IncorrectOrUnknownPaymentDetails,
+            ProcessingChannelError::RepeatedProcessing(_)
+            | ProcessingChannelError::SpawnErr(_)
+            | ProcessingChannelError::Musig2SigningError(_)
+            | ProcessingChannelError::Musig2VerifyError(_)
+            | ProcessingChannelError::CapacityError(_) => TlcErrorCode::TemporaryNodeFailure,
+            ProcessingChannelError::InvalidParameter(_) => {
+                TlcErrorCode::IncorrectOrUnknownPaymentDetails
+            }
         };
 
         let channel_update = if error_code.is_update() {
@@ -907,13 +912,12 @@ where
         // maybe we need to go through shutdown process for this error
         state
             .check_remove_tlc_with_reason(TLCId::Offered(remove_tlc.tlc_id), &remove_tlc.reason)?;
-        state
-            .tlc_state
-            .add_remote_tlc(TlcKind::RemoveTlc(RemoveTlcInfo {
-                tlc_id: TLCId::Offered(remove_tlc.tlc_id),
-                channel_id: remove_tlc.channel_id,
-                reason: remove_tlc.reason.clone(),
-            }));
+        let tlc_kind = TlcKind::RemoveTlc(RemoveTlcInfo {
+            tlc_id: TLCId::Offered(remove_tlc.tlc_id),
+            channel_id: remove_tlc.channel_id,
+            reason: remove_tlc.reason.clone(),
+        });
+        state.tlc_state.add_remote_tlc(tlc_kind);
         eprintln!("finished handle_remove_tlc_peer_message: {:?}", remove_tlc);
         Ok(())
     }
@@ -1116,7 +1120,9 @@ where
                 state.update_state(ChannelState::SigningCommitment(flags));
                 state.maybe_transition_to_tx_signatures(flags, &self.network)?;
             }
-            CommitmentSignedFlags::ChannelReady() => {}
+            CommitmentSignedFlags::ChannelReady() => {
+                state.tlc_state.set_waiting_ack(true);
+            }
             CommitmentSignedFlags::PendingShutdown(_) => {
                 state.maybe_transition_to_shutdown(&self.network)?;
             }
@@ -1170,7 +1176,7 @@ where
         command: RemoveTlcCommand,
     ) -> ProcessingChannelResult {
         eprintln!("begin to handle remove tlc command: {:?}", &command);
-        state.check_for_tlc_update(None, false)?;
+        state.check_for_tlc_update(None, true)?;
         state.check_remove_tlc_with_reason(TLCId::Received(command.id), &command.reason)?;
         let tlc_kind = TlcKind::RemoveTlc(RemoveTlcInfo {
             channel_id: state.get_id(),
@@ -2239,6 +2245,7 @@ impl PendingTlcs {
 pub struct TlcState {
     local_pending_tlcs: PendingTlcs,
     remote_pending_tlcs: PendingTlcs,
+    waiting_ack: bool,
 }
 
 impl TlcState {
@@ -2256,6 +2263,10 @@ impl TlcState {
 
     pub fn increment_received(&mut self) {
         self.remote_pending_tlcs.increment_next_tlc_id();
+    }
+
+    pub fn set_waiting_ack(&mut self, waiting_ack: bool) {
+        self.waiting_ack = waiting_ack;
     }
 
     pub fn get(&self, id: &TLCId) -> Option<&AddTlcInfo> {
@@ -2669,6 +2680,8 @@ pub enum ProcessingChannelError {
     Musig2VerifyError(#[from] VerifyError),
     #[error("Musig2 SigningError: {0}")]
     Musig2SigningError(#[from] SigningError),
+    #[error("Unable to handle TLC command in waiting TLC ACK state")]
+    WaitingTlcAck,
     #[error("Failed to peel onion packet: {0}")]
     PeelingOnionPacketError(String),
     #[error("The amount in the HTLC is not expected")]
@@ -4531,8 +4544,11 @@ impl ChannelActorState {
     fn check_for_tlc_update(
         &self,
         add_tlc_amount: Option<u128>,
-        check_for_remote: bool,
+        is_tlc_command_message: bool,
     ) -> ProcessingChannelResult {
+        if is_tlc_command_message && self.tlc_state.waiting_ack {
+            return Err(ProcessingChannelError::WaitingTlcAck);
+        }
         match self.state {
             ChannelState::ChannelReady() => {}
             ChannelState::ShuttingDown(_) if add_tlc_amount.is_none() => {}
@@ -4551,7 +4567,7 @@ impl ChannelActorState {
 
         if let Some(add_amount) = add_tlc_amount {
             self.check_tlc_limits(add_amount, true)?;
-            if check_for_remote {
+            if is_tlc_command_message {
                 // TODO: this should be replaced by using the remote channel's max_tlc_number_in_flight and max_tlc_value_in_flight
                 self.check_tlc_limits(add_amount, false)?;
             }
@@ -5380,6 +5396,7 @@ impl ChannelActorState {
         }
 
         self.update_state_on_raa_msg(true);
+        self.tlc_state.set_waiting_ack(false);
 
         network
             .send_message(NetworkActorMessage::new_notification(
