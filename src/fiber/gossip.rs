@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
 use ckb_hash::blake2b_256;
 use ckb_jsonrpc_types::{Status, TxStatus};
@@ -6,7 +6,8 @@ use ckb_types::packed::OutPoint;
 use ractor::{
     async_trait as rasync_trait, call_t,
     concurrency::{timeout, Duration, JoinHandle},
-    Actor, ActorCell, ActorProcessingErr, ActorRef, ActorRuntime, MessagingErr, SupervisionEvent,
+    Actor, ActorCell, ActorProcessingErr, ActorRef, ActorRuntime, MessagingErr, OutputPort,
+    RpcReplyPort, SupervisionEvent,
 };
 use secp256k1::Message;
 use tentacle::{
@@ -208,6 +209,39 @@ pub trait GossipMessageStore {
             }
         )
     }
+}
+
+// A batch of gossip messages has been added to the store since the last time
+// we pulled new messages/messages are pushed to us.
+#[derive(Clone)]
+pub struct GossipMessageUpdates {
+    pub messages: Vec<BroadcastMessageWithTimestamp>,
+    pub last_cursor: Cursor,
+}
+
+// New messages will be added to the store every now and then.
+// These messages are not guaranteed to be saved to the store in order.
+// This trait provides a way to subscribe to the updates of the gossip message store.
+// The subscriber will receive a batch of messages that are added to the store since the last time
+// we sent messages to the subscriber.
+#[rasync_trait]
+trait SubscribableGossipMessageStore {
+    // Initialize a subscription for gossip message updates, the receiver will receive a batch of
+    // messages that are added to the store since the last time we sent messages to the receiver.
+    // These messages are first processed by the converter. When it is unideal to send messages to
+    // the receiver the converter should return a None, otherwise it can return some message of type
+    // TReceiverMsg, which would then be sent to the receiver actor.
+    // The cursor here specifies the starting point of the subscription. If it is None, the subscription
+    // will start from the very latest message in the store.
+    async fn subscribe_store_updates<
+        TReceiverMsg: ractor::Message,
+        F: Fn(GossipMessageUpdates) -> Option<TReceiverMsg> + Send + 'static,
+    >(
+        &self,
+        cursor: Option<Cursor>,
+        receiver: ActorRef<TReceiverMsg>,
+        converter: F,
+    ) -> Result<(), Error>;
 }
 
 pub(crate) enum GossipActorMessage {
@@ -491,6 +525,142 @@ impl PeerState {
             }
         }
     }
+}
+
+// This ExtendedGossipMessageStore is used to store the gossip messages and their dependencies.
+// It enhances the GossipMessageStore trait with the ability to check the dependencies of the messages,
+// and occasionally send out messages that are saved out of order (a message with smaller timestamp
+// was saved before a message with larger timestamp).
+pub struct ExtendedGossipMessageStore<S> {
+    store: S,
+    actor: ActorRef<ExtendedGossipMessageStoreMessage>,
+}
+
+impl<S> ExtendedGossipMessageStore<S>
+where
+    S: GossipMessageStore + Send + Sync + Clone + 'static,
+{
+    async fn new(store: S) -> Self {
+        let (actor, _) = Actor::spawn(
+            Some("gossip message store actor".to_string()),
+            ExtendedGossipMessageStoreActor::new(),
+            store.clone(),
+        )
+        .await
+        .expect("start gossip message actor store");
+
+        Self { store, actor }
+    }
+}
+
+#[rasync_trait]
+impl<S: GossipMessageStore + Sync> SubscribableGossipMessageStore
+    for ExtendedGossipMessageStore<S>
+{
+    async fn subscribe_store_updates<
+        TReceiverMsg: ractor::Message,
+        F: Fn(GossipMessageUpdates) -> Option<TReceiverMsg> + Send + 'static,
+    >(
+        &self,
+        cursor: Option<Cursor>,
+        receiver: ActorRef<TReceiverMsg>,
+        converter: F,
+    ) -> Result<(), Error> {
+        const DEFAULT_TIMEOUT: u64 = Duration::from_secs(5).as_millis() as u64;
+        match call_t!(
+            &self.actor,
+            ExtendedGossipMessageStoreMessage::NewSubscription,
+            DEFAULT_TIMEOUT,
+            cursor
+        ) {
+            Ok(output_port) => {
+                output_port.subscribe(receiver, converter);
+                Ok(())
+            }
+            Err(e) => Err(Error::InternalError(anyhow::anyhow!(e.to_string()))),
+        }
+    }
+}
+pub struct ExtendedGossipMessageStoreState<S> {
+    store: S,
+    next_id: u64,
+    output_ports: HashMap<u64, Arc<OutputPort<GossipMessageUpdates>>>,
+    last_cursor: Cursor,
+    lagged_messages: Vec<BroadcastMessageWithTimestamp>,
+    messages_to_be_saved: Vec<BroadcastMessageWithTimestamp>,
+    node_dependencies: HashMap<Pubkey, Vec<BroadcastMessageWithTimestamp>>,
+}
+
+impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
+    fn new(store: S) -> Self {
+        Self {
+            store,
+            next_id: Default::default(),
+            output_ports: Default::default(),
+            last_cursor: Default::default(),
+            lagged_messages: Default::default(),
+            messages_to_be_saved: Default::default(),
+            node_dependencies: Default::default(),
+        }
+    }
+}
+
+struct ExtendedGossipMessageStoreActor<S> {
+    phantom: PhantomData<S>,
+}
+
+impl<S: GossipMessageStore> ExtendedGossipMessageStoreActor<S> {
+    fn new() -> Self {
+        Self {
+            phantom: Default::default(),
+        }
+    }
+}
+
+#[rasync_trait]
+impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMessageStoreActor<S> {
+    type Msg = ExtendedGossipMessageStoreMessage;
+    type State = ExtendedGossipMessageStoreState<S>;
+    type Arguments = S;
+
+    async fn pre_start(
+        &self,
+        _myself: ActorRef<Self::Msg>,
+        store: Self::Arguments,
+    ) -> Result<Self::State, ActorProcessingErr> {
+        Ok(ExtendedGossipMessageStoreState::new(store))
+    }
+
+    async fn handle(
+        &self,
+        _myself: ActorRef<Self::Msg>,
+        message: Self::Msg,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        match message {
+            ExtendedGossipMessageStoreMessage::NewSubscription(cursor, reply) => {
+                let id = state.next_id;
+                state.next_id += 1;
+                let output_port = Arc::new(OutputPort::default());
+                state.output_ports.insert(id, output_port.clone());
+                let _ = reply.send(Arc::clone(&output_port));
+            }
+            ExtendedGossipMessageStoreMessage::SaveMessage(broadcast_message_with_timestamp) => {
+                todo!()
+            }
+            ExtendedGossipMessageStoreMessage::Tick => todo!(),
+        }
+        Ok(())
+    }
+}
+
+pub enum ExtendedGossipMessageStoreMessage {
+    NewSubscription(
+        Option<Cursor>,
+        RpcReplyPort<Arc<OutputPort<GossipMessageUpdates>>>,
+    ),
+    SaveMessage(BroadcastMessageWithTimestamp),
+    Tick,
 }
 
 pub(crate) struct GossipActorState<S> {
