@@ -632,7 +632,6 @@ where
         // build commitment tx and verify signature from remote, if passed send ACK for partner
         state.handle_commitment_signed_message(commitment_signed, &self.network)?;
         self.flush_staging_tlc_operations(state).await;
-        self.try_to_send_remove_tlcs(state).await;
         state.update_state_on_raa_msg(false);
         Ok(())
     }
@@ -667,41 +666,44 @@ where
         }
     }
 
-    async fn try_to_send_remove_tlcs(&self, state: &mut ChannelActorState) {
-        let tlc_infos = state.get_tlcs_for_sending_remove_tlcs();
-        for tlc_info in tlc_infos {
-            assert!(tlc_info.is_offered());
-            let remove_reason = tlc_info.removed_at.expect("expect remove_at").1;
-            if let Some((previous_channel_id, previous_tlc)) = tlc_info.previous_tlc {
-                assert!(previous_tlc.is_received());
-                info!(
-                    "begin to remove tlc from previous channel: {:?}",
-                    &previous_tlc
-                );
-                assert!(previous_channel_id != state.get_id());
-                let (send, recv) = oneshot::channel::<Result<(), String>>();
-                let port = RpcReplyPort::from(send);
-                self.network
-                    .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                            channel_id: previous_channel_id,
-                            command: ChannelCommand::RemoveTlc(
-                                RemoveTlcCommand {
-                                    id: previous_tlc.into(),
-                                    reason: remove_reason.clone(),
-                                },
-                                port,
-                            ),
-                        }),
-                    ))
-                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                let res = recv.await.expect("remove tlc replied");
-                debug!("remove tlc from previous channel: {:?}", &res);
-            } else {
-                unreachable!("remove tlc without previous tlc");
-            }
-            state.set_offered_tlc_removed(tlc_info.tlc_id.into());
+    async fn try_to_relay_remove_tlc(&self, state: &mut ChannelActorState, tlc_id: u64) {
+        let tlc_info = state.get_offered_tlc(tlc_id).expect("expect tlc");
+        assert!(tlc_info.is_offered());
+        let remove_reason = tlc_info
+            .removed_at
+            .as_ref()
+            .expect("expect remove_at")
+            .1
+            .clone();
+        if let Some((previous_channel_id, previous_tlc)) = tlc_info.previous_tlc {
+            assert!(previous_tlc.is_received());
+            info!(
+                "begin to remove tlc from previous channel: {:?}",
+                &previous_tlc
+            );
+            assert!(previous_channel_id != state.get_id());
+            let (send, recv) = oneshot::channel::<Result<(), String>>();
+            let port = RpcReplyPort::from(send);
+            self.network
+                .send_message(NetworkActorMessage::new_command(
+                    NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
+                        channel_id: previous_channel_id,
+                        command: ChannelCommand::RemoveTlc(
+                            RemoveTlcCommand {
+                                id: previous_tlc.into(),
+                                reason: remove_reason,
+                            },
+                            port,
+                        ),
+                    }),
+                ))
+                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+            let res = recv.await.expect("remove tlc replied");
+            debug!("remove tlc from previous channel: {:?}", &res);
+        } else {
+            unreachable!("remove tlc without previous tlc");
         }
+        state.set_offered_tlc_removed(tlc_info.tlc_id.into());
     }
 
     fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState, tlc_id: u64) {
@@ -939,6 +941,10 @@ where
                     NetworkActorEvent::TlcRemoveReceived(tlc_details.payment_hash, remove_reason),
                 ))
                 .expect("myself alive");
+        } else {
+            // relay RemoveTlc to previous channel if needed
+            self.try_to_relay_remove_tlc(state, tlc_details.tlc_id.into())
+                .await;
         }
         Ok(())
     }
@@ -3772,20 +3778,6 @@ impl ChannelActorState {
                 )),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-    }
-
-    fn get_tlcs_for_sending_remove_tlcs(&self) -> Vec<AddTlcInfo> {
-        self.tlc_state
-            .all_tlcs()
-            .filter(|tlc| {
-                tlc.is_offered()
-                    && tlc.creation_confirmed_at.is_some()
-                    && tlc.removed_at.is_some()
-                    && tlc.previous_tlc.is_some()
-                    && tlc.relay_status == TlcRelayStatus::WaitingRemove
-            })
-            .cloned()
-            .collect()
     }
 
     // After sending or receiving a RevokeAndAck message, all messages before
