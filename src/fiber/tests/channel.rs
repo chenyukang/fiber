@@ -1,5 +1,6 @@
 use crate::fiber::channel::{
     AddTlcInfo, CommitmentNumbers, RemoveTlcInfo, TLCId, TlcKind, TlcRelayStatus, TlcState,
+    DEFAULT_MAX_TLC_NUMBER_IN_FLIGHT,
 };
 use crate::fiber::config::MAX_PAYMENT_TLC_EXPIRY_LIMIT;
 use crate::fiber::graph::PaymentSessionStatus;
@@ -1807,6 +1808,7 @@ async fn do_test_add_tlc_limit() {
         })
         .expect("node_b alive");
         if let Err(err) = add_tlc_result {
+            assert_eq!(i, DEFAULT_MAX_TLC_NUMBER_IN_FLIGHT + 1);
             let code = err.decode().unwrap();
             eprintln!("Error: {:?}", code);
             assert_eq!(code.error_code, TlcErrorCode::TemporaryChannelFailure);

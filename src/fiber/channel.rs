@@ -3497,13 +3497,13 @@ impl ChannelActorState {
     }
 
     pub fn get_offered_tlc_balance(&self) -> u128 {
-        self.get_active_offered_tlcs(true)
+        self.get_all_offer_tlcs()
             .map(|tlc| tlc.amount)
             .sum::<u128>()
     }
 
     pub fn get_received_tlc_balance(&self) -> u128 {
-        self.get_active_received_tlcs(false)
+        self.get_all_received_tlcs()
             .map(|tlc| tlc.amount)
             .sum::<u128>()
     }
@@ -4327,6 +4327,14 @@ impl ChannelActorState {
             })
     }
 
+    pub fn get_all_received_tlcs(&self) -> impl Iterator<Item = &AddTlcInfo> {
+        self.tlc_state.all_tlcs().filter(|tlc| tlc.is_received())
+    }
+
+    pub fn get_all_offer_tlcs(&self) -> impl Iterator<Item = &AddTlcInfo> {
+        self.tlc_state.all_tlcs().filter(|tlc| tlc.is_offered())
+    }
+
     // Get the pubkeys for the tlc. Tlc pubkeys are the pubkeys held by each party
     // while this tlc was created (pubkeys are derived from the commitment number
     // when this tlc was created). The pubkeys returned here are sorted.
@@ -4556,8 +4564,8 @@ impl ChannelActorState {
         add_amount: u128,
         local: bool,
     ) -> Result<(), ProcessingChannelError> {
-        let active_tls_number = self.get_active_offered_tlcs(local).count()
-            + self.get_active_received_tlcs(local).count();
+        let active_tls_number =
+            self.get_all_offer_tlcs().count() + self.get_all_received_tlcs().count();
 
         eprintln!(
             "local: {} active_tls_number: {} max_tlc_number_in_flight: {}",
@@ -4568,8 +4576,8 @@ impl ChannelActorState {
         }
 
         if self
-            .get_active_offered_tlcs(local)
-            .chain(self.get_active_received_tlcs(local))
+            .get_all_offer_tlcs()
+            .chain(self.get_all_received_tlcs())
             .fold(0_u128, |sum, tlc| sum + tlc.amount)
             + add_amount
             > self.max_tlc_value_in_flight
