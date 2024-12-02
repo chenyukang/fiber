@@ -713,6 +713,7 @@ where
     }
 
     fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState) {
+        eprintln!("begin to try_to_settle_down_tlc");
         let tlcs = state.get_tlcs_for_settle_down();
         eprintln!("debug now tlcs: {:?}", tlcs);
         for tlc_info in tlcs {
@@ -3841,7 +3842,8 @@ impl ChannelActorState {
     fn get_tlcs_for_settle_down(&self) -> Vec<AddTlcInfo> {
         self.tlc_state
             .all_tlcs()
-            .filter(|tlc| tlc.is_received() && tlc.removed_at.is_none() && tlc.is_last_hop())
+            // any better method to filter out the middle hop tlcs?
+            .filter(|tlc| tlc.is_received() && tlc.removed_at.is_none())
             .cloned()
             .collect()
     }
