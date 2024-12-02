@@ -767,11 +767,9 @@ where
     ) -> Result<(), ProcessingChannelError> {
         state.check_tlc_expiry(add_tlc.expiry)?;
 
-        let tlc = state
-            .get_received_tlc(add_tlc.tlc_id.into())
-            .expect("tlc exists")
-            .clone();
+        assert!(state.get_received_tlc(add_tlc.tlc_id.into()).is_some());
 
+        let payment_hash = add_tlc.payment_hash;
         let peeled_onion_packet = match add_tlc.onion_packet.clone() {
             Some(onion_packet) => Some(
                 self.peel_onion_packet(onion_packet, add_tlc.payment_hash.clone())
@@ -795,13 +793,11 @@ where
                 add_tlc.amount, forward_amount
             );
 
-            // TODO: check the expiry time, if it's expired, we should return an error.
             if peeled_onion_packet.is_last() {
                 if forward_amount != add_tlc.amount {
                     return Err(ProcessingChannelError::FinalIncorrectHTLCAmount);
                 }
 
-                let payment_hash = add_tlc.payment_hash;
                 if let Some(invoice) = self.store.get_invoice(&payment_hash) {
                     let invoice_status = self.get_invoice_status(&invoice);
                     if invoice_status != CkbInvoiceStatus::Open {
@@ -859,12 +855,12 @@ where
             self.subscribers
                 .pending_received_tlcs_subscribers
                 .send(TlcNotification {
-                    tlc: tlc.clone(),
+                    tlc: add_tlc.clone(),
                     channel_id: state.get_id(),
                     script: udt_type_script.clone(),
                 });
         }
-        warn!("finished check tlc for peer message: {:?}", &tlc);
+        warn!("finished check tlc for peer message: {:?}", &add_tlc);
         Ok(())
     }
 
