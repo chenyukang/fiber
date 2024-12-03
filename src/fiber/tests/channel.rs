@@ -69,7 +69,6 @@ fn test_pending_tlcs() {
         payment_hash: gen_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 1000,
         hash_algorithm: HashAlgorithm::Sha256,
-        peeled_onion_packet: None,
         onion_packet: None,
         tlc_id: TLCId::Offered(0),
         created_at: CommitmentNumbers::default(),
@@ -86,7 +85,6 @@ fn test_pending_tlcs() {
         payment_hash: gen_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 2000,
         hash_algorithm: HashAlgorithm::Sha256,
-        peeled_onion_packet: None,
         onion_packet: None,
         tlc_id: TLCId::Offered(1),
         created_at: CommitmentNumbers::default(),
@@ -156,7 +154,6 @@ fn test_pending_tlcs_duplicated_tlcs() {
         payment_hash: gen_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 1000,
         hash_algorithm: HashAlgorithm::Sha256,
-        peeled_onion_packet: None,
         onion_packet: None,
         tlc_id: TLCId::Offered(0),
         created_at: CommitmentNumbers::default(),
@@ -197,7 +194,6 @@ fn test_pending_tlcs_duplicated_tlcs() {
         payment_hash: gen_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 2000,
         hash_algorithm: HashAlgorithm::Sha256,
-        peeled_onion_packet: None,
         onion_packet: None,
         tlc_id: TLCId::Offered(1),
         created_at: CommitmentNumbers::default(),
@@ -244,7 +240,6 @@ fn test_pending_tlcs_with_remove_tlc() {
         payment_hash: gen_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 1000,
         hash_algorithm: HashAlgorithm::Sha256,
-        peeled_onion_packet: None,
         onion_packet: None,
         tlc_id: TLCId::Offered(0),
         created_at: CommitmentNumbers::default(),
@@ -261,7 +256,6 @@ fn test_pending_tlcs_with_remove_tlc() {
         payment_hash: gen_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 2000,
         hash_algorithm: HashAlgorithm::Sha256,
-        peeled_onion_packet: None,
         onion_packet: None,
         tlc_id: TLCId::Offered(1),
         created_at: CommitmentNumbers::default(),
@@ -693,7 +687,7 @@ async fn test_network_send_previous_tlc_error() {
                         expiry: DEFAULT_EXPIRY_DELTA + now_timestamp_as_millis_u64(),
                         hash_algorithm: HashAlgorithm::Sha256,
                         // invalid onion packet
-                        peeled_onion_packet: Some(packet),
+                        onion_packet: packet.next.clone(),
                         previous_tlc: None,
                     },
                     rpc_reply,
@@ -1374,7 +1368,7 @@ async fn do_test_channel_commitment_tx_after_add_tlc(algorithm: HashAlgorithm) {
                         payment_hash: Some(digest.into()),
                         expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
                         preimage: None,
-                        peeled_onion_packet: None,
+                        onion_packet: None,
                         previous_tlc: None,
                     },
                     rpc_reply,
@@ -1644,7 +1638,7 @@ async fn do_test_remove_tlc_with_wrong_hash_algorithm(
                         payment_hash: Some(digest.into()),
                         expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
                         preimage: None,
-                        peeled_onion_packet: None,
+                        onion_packet: None,
                         previous_tlc: None,
                     },
                     rpc_reply,
@@ -1696,7 +1690,7 @@ async fn do_test_remove_tlc_with_wrong_hash_algorithm(
                         payment_hash: Some(digest.into()),
                         expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
                         preimage: None,
-                        peeled_onion_packet: None,
+                        onion_packet: None,
                         previous_tlc: None,
                     },
                     rpc_reply,
@@ -1754,7 +1748,7 @@ async fn do_test_remove_tlc_with_expiry_error() {
         payment_hash: Some(digest.into()),
         expiry: now_timestamp_as_millis_u64() + 10,
         preimage: None,
-        peeled_onion_packet: None,
+        onion_packet: None,
         previous_tlc: None,
     };
 
@@ -1777,7 +1771,7 @@ async fn do_test_remove_tlc_with_expiry_error() {
         payment_hash: Some(digest.into()),
         expiry: now_timestamp_as_millis_u64() + MAX_PAYMENT_TLC_EXPIRY_LIMIT + 10,
         preimage: None,
-        peeled_onion_packet: None,
+        onion_packet: None,
         previous_tlc: None,
     };
 
@@ -1816,7 +1810,7 @@ async fn do_test_add_tlc_duplicated() {
             payment_hash: Some(digest.into()),
             expiry: now_timestamp_as_millis_u64() + 10,
             preimage: None,
-            peeled_onion_packet: None,
+            onion_packet: None,
             previous_tlc: None,
         };
         let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
@@ -1857,7 +1851,7 @@ async fn do_test_add_tlc_waiting_ack() {
             payment_hash: gen_sha256_hash().into(),
             expiry: now_timestamp_as_millis_u64() + 100000000,
             preimage: None,
-            peeled_onion_packet: None,
+            onion_packet: None,
             previous_tlc: None,
         };
         let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
@@ -1909,7 +1903,7 @@ async fn do_test_add_tlc_number_limit() {
             payment_hash: gen_sha256_hash().into(),
             expiry: now_timestamp_as_millis_u64() + 100000000,
             preimage: None,
-            peeled_onion_packet: None,
+            onion_packet: None,
             previous_tlc: None,
         };
         let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
@@ -1961,7 +1955,7 @@ async fn do_test_add_tlc_value_limit() {
             payment_hash: gen_sha256_hash().into(),
             expiry: now_timestamp_as_millis_u64() + 100000000,
             preimage: None,
-            peeled_onion_packet: None,
+            onion_packet: None,
             previous_tlc: None,
         };
         let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
@@ -2021,7 +2015,7 @@ async fn do_test_channel_with_simple_update_operation(algorithm: HashAlgorithm) 
                         payment_hash: Some(digest.into()),
                         expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
                         preimage: None,
-                        peeled_onion_packet: None,
+                        onion_packet: None,
                         previous_tlc: None,
                     },
                     rpc_reply,

@@ -144,8 +144,8 @@ pub struct AddTlcCommand {
     pub payment_hash: Option<Hash256>,
     pub expiry: u64,
     pub hash_algorithm: HashAlgorithm,
-    /// Peeled onion packet for the current node
-    pub peeled_onion_packet: Option<PeeledPaymentOnionPacket>,
+    /// Onion packet for the next node
+    pub onion_packet: Option<PaymentOnionPacket>,
     pub previous_tlc: Option<(Hash256, u64)>,
 }
 
@@ -1131,7 +1131,7 @@ where
             payment_hash: tlc.payment_hash(),
             expiry: command.expiry,
             hash_algorithm: command.hash_algorithm,
-            onion_packet: command.peeled_onion_packet.and_then(|packet| packet.next),
+            onion_packet: command.onion_packet,
         };
 
         // Send tlc update message to peer.
@@ -1988,8 +1988,7 @@ pub struct AddTlcInfo {
     pub payment_hash: Hash256,
     pub expiry: u64,
     pub hash_algorithm: HashAlgorithm,
-    pub peeled_onion_packet: Option<PeeledPaymentOnionPacket>,
-    // this is from AddTlc peer message
+    // the onion packet for next hop
     pub onion_packet: Option<PaymentOnionPacket>,
     pub created_at: CommitmentNumbers,
     pub removed_at: Option<(CommitmentNumbers, RemoveTlcReason)>,
@@ -2015,14 +2014,6 @@ impl AddTlcInfo {
 
     pub fn is_received(&self) -> bool {
         !self.is_offered()
-    }
-
-    pub fn is_last_hop(&self) -> bool {
-        if let Some(peeled) = self.peeled_onion_packet.as_ref() {
-            peeled.is_last()
-        } else {
-            self.payment_preimage.is_some()
-        }
     }
 
     pub fn get_commitment_numbers(&self, local: bool) -> CommitmentNumbers {
@@ -3993,7 +3984,6 @@ impl ChannelActorState {
     pub(crate) fn set_received_tlc_preimage(&mut self, tlc_id: u64, preimage: Option<Hash256>) {
         if let Some(tlc) = self.tlc_state.get_mut(&TLCId::Received(tlc_id)) {
             tlc.payment_preimage = preimage;
-            tlc.peeled_onion_packet = None;
         }
     }
 
@@ -4559,7 +4549,7 @@ impl ChannelActorState {
             .unwrap_or_else(|| command.hash_algorithm.hash(preimage).into());
 
         let relay_status = {
-            if command.peeled_onion_packet.is_some() {
+            if command.onion_packet.is_some() {
                 TlcRelayStatus::WaitingRemove
             } else {
                 TlcRelayStatus::NoForward
@@ -4579,8 +4569,7 @@ impl ChannelActorState {
             payment_preimage: None,
             removed_at: None,
             removal_confirmed_at: None,
-            peeled_onion_packet: command.peeled_onion_packet,
-            onion_packet: None,
+            onion_packet: command.onion_packet,
             previous_tlc: command
                 .previous_tlc
                 .map(|(channel_id, tlc_id)| (channel_id, TLCId::Received(tlc_id))),
@@ -4607,7 +4596,6 @@ impl ChannelActorState {
             expiry: message.expiry,
             hash_algorithm: message.hash_algorithm,
             // will be set when apply AddTlc operations after the signature is checked
-            peeled_onion_packet: None,
             onion_packet: message.onion_packet,
             created_at: self.get_current_commitment_numbers(),
             creation_confirmed_at: None,
@@ -5390,10 +5378,7 @@ impl ChannelActorState {
                                                     payment_hash: info.payment_hash,
                                                     expiry: info.expiry,
                                                     hash_algorithm: info.hash_algorithm,
-                                                    onion_packet: info
-                                                        .peeled_onion_packet
-                                                        .as_ref()
-                                                        .and_then(|packet| packet.next.clone()),
+                                                    onion_packet: info.onion_packet.clone(),
                                                 }),
                                             ),
                                         ),

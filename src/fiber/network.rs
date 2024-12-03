@@ -2182,7 +2182,7 @@ where
                 payment_hash: Some(info.payment_hash),
                 expiry: info.expiry,
                 hash_algorithm: info.hash_algorithm,
-                peeled_onion_packet: Some(peeled_onion_packet),
+                onion_packet: peeled_onion_packet.next.clone(),
                 previous_tlc,
             },
             rpc_reply,
