@@ -2204,6 +2204,22 @@ impl PendingTlcs {
         });
         self.committed_index = self.tlcs.len();
     }
+
+    pub fn shrink_removed_tlcs(&mut self) {
+        let new_committed_index = self
+            .get_committed_tlcs()
+            .iter()
+            .filter(|tlc| match tlc {
+                TlcKind::AddTlc(info) => info.removed_at.is_none(),
+                _ => true,
+            })
+            .count();
+        self.tlcs.retain(|tlc| match tlc {
+            TlcKind::AddTlc(info) => info.removed_at.is_none(),
+            _ => true,
+        });
+        self.committed_index = new_committed_index;
+    }
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -2439,6 +2455,11 @@ impl TlcState {
             tlc.removed_at = Some((removed_at, reason));
         }
         self.remote_pending_tlcs.drop_remove_tlc(&tlc_id);
+    }
+
+    pub fn shrink_removed_tlcs(&mut self) {
+        self.remote_pending_tlcs.shrink_removed_tlcs();
+        self.local_pending_tlcs.shrink_removed_tlcs();
     }
 }
 
@@ -3846,6 +3867,7 @@ impl ChannelActorState {
         self.to_remote_amount = to_remote_amount;
         debug!("Updated local state on revoke_and_ack message {}: current commitment number: {:?}, to_local_amount: {}, to_remote_amount: {}",
         if is_received { "received" } else { "sent" }, commitment_numbers, to_local_amount, to_remote_amount);
+        self.tlc_state.shrink_removed_tlcs();
     }
 
     pub fn get_id(&self) -> Hash256 {
