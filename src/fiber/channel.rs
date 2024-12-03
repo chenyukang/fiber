@@ -1097,9 +1097,7 @@ where
                 state.update_state(ChannelState::SigningCommitment(flags));
                 state.maybe_transition_to_tx_signatures(flags, &self.network)?;
             }
-            CommitmentSignedFlags::ChannelReady() => {
-                state.tlc_state.set_waiting_ack(true);
-            }
+            CommitmentSignedFlags::ChannelReady() => {}
             CommitmentSignedFlags::PendingShutdown(_) => {
                 state.maybe_transition_to_shutdown(&self.network)?;
             }
@@ -1144,6 +1142,7 @@ where
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
         self.handle_commitment_signed_command(state)?;
+        state.tlc_state.set_waiting_ack(true);
         Ok(tlc.tlc_id().into())
     }
 
@@ -1183,6 +1182,7 @@ where
         );
         state.maybe_transition_to_shutdown(&self.network)?;
         self.handle_commitment_signed_command(state)?;
+        state.tlc_state.set_waiting_ack(true);
         Ok(())
     }
 
