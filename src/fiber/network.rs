@@ -863,10 +863,9 @@ where
             NetworkActorEvent::GossipMessage(peer_id, message) => {
                 let _ = state
                     .gossip_actor
-                    .send_message(GossipActorMessage::GossipMessage(GossipMessageWithPeerId {
-                        peer_id,
-                        message,
-                    }));
+                    .send_message(GossipActorMessage::GossipMessageReceived(
+                        GossipMessageWithPeerId { peer_id, message },
+                    ));
             }
         }
         Ok(())
