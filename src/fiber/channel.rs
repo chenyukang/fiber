@@ -1991,7 +1991,6 @@ pub struct AddTlcInfo {
     pub created_at: CommitmentNumbers,
     pub removed_at: Option<(CommitmentNumbers, RemoveTlcReason)>,
     pub removal_confirmed_at: Option<CommitmentNumbers>,
-    pub creation_confirmed_at: Option<CommitmentNumbers>,
     pub payment_preimage: Option<Hash256>,
     /// The previous tlc id if this tlc is a part of a multi-tlc payment.
     /// Note: this is used to track the tlc chain for a multi-tlc payment,
@@ -2013,20 +2012,8 @@ impl AddTlcInfo {
         !self.is_offered()
     }
 
-    pub fn get_commitment_numbers(&self, local: bool) -> CommitmentNumbers {
-        let am_i_sending_tlc = {
-            if self.is_offered() {
-                local
-            } else {
-                !local
-            }
-        };
-        if am_i_sending_tlc {
-            self.created_at
-        } else {
-            self.creation_confirmed_at
-                .expect("Commitment Number is present")
-        }
+    pub fn get_commitment_numbers(&self) -> CommitmentNumbers {
+        self.created_at
     }
 
     pub fn flip_mut(&mut self) {
@@ -3819,14 +3806,7 @@ impl ChannelActorState {
 
         self.tlc_state.all_committed_tlcs_mut().for_each(|tlc| {
             let amount = tlc.amount;
-            // This tlc has not been committed yet.
-            if tlc.creation_confirmed_at.is_none() {
-                debug!(
-                    "Setting local_committed_at for tlc {:?} to commitment number {:?}",
-                    tlc.tlc_id, commitment_numbers
-                );
-                tlc.creation_confirmed_at = Some(commitment_numbers);
-            }
+
             match (tlc.removed_at.clone(), tlc.removal_confirmed_at) {
                 (Some((_removed_at, reason)), None) => {
                     tlc.removal_confirmed_at = Some(commitment_numbers);
@@ -4294,12 +4274,12 @@ impl ChannelActorState {
     // The offerer who offered this tlc will have the first pubkey, and the receiver
     // will have the second pubkey.
     // This tlc must have valid local_committed_at and remote_committed_at fields.
-    pub fn get_tlc_pubkeys(&self, tlc: &AddTlcInfo, local: bool) -> (Pubkey, Pubkey) {
+    pub fn get_tlc_pubkeys(&self, tlc: &AddTlcInfo) -> (Pubkey, Pubkey) {
         let is_offered = tlc.is_offered();
         let CommitmentNumbers {
             local: local_commitment_number,
             remote: remote_commitment_number,
-        } = tlc.get_commitment_numbers(local);
+        } = tlc.get_commitment_numbers();
         debug!(
             "Local commitment number: {}, remote commitment number: {}",
             local_commitment_number, remote_commitment_number
@@ -4326,7 +4306,7 @@ impl ChannelActorState {
     ) -> Vec<(AddTlcInfo, Pubkey, Pubkey)> {
         self.get_active_received_tlcs(local)
             .map(move |tlc| {
-                let (k1, k2) = self.get_tlc_pubkeys(&tlc, local);
+                let (k1, k2) = self.get_tlc_pubkeys(&tlc);
                 (tlc, k1, k2)
             })
             .collect()
@@ -4338,7 +4318,7 @@ impl ChannelActorState {
     ) -> Vec<(AddTlcInfo, Pubkey, Pubkey)> {
         self.get_active_offered_tlcs(local)
             .map(move |tlc| {
-                let (k1, k2) = self.get_tlc_pubkeys(&tlc, local);
+                let (k1, k2) = self.get_tlc_pubkeys(&tlc);
                 (tlc, k1, k2)
             })
             .collect()
@@ -4387,7 +4367,7 @@ impl ChannelActorState {
     fn any_tlc_pending(&self) -> bool {
         self.tlc_state
             .all_tlcs()
-            .any(|tlc| tlc.creation_confirmed_at.is_none() || tlc.removed_at.is_none())
+            .any(|tlc| tlc.removed_at.is_none())
     }
 
     pub fn get_local_funding_pubkey(&self) -> &Pubkey {
@@ -4563,7 +4543,6 @@ impl ChannelActorState {
             expiry: command.expiry,
             hash_algorithm: command.hash_algorithm,
             created_at: self.get_current_commitment_numbers(),
-            creation_confirmed_at: None,
             payment_preimage: None,
             removed_at: None,
             removal_confirmed_at: None,
@@ -4588,7 +4567,6 @@ impl ChannelActorState {
             // will be set when apply AddTlc operations after the signature is checked
             onion_packet: message.onion_packet,
             created_at: self.get_current_commitment_numbers(),
-            creation_confirmed_at: None,
             payment_preimage: None,
             removed_at: None,
             removal_confirmed_at: None,
@@ -5351,9 +5329,7 @@ impl ChannelActorState {
                     let mut need_resend_commitment_signed = false;
                     for info in self.tlc_state.all_tlcs() {
                         if info.is_offered() {
-                            if info.created_at.get_local() >= acutal_local_commitment_number
-                                && info.creation_confirmed_at.is_none()
-                            {
+                            if info.created_at.get_local() >= acutal_local_commitment_number {
                                 // resend AddTlc message
                                 network
                                     .send_message(NetworkActorMessage::new_command(

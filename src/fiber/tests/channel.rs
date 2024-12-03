@@ -74,7 +74,6 @@ fn test_pending_tlcs() {
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
         removed_at: None,
-        creation_confirmed_at: None,
         payment_preimage: None,
         previous_tlc: None,
     };
@@ -89,7 +88,6 @@ fn test_pending_tlcs() {
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
         removed_at: None,
-        creation_confirmed_at: None,
         payment_preimage: None,
         previous_tlc: None,
     };
@@ -157,7 +155,6 @@ fn test_pending_tlcs_duplicated_tlcs() {
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
         removed_at: None,
-        creation_confirmed_at: None,
         payment_preimage: None,
         previous_tlc: None,
     };
@@ -196,7 +193,6 @@ fn test_pending_tlcs_duplicated_tlcs() {
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
         removed_at: None,
-        creation_confirmed_at: None,
         payment_preimage: None,
         previous_tlc: None,
     };
@@ -241,7 +237,6 @@ fn test_pending_tlcs_with_remove_tlc() {
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
         removed_at: None,
-        creation_confirmed_at: None,
         payment_preimage: None,
         previous_tlc: None,
     };
@@ -256,7 +251,6 @@ fn test_pending_tlcs_with_remove_tlc() {
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
         removed_at: None,
-        creation_confirmed_at: None,
         payment_preimage: None,
         previous_tlc: None,
     };
