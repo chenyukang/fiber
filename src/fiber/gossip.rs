@@ -237,6 +237,8 @@ pub trait SubscribableGossipMessageStore {
     // TReceiverMsg, which would then be sent to the receiver actor.
     // The cursor here specifies the starting point of the subscription. If it is None, the subscription
     // will start from the very latest message in the store.
+    // If there are already some messages in the store that are newer than the cursor, the receiver
+    // will receive these messages immediately after the subscription is created.
     async fn subscribe<
         TReceiverMsg: ractor::Message,
         F: Fn(GossipMessageUpdates) -> Option<TReceiverMsg> + Send + 'static,
@@ -248,8 +250,8 @@ pub trait SubscribableGossipMessageStore {
     ) -> Result<Self::Subscription, Self::Error>;
 
     // Unsubscribe from the gossip message store updates. The subscription parameter is the return value
-    // of the subscribe_store_updates function. After this function is called, the receiver will no longer
-    // receive messages from the store.
+    // of the subscribe function. The new cursor will be used to determine the starting point of the
+    // next batch of messages that will be sent to the receiver.
     async fn update_subscription(
         &self,
         subscription: &Self::Subscription,
@@ -257,7 +259,7 @@ pub trait SubscribableGossipMessageStore {
     ) -> Result<(), Self::Error>;
 
     // Unsubscribe from the gossip message store updates. The subscription parameter is the return value
-    // of the subscribe_store_updates function. After this function is called, the receiver will no longer
+    // of the subscribe function. After this function is called, the receiver will no longer
     // receive messages from the store.
     async fn unsubscribe(&self, subscription: &Self::Subscription) -> Result<(), Self::Error>;
 }
@@ -682,7 +684,15 @@ impl PeerState {
 // was saved before a message with larger timestamp).
 #[derive(Clone)]
 pub struct ExtendedGossipMessageStore<S> {
+    // It is possible to re-implement all the store functions by message-passing to the actor.
+    // But it is tedious to do so. So we just store the store here.
+    // We need to get/save broadcast messages from/to the store. We can use this field directly.
+    // Be careful while saving messages to the store. We should send SaveMessage message to the actor
+    // because we must ask the actor do some bookkeeping work (e.g. check if the dependencies of
+    // the message are already saved).
     store: S,
+    // The actor that is responsible for book-keep the messages to be saved to the store,
+    // and send messages to the subscribers.
     actor: ActorRef<ExtendedGossipMessageStoreMessage>,
 }
 
@@ -880,6 +890,14 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
     }
 }
 
+// An extended gossip message store actor that can handle more complex operations than a normal gossip message store.
+// Major features are added to this actor:
+// 1). It can stash lagged messages (messages arrived at this node out of order) as as to
+// send them to the subscribers eventually.
+// 2). It can manage the dependencies of the messages and save them to the store in the correct order,
+// which means that the messages in the store is always consistent.
+// 3). Used in ExtendedGossipMessageStore, we can subscribe to the updates of the store, which means that
+// it is possible to get a consistent view of the store without loading all the messages from the store.
 struct ExtendedGossipMessageStoreActor<S> {
     phantom: PhantomData<S>,
 }
@@ -928,7 +946,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                     // that satisfy the filter.
                     Some(filter) if filter < &state.last_cursor => {
                         myself.send_message(
-                            ExtendedGossipMessageStoreMessage::SendMessagesFromStore(
+                            ExtendedGossipMessageStoreMessage::LoadMessagesFromStore(
                                 id,
                                 filter.clone(),
                             ),
@@ -958,7 +976,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 let _ = reply.send(());
             }
 
-            ExtendedGossipMessageStoreMessage::SendMessagesFromStore(id, cursor) => {
+            ExtendedGossipMessageStoreMessage::LoadMessagesFromStore(id, cursor) => {
                 let output = match state.output_ports.get_mut(&id) {
                     Some(output) => output,
                     // Subscriber has already unsubscribed, early return.
@@ -973,7 +991,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 match messages.last() {
                     Some(m) => {
                         myself.send_message(
-                            ExtendedGossipMessageStoreMessage::SendMessagesFromStore(
+                            ExtendedGossipMessageStoreMessage::LoadMessagesFromStore(
                                 id,
                                 m.cursor(),
                             ),
@@ -1074,7 +1092,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 }
 
                 // We now have some messages later than last_cursor saved to the store, we can take them
-                // out and save them to the subscribers. Here we need to take messages directly from the
+                // out and send them to the subscribers. Here we need to take messages directly from the
                 // store because some messages with complete dependencies are previously saved directly
                 // to the store.
                 for subscription in effective_subscriptions {
@@ -1129,7 +1147,7 @@ pub enum ExtendedGossipMessageStoreMessage {
     // Send broadcast messages after the cursor to the subscriber specified in the u64 id.
     // This is normally called immediately after a new subscription is created. This is the time when
     // we need to send existing messages to the subscriber.
-    SendMessagesFromStore(u64, Cursor),
+    LoadMessagesFromStore(u64, Cursor),
     // A tick message that is sent periodically to check if there are any messages that are saved out of order.
     // If there are, we will send them to the subscribers.
     // This tick will also advance the last_cursor upon finishing.
