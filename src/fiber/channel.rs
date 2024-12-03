@@ -714,7 +714,6 @@ where
         } else {
             unreachable!("remove tlc without previous tlc");
         }
-        state.set_offered_tlc_removed(tlc_info.tlc_id.into());
     }
 
     fn try_to_settle_down_tlc(&self, state: &mut ChannelActorState, tlc_id: u64) {
@@ -986,7 +985,6 @@ where
                 "failed to forward".to_string(),
             ));
         }
-        state.set_received_tlc_forwarded(added_tlc_id);
         Ok(())
     }
 
@@ -1994,7 +1992,6 @@ pub struct AddTlcInfo {
     pub removed_at: Option<(CommitmentNumbers, RemoveTlcReason)>,
     pub removal_confirmed_at: Option<CommitmentNumbers>,
     pub creation_confirmed_at: Option<CommitmentNumbers>,
-    pub relay_status: TlcRelayStatus,
     pub payment_preimage: Option<Hash256>,
     /// The previous tlc id if this tlc is a part of a multi-tlc payment.
     /// Note: this is used to track the tlc chain for a multi-tlc payment,
@@ -3969,18 +3966,6 @@ impl ChannelActorState {
         self.tlc_state.get(&TLCId::Received(tlc_id))
     }
 
-    pub fn set_received_tlc_forwarded(&mut self, tlc_id: u64) {
-        if let Some(tlc) = self.tlc_state.get_mut(&TLCId::Received(tlc_id)) {
-            tlc.relay_status = TlcRelayStatus::WaitingRemove;
-        }
-    }
-
-    pub fn set_offered_tlc_removed(&mut self, tlc_id: u64) {
-        if let Some(tlc) = self.tlc_state.get_mut(&TLCId::Offered(tlc_id)) {
-            tlc.relay_status = TlcRelayStatus::Removed;
-        }
-    }
-
     pub(crate) fn set_received_tlc_preimage(&mut self, tlc_id: u64, preimage: Option<Hash256>) {
         if let Some(tlc) = self.tlc_state.get_mut(&TLCId::Received(tlc_id)) {
             tlc.payment_preimage = preimage;
@@ -4548,14 +4533,6 @@ impl ChannelActorState {
             .payment_hash
             .unwrap_or_else(|| command.hash_algorithm.hash(preimage).into());
 
-        let relay_status = {
-            if command.onion_packet.is_some() {
-                TlcRelayStatus::WaitingRemove
-            } else {
-                TlcRelayStatus::NoForward
-            }
-        };
-
         TlcKind::AddTlc(AddTlcInfo {
             channel_id: self.get_id(),
             tlc_id: TLCId::Offered(id),
@@ -4565,7 +4542,6 @@ impl ChannelActorState {
             hash_algorithm: command.hash_algorithm,
             created_at: self.get_current_commitment_numbers(),
             creation_confirmed_at: None,
-            relay_status,
             payment_preimage: None,
             removed_at: None,
             removal_confirmed_at: None,
@@ -4580,14 +4556,6 @@ impl ChannelActorState {
         &self,
         message: AddTlc,
     ) -> Result<AddTlcInfo, ProcessingChannelError> {
-        let relay_status = {
-            if !message.onion_packet.is_some() {
-                TlcRelayStatus::WaitingForward
-            } else {
-                TlcRelayStatus::NoForward
-            }
-        };
-
         let tlc_info = AddTlcInfo {
             tlc_id: TLCId::Received(message.tlc_id),
             channel_id: self.get_id(),
@@ -4599,7 +4567,6 @@ impl ChannelActorState {
             onion_packet: message.onion_packet,
             created_at: self.get_current_commitment_numbers(),
             creation_confirmed_at: None,
-            relay_status,
             payment_preimage: None,
             removed_at: None,
             removal_confirmed_at: None,
@@ -6205,14 +6172,6 @@ impl From<&AcceptChannel> for ChannelBasePublicKeys {
 }
 
 type ShortHash = [u8; 20];
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TlcRelayStatus {
-    NoForward,
-    WaitingForward,
-    WaitingRemove,
-    Removed,
-}
 
 pub fn get_tweak_by_commitment_point(commitment_point: &Pubkey) -> [u8; 32] {
     let mut hasher = new_blake2b();

@@ -1,5 +1,5 @@
 use crate::fiber::channel::{
-    AddTlcInfo, CommitmentNumbers, RemoveTlcInfo, TLCId, TlcKind, TlcRelayStatus, TlcState,
+    AddTlcInfo, CommitmentNumbers, RemoveTlcInfo, TLCId, TlcKind, TlcState,
 };
 use crate::fiber::config::MAX_PAYMENT_TLC_EXPIRY_LIMIT;
 use crate::fiber::graph::PaymentSessionStatus;
@@ -73,7 +73,6 @@ fn test_pending_tlcs() {
         tlc_id: TLCId::Offered(0),
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
-        relay_status: TlcRelayStatus::NoForward,
         removed_at: None,
         creation_confirmed_at: None,
         payment_preimage: None,
@@ -89,7 +88,6 @@ fn test_pending_tlcs() {
         tlc_id: TLCId::Offered(1),
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
-        relay_status: TlcRelayStatus::NoForward,
         removed_at: None,
         creation_confirmed_at: None,
         payment_preimage: None,
@@ -158,7 +156,6 @@ fn test_pending_tlcs_duplicated_tlcs() {
         tlc_id: TLCId::Offered(0),
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
-        relay_status: TlcRelayStatus::NoForward,
         removed_at: None,
         creation_confirmed_at: None,
         payment_preimage: None,
@@ -198,7 +195,6 @@ fn test_pending_tlcs_duplicated_tlcs() {
         tlc_id: TLCId::Offered(1),
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
-        relay_status: TlcRelayStatus::NoForward,
         removed_at: None,
         creation_confirmed_at: None,
         payment_preimage: None,
@@ -244,7 +240,6 @@ fn test_pending_tlcs_with_remove_tlc() {
         tlc_id: TLCId::Offered(0),
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
-        relay_status: TlcRelayStatus::NoForward,
         removed_at: None,
         creation_confirmed_at: None,
         payment_preimage: None,
@@ -260,7 +255,6 @@ fn test_pending_tlcs_with_remove_tlc() {
         tlc_id: TLCId::Offered(1),
         created_at: CommitmentNumbers::default(),
         removal_confirmed_at: None,
-        relay_status: TlcRelayStatus::NoForward,
         removed_at: None,
         creation_confirmed_at: None,
         payment_preimage: None,
