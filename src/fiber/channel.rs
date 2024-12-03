@@ -6221,61 +6221,6 @@ impl From<&AcceptChannel> for ChannelBasePublicKeys {
 
 type ShortHash = [u8; 20];
 
-/// A tlc output.
-#[serde_as]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TLC {
-    /// The id of a TLC.
-    pub id: TLCId,
-    /// The value as it appears in the commitment transaction
-    pub amount: u128,
-    /// The expiry timestamp in millisecond.
-    pub expiry: u64,
-    /// The hash of the preimage which unlocks this HTLC.
-    pub payment_hash: Hash256,
-    /// The preimage of the hash to be sent to the counterparty.
-    pub payment_preimage: Option<Hash256>,
-    /// Which hash algorithm is applied on the preimage
-    pub hash_algorithm: HashAlgorithm,
-
-    /// For received TLC from a payment, this is the peeled onion packet for the current node.
-    pub peeled_onion_packet: Option<PeeledPaymentOnionPacket>,
-
-    /// The previous tlc id if this tlc is a part of a multi-tlc payment.
-    /// Note: this is used to track the tlc chain for a multi-tlc payment,
-    ///       we need to know previous when removing tlc backwardly.
-    ///
-    /// Node A ---------> Node B ------------> Node C ----------> Node D
-    ///  tlc_1 <---> (tlc_1) (tlc_2) <---> (tlc_2) (tlc_3) <----> tlc_3
-    ///                ^^^^                 ^^^^
-    ///
-    pub previous_tlc: Option<(Hash256, TLCId)>,
-}
-
-impl TLC {
-    pub fn is_offered(&self) -> bool {
-        self.id.is_offered()
-    }
-
-    pub fn is_received(&self) -> bool {
-        !self.is_offered()
-    }
-
-    // Whether this TLC is the last hop in a payment route
-    pub fn is_last_hop(&self) -> bool {
-        self.peeled_onion_packet
-            .as_ref()
-            .map(|packet| packet.is_last())
-            // Consider this TLC as the last hop when there's no peeled onion packet
-            .unwrap_or(true)
-    }
-
-    // Change this tlc to the opposite side.
-    pub fn flip_mut(&mut self) {
-        self.id.flip_mut()
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TlcRelayStatus {
     NoForward,
