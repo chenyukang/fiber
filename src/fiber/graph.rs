@@ -234,10 +234,46 @@ where
         network_graph
     }
 
+    pub fn get_latest_cursor(&self) -> &Cursor {
+        &self.latest_cursor
+    }
+
     fn update_lastest_cursor(&mut self, cursor: Cursor) {
         if cursor > self.latest_cursor {
             self.latest_cursor = cursor;
         }
+    }
+
+    // Update the network graph with the messages received from the network.
+    // Returns true if the network graph has been updated.
+    pub(crate) fn update_for_messages(
+        &mut self,
+        messages: Vec<BroadcastMessageWithTimestamp>,
+    ) -> bool {
+        if messages.is_empty() {
+            return false;
+        }
+        for message in messages {
+            self.update_lastest_cursor(message.cursor());
+            if message.chain_hash() != get_chain_hash() {
+                continue;
+            }
+            match message {
+                BroadcastMessageWithTimestamp::ChannelAnnouncement(
+                    timestamp,
+                    channel_announcement,
+                ) => {
+                    self.process_channel_announcement(timestamp, channel_announcement);
+                }
+                BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                    self.process_channel_update(channel_update);
+                }
+                BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+                    self.process_node_announcement(node_announcement);
+                }
+            }
+        }
+        return true;
     }
 
     // Load all the broadcast messages starting from latest_cursor from the store.
@@ -248,26 +284,7 @@ where
             if messages.is_empty() {
                 break;
             }
-            for message in messages {
-                self.update_lastest_cursor(message.cursor());
-                if message.chain_hash() != get_chain_hash() {
-                    continue;
-                }
-                match message {
-                    BroadcastMessageWithTimestamp::ChannelAnnouncement(
-                        timestamp,
-                        channel_announcement,
-                    ) => {
-                        self.process_channel_announcement(timestamp, channel_announcement);
-                    }
-                    BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
-                        self.process_channel_update(channel_update);
-                    }
-                    BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
-                        self.process_node_announcement(node_announcement);
-                    }
-                }
-            }
+            self.update_for_messages(messages);
         }
     }
 

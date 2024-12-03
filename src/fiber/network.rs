@@ -54,7 +54,7 @@ use super::channel::{
 };
 use super::config::AnnouncedNodeName;
 use super::fee::{calculate_commitment_tx_fee, default_minimal_ckb_amount};
-use super::gossip::{GossipActorMessage, GossipMessageStore};
+use super::gossip::{GossipActorMessage, GossipMessageStore, GossipMessageUpdates};
 use super::graph::{NetworkGraph, NetworkGraphStateStore};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
@@ -70,7 +70,7 @@ use crate::ckb::{CkbChainMessage, FundingRequest, FundingTx, TraceTxRequest, Tra
 use crate::fiber::channel::{
     AddTlcCommand, AddTlcResponse, TxCollaborationCommand, TxUpdateCommand,
 };
-use crate::fiber::gossip::GossipProtocolHandle;
+use crate::fiber::gossip::{GossipProtocolHandle, SubscribableGossipMessageStore};
 use crate::fiber::graph::{PaymentSession, PaymentSessionStatus};
 use crate::fiber::serde_utils::EntityHex;
 use crate::fiber::types::{
@@ -486,6 +486,10 @@ pub enum NetworkActorEvent {
     PeerConnected(PeerId, Pubkey, SessionContext),
     PeerDisconnected(PeerId, SessionContext),
     FiberMessage(PeerId, FiberMessage),
+
+    // Some gossip messages have been updated in the gossip message store.
+    // Normally we need to propagate these messages to the network graph.
+    GossipMessageUpdates(GossipMessageUpdates),
     // Mock that a gossip message is received, used for testing.
     #[cfg(test)]
     GossipMessage(PeerId, GossipMessage),
@@ -866,6 +870,10 @@ where
                     .send_message(GossipActorMessage::GossipMessageReceived(
                         GossipMessageWithPeerId { peer_id, message },
                     ));
+            }
+            NetworkActorEvent::GossipMessageUpdates(gossip_message_updates) => {
+                let mut graph = self.network_graph.write().await;
+                graph.update_for_messages(gossip_message_updates.messages);
             }
         }
         Ok(())
@@ -2684,7 +2692,7 @@ where
         let my_peer_id: PeerId = PeerId::from(secio_pk);
         let handle = MyServiceHandle::new(myself.clone());
         let fiber_handle = FiberProtocolHandle::from(&handle);
-        let gossip_handle = GossipProtocolHandle::new(
+        let (gossip_handle, store_update_subscriber) = GossipProtocolHandle::new(
             Some(format!("gossip actor {:?}", my_peer_id)),
             Duration::from_millis(config.gossip_maintenance_interval_ms()).into(),
             self.store.clone(),
@@ -2692,6 +2700,17 @@ where
             myself.get_cell(),
         )
         .await;
+        let graph = self.network_graph.read().await;
+        let current_last_cursor = graph.get_latest_cursor().clone();
+
+        store_update_subscriber
+            .subscribe(Some(current_last_cursor), myself.clone(), |m| {
+                Some(NetworkActorMessage::new_event(
+                    NetworkActorEvent::GossipMessageUpdates(m),
+                ))
+            })
+            .await
+            .expect("subscribe to gossip store updates");
         let gossip_actor = gossip_handle.actor().clone();
         let mut service = ServiceBuilder::default()
             .insert_protocol(fiber_handle.create_meta())
@@ -2738,8 +2757,6 @@ where
             service.run().await;
             debug!("Tentacle service stopped");
         });
-
-        let mut graph = self.network_graph.write().await;
 
         let mut state_to_be_persisted = self
             .store

@@ -199,7 +199,7 @@ pub trait GossipMessageStore {
 
 // A batch of gossip messages has been added to the store since the last time
 // we pulled new messages/messages are pushed to us.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct GossipMessageUpdates {
     pub messages: Vec<BroadcastMessageWithTimestamp>,
 }
@@ -698,7 +698,10 @@ where
 {
     async fn new(store: S, supervisor: ActorCell) -> Self {
         let (actor, _) = Actor::spawn_linked(
-            Some("gossip message store actor".to_string()),
+            Some(format!(
+                "gossip message store actor supervised by {:?}",
+                supervisor.get_id()
+            )),
             ExtendedGossipMessageStoreActor::new(),
             store.clone(),
             supervisor,
@@ -1647,20 +1650,25 @@ fn verify_node_announcement<S: GossipMessageStore>(
 }
 
 impl GossipProtocolHandle {
-    pub(crate) async fn new<S: GossipMessageStore + Clone + Send + Sync + 'static>(
+    pub(crate) async fn new<S>(
         name: Option<String>,
         gossip_network_maintenance_interval: Duration,
         store: S,
         chain_actor: ActorRef<CkbChainMessage>,
         supervisor: ActorCell,
-    ) -> Self {
-        let (sender, receiver) = oneshot::channel();
+    ) -> (Self, ExtendedGossipMessageStore<S>)
+    where
+        S: GossipMessageStore + Clone + Send + Sync + 'static,
+    {
+        let (network_control_sender, network_control_receiver) = oneshot::channel();
+        let (store_sender, store_receiver) = oneshot::channel();
 
         let (actor, _handle) = ActorRuntime::spawn_linked_instant(
             name,
             GossipActor::new(),
             (
-                receiver,
+                network_control_receiver,
+                store_sender,
                 gossip_network_maintenance_interval,
                 store,
                 chain_actor,
@@ -1668,10 +1676,14 @@ impl GossipProtocolHandle {
             supervisor,
         )
         .expect("start gossip actor");
-        Self {
-            actor,
-            sender: Some(sender),
-        }
+        let store = store_receiver.await.expect("receive store");
+        (
+            Self {
+                actor,
+                sender: Some(network_control_sender),
+            },
+            store,
+        )
     }
 
     pub(crate) fn actor(&self) -> &ActorRef<GossipActorMessage> {
@@ -1698,6 +1710,7 @@ where
     type State = GossipActorState<S>;
     type Arguments = (
         oneshot::Receiver<ServiceAsyncControl>,
+        oneshot::Sender<ExtendedGossipMessageStore<S>>,
         Duration,
         S,
         ActorRef<CkbChainMessage>,
@@ -1706,8 +1719,12 @@ where
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        (rx, network_maintenance_interval, store, chain_actor): Self::Arguments,
+        (rx, tx, network_maintenance_interval, store, chain_actor): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
+        let store = ExtendedGossipMessageStore::new(store, myself.get_cell()).await;
+        if let Err(_) = tx.send(store.clone()) {
+            panic!("failed to send store to the caller");
+        }
         let control = timeout(Duration::from_secs(1), rx)
             .await
             .expect("received control timely")
@@ -1720,7 +1737,6 @@ where
         let _ = myself.send_interval(network_maintenance_interval, || {
             GossipActorMessage::TickNetworkMaintenance
         });
-        let store = ExtendedGossipMessageStore::new(store, myself.get_cell()).await;
         let (syncing_actor, _) = Actor::spawn_linked(
             None,
             GossipSyncingActor::new(),
