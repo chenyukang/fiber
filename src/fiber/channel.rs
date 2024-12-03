@@ -927,13 +927,13 @@ where
     ) -> Result<(), ProcessingChannelError> {
         let channel_id = state.get_id();
         let remove_reason = remove_tlc.reason.clone();
-        let tlc_details = state.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_reason)?;
+        let tlc_info = state.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_reason)?;
         if let (
             Some(ref udt_type_script),
             RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill { payment_preimage }),
         ) = (state.funding_udt_type_script.clone(), &remove_reason)
         {
-            let mut tlc = tlc_details.clone();
+            let mut tlc = tlc_info.clone();
             tlc.payment_preimage = Some(*payment_preimage);
             self.subscribers
                 .settled_tlcs_subscribers
@@ -943,17 +943,17 @@ where
                     script: udt_type_script.clone(),
                 });
         }
-        if tlc_details.previous_tlc.is_none() {
+        if tlc_info.previous_tlc.is_none() {
             // only the original sender of the TLC should send `TlcRemoveReceived` event
             // because only the original sender cares about the TLC event to settle the payment
             self.network
                 .send_message(NetworkActorMessage::new_event(
-                    NetworkActorEvent::TlcRemoveReceived(tlc_details.payment_hash, remove_reason),
+                    NetworkActorEvent::TlcRemoveReceived(tlc_info.payment_hash, remove_reason),
                 ))
                 .expect("myself alive");
         } else {
             // relay RemoveTlc to previous channel if needed
-            self.try_to_relay_remove_tlc(state, tlc_details.tlc_id.into())
+            self.try_to_relay_remove_tlc(state, tlc_info.tlc_id.into())
                 .await;
         }
         Ok(())
