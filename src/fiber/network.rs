@@ -503,6 +503,8 @@ pub enum NetworkServiceEvent {
     ChannelCreated(PeerId, Hash256),
     // A outgoing channel is pending to be accepted.
     ChannelPendingToBeAccepted(PeerId, Hash256),
+    // A AddTlc peer message processed with failure
+    AddTlcFailed(PeerId, Hash256, TlcErr),
     // The channel is ready to use (with funding transaction confirmed
     // and both parties sent ChannelReady messages).
     ChannelReady(PeerId, Hash256, OutPoint),

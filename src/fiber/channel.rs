@@ -644,13 +644,24 @@ where
                     if add_tlc.is_received() {
                         if let Err(e) = self.apply_add_tlc_operation(state, &add_tlc).await {
                             let error_detail = self.get_tlc_detail_error(state, &e).await;
-                            let reason =
-                                RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(error_detail));
+                            let reason = RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
+                                error_detail.clone(),
+                            ));
                             let command = RemoveTlcCommand {
                                 id: add_tlc.tlc_id.into(),
                                 reason,
                             };
                             let _ = self.handle_remove_tlc_command(state, command);
+                            self.network
+                                .clone()
+                                .send_message(NetworkActorMessage::new_notification(
+                                    NetworkServiceEvent::AddTlcFailed(
+                                        state.get_local_peer_id(),
+                                        add_tlc.payment_hash,
+                                        error_detail,
+                                    ),
+                                ))
+                                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                         }
                     }
                 }

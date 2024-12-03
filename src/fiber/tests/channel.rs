@@ -5,9 +5,9 @@ use crate::fiber::config::MAX_PAYMENT_TLC_EXPIRY_LIMIT;
 use crate::fiber::graph::PaymentSessionStatus;
 use crate::fiber::network::SendPaymentCommand;
 use crate::fiber::tests::test_utils::{
-    gen_rand_public_key, gen_sha256_hash, NetworkNodeConfigBuilder,
+    gen_rand_public_key, gen_sha256_hash, generate_seckey, NetworkNodeConfigBuilder,
 };
-use crate::fiber::types::TlcErrorCode;
+use crate::fiber::types::{PaymentHopData, PeeledOnionPacket, TlcErrorCode};
 use crate::{
     ckb::contracts::{get_cell_deps, Contract},
     fiber::{
@@ -26,12 +26,14 @@ use crate::{
     now_timestamp_as_millis_u64, NetworkServiceEvent,
 };
 use ckb_jsonrpc_types::Status;
+use ckb_types::packed::OutPointBuilder;
 use ckb_types::{
     core::{FeeRate, TransactionView},
     packed::{CellInput, Script, Transaction},
     prelude::{AsTransactionBuilder, Builder, Entity, IntoTransactionView, Pack, Unpack},
 };
 use ractor::call;
+use secp256k1::Secp256k1;
 use std::collections::HashSet;
 
 use super::test_utils::{init_tracing, NetworkNode};
@@ -642,14 +644,43 @@ async fn test_network_send_previous_tlc_error() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (node_a, node_b, new_channel_id) =
+    let (node_a, mut node_b, new_channel_id) =
         create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, true)
             .await;
     // Wait for the channel announcement to be broadcasted
     tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
 
+    let secp = Secp256k1::new();
+    let keys: Vec<Privkey> = std::iter::repeat_with(|| generate_seckey().into())
+        .take(1)
+        .collect();
+    let payment_hash = [1; 32].into();
+    let hops_infos = vec![
+        PaymentHopData {
+            payment_hash,
+            amount: 2,
+            expiry: 3,
+            next_hop: Some(keys[0].pubkey().into()),
+            channel_outpoint: Some(OutPointBuilder::default().build().into()),
+            hash_algorithm: HashAlgorithm::Sha256,
+            payment_preimage: None,
+        },
+        PaymentHopData {
+            payment_hash,
+            amount: 8,
+            expiry: 9,
+            next_hop: None,
+            channel_outpoint: Some(OutPointBuilder::default().build().into()),
+            hash_algorithm: HashAlgorithm::Sha256,
+            payment_preimage: None,
+        },
+    ];
+    let packet = PeeledOnionPacket::create(generate_seckey().into(), hops_infos.clone(), &secp)
+        .expect("create peeled packet");
+
     // step1: try to send a invalid onion_packet with add_tlc
     // ==================================================================================
+    let generated_payment_hash = gen_sha256_hash();
     let message = |rpc_reply| -> NetworkActorMessage {
         NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
             ChannelCommandWithId {
@@ -658,11 +689,11 @@ async fn test_network_send_previous_tlc_error() {
                     AddTlcCommand {
                         amount: 10000,
                         preimage: None,
-                        payment_hash: Some(gen_sha256_hash()),
+                        payment_hash: Some(generated_payment_hash),
                         expiry: DEFAULT_EXPIRY_DELTA + now_timestamp_as_millis_u64(),
                         hash_algorithm: HashAlgorithm::Sha256,
-                        //onion_packet: vec![1], // invalid onion packet
-                        peeled_onion_packet: None,
+                        // invalid onion packet
+                        peeled_onion_packet: Some(packet),
                         previous_tlc: None,
                     },
                     rpc_reply,
@@ -670,10 +701,24 @@ async fn test_network_send_previous_tlc_error() {
             },
         ))
     };
+
     let res = call!(node_a.network_actor, message).expect("node_a alive");
     assert!(res.is_ok());
+    let node_b_peer_id = node_b.peer_id.clone();
+    node_b
+        .expect_event(|event| match event {
+            NetworkServiceEvent::AddTlcFailed(peer_id, payment_hash, err) => {
+                assert_eq!(peer_id, &node_b_peer_id);
+                assert_eq!(payment_hash, &generated_payment_hash);
+                assert_eq!(err.error_code, TlcErrorCode::InvalidOnionPayload);
+                true
+            }
+            _ => false,
+        })
+        .await;
     // sleep 2 seconds to make sure node_b processed handle_add_tlc_peer_message
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
     // XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
     // step2: try to send the second valid payment, expect it to success
