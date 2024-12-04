@@ -33,8 +33,8 @@ use musig2::{
     PubNonce, SecNonce,
 };
 use ractor::{
-    async_trait as rasync_trait, call, Actor, ActorProcessingErr, ActorRef, OutputPort,
-    RpcReplyPort, SpawnErr,
+    async_trait as rasync_trait, call, concurrency::Duration, Actor, ActorProcessingErr, ActorRef,
+    OutputPort, RpcReplyPort, SpawnErr,
 };
 
 use serde::{Deserialize, Serialize};
@@ -92,6 +92,8 @@ pub const INITIAL_COMMITMENT_NUMBER: u64 = 0;
 
 // The channel is disabled, and no more tlcs can be added to the channel.
 pub const CHANNEL_DISABLED_FLAG: u32 = 1;
+
+const AUTO_SETDOWN_TLC_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub enum ChannelActorMessage {
@@ -637,20 +639,22 @@ where
 
     async fn flush_staging_tlc_operations(&self, state: &mut ChannelActorState) {
         let pending_apply_tlcs = state.tlc_state.commit_remote_tlcs();
+        for t in pending_apply_tlcs.iter() {
+            eprintln!("pending_apply_tlcs {:?}", t);
+        }
         for tlc_info in pending_apply_tlcs {
             match tlc_info {
                 TlcKind::AddTlc(add_tlc) => {
                     if add_tlc.is_received() {
                         if let Err(e) = self.apply_add_tlc_operation(state, &add_tlc).await {
                             let error_detail = self.get_tlc_detail_error(state, &e).await;
-                            let reason = RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
-                                error_detail.clone(),
-                            ));
-                            let command = RemoveTlcCommand {
-                                id: add_tlc.tlc_id.into(),
-                                reason,
-                            };
-                            let _ = self.handle_remove_tlc_command(state, command);
+                            self.register_tlc_remove(
+                                state,
+                                add_tlc.tlc_id,
+                                RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
+                                    error_detail.clone(),
+                                )),
+                            );
                             self.network
                                 .clone()
                                 .send_message(NetworkActorMessage::new_notification(
@@ -727,7 +731,14 @@ where
             return;
         };
 
-        let mut update_invoice_payment_hash = false;
+        let mut remove_reason = RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill {
+            payment_preimage: preimage,
+        });
+
+        eprintln!(
+            "debug to settle down: {:?} with preimage: {:?}",
+            &tlc_info.tlc_id, &preimage
+        );
         let tlc = tlc_info.clone();
         if let Some(invoice) = self.store.get_invoice(&tlc.payment_hash) {
             let status = self.get_invoice_status(&invoice);
@@ -738,38 +749,17 @@ where
                         CkbInvoiceStatus::Cancelled => TlcErrorCode::InvoiceCancelled,
                         _ => unreachable!("unexpected invoice status"),
                     };
-                    let command = RemoveTlcCommand {
-                        id: tlc.tlc_id.into(),
-                        reason: RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(TlcErr::new(
-                            error_code,
-                        ))),
-                    };
-                    let result = self.handle_remove_tlc_command(state, command);
-                    info!("try to settle down tlc: {:?} result: {:?}", &tlc, &result);
+                    remove_reason =
+                        RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(TlcErr::new(error_code)));
                 }
                 CkbInvoiceStatus::Paid => {
                     unreachable!("Paid invoice shold not be paid again");
                 }
-                _ => {
-                    update_invoice_payment_hash = true;
-                }
+                _ => {}
             }
         }
 
-        let result = self.handle_remove_tlc_command(
-            state,
-            RemoveTlcCommand {
-                id: tlc.tlc_id.into(),
-                reason: RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill {
-                    payment_preimage: preimage,
-                }),
-            },
-        );
-        if result.is_ok() && update_invoice_payment_hash {
-            let _ = self
-                .store
-                .update_invoice_status(&tlc.payment_hash, CkbInvoiceStatus::Paid);
-        }
+        self.register_tlc_remove(state, tlc.tlc_id, remove_reason);
     }
 
     async fn apply_add_tlc_operation(
@@ -833,6 +823,7 @@ where
                     if add_tlc.payment_hash != filled_payment_hash {
                         return Err(ProcessingChannelError::FinalIncorrectPreimage);
                     }
+                    eprintln!("got preimage here : {:?}", preimage);
                     state.set_received_tlc_preimage(add_tlc.tlc_id.into(), Some(preimage));
                 } else {
                     return Err(ProcessingChannelError::FinalIncorrectPaymentHash);
@@ -939,7 +930,20 @@ where
     ) -> Result<(), ProcessingChannelError> {
         let channel_id = state.get_id();
         let remove_reason = remove_tlc.reason.clone();
+        eprintln!(
+            "begin to apply remove tlc operation: {:?} with reason: {:?}",
+            &remove_tlc.tlc_id, &remove_reason
+        );
         let tlc_info = state.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_reason)?;
+        if let RemoveTlcReason::RemoveTlcFulfill(_) = remove_reason {
+            if let Some(invoice) = self.store.get_invoice(&tlc_info.payment_hash) {
+                let status = self.get_invoice_status(&invoice);
+                assert_eq!(status, CkbInvoiceStatus::Received);
+                self.store
+                    .update_invoice_status(&tlc_info.payment_hash, CkbInvoiceStatus::Paid)
+                    .expect("update invoice status failed");
+            }
+        }
         if let (
             Some(ref udt_type_script),
             RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill { payment_preimage }),
@@ -1319,6 +1323,50 @@ where
         Ok(())
     }
 
+    pub fn register_tlc_remove(
+        &self,
+        state: &mut ChannelActorState,
+        tlc_id: TLCId,
+        reason: RemoveTlcReason,
+    ) {
+        let command = RemoveTlcCommand {
+            id: tlc_id.into(),
+            reason: reason.clone(),
+        };
+        if let Ok(_) = self.handle_remove_tlc_command(state, command) {
+            return;
+        } else {
+            error!("Failed to remove tlc: {:?}, retry it later", &tlc_id);
+            state.tlc_state.set_tlc_pending_remove(tlc_id, reason);
+        }
+    }
+
+    pub fn check_tlc_setdown(&self, state: &mut ChannelActorState) {
+        let mut removed = vec![];
+        let pending_removes: Vec<(TLCId, RemoveTlcReason)> = state
+            .tlc_state
+            .get_pending_remove()
+            .iter()
+            .map(|(tlc_id, reason)| (tlc_id.clone(), reason.clone()))
+            .collect();
+        eprintln!("now begin to process pending: {:?}", &pending_removes);
+        for (tlc_id, reason) in pending_removes.iter() {
+            let id: u64 = (*tlc_id).into();
+            let command = RemoveTlcCommand {
+                id,
+                reason: reason.clone(),
+            };
+            if let Ok(_) = self.handle_remove_tlc_command(state, command) {
+                removed.push(tlc_id.clone());
+            } else {
+                error!("Failed to remove tlc: {:?}, retry it later", &tlc_id);
+            }
+        }
+        for tlc_id in removed {
+            state.tlc_state.remove_pending_remove_tlc(&tlc_id);
+        }
+    }
+
     // This is the dual of `handle_tx_collaboration_msg`. Any logic error here is likely
     // to present in the other function as well.
     pub fn handle_tx_collaboration_command(
@@ -1534,6 +1582,9 @@ where
                 };
                 state.update_state(ChannelState::Closed(CloseFlags::UNCOOPERATIVE));
                 debug!("Channel closed with uncooperative close");
+            }
+            ChannelEvent::CheckTlcSetdown => {
+                self.check_tlc_setdown(state);
             }
             ChannelEvent::PeerDisconnected => {
                 myself.stop(Some("PeerDisconnected".to_string()));
@@ -1879,6 +1930,17 @@ where
                 Ok(channel)
             }
         }
+    }
+
+    async fn post_start(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        _state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        myself.send_interval(AUTO_SETDOWN_TLC_INTERVAL, || {
+            ChannelActorMessage::Event(ChannelEvent::CheckTlcSetdown)
+        });
+        Ok(())
     }
 
     async fn handle(
@@ -2241,6 +2303,9 @@ impl PendingTlcs {
 pub struct TlcState {
     local_pending_tlcs: PendingTlcs,
     remote_pending_tlcs: PendingTlcs,
+    // if the tlc is pending to be removed, the reason will be stored here
+    // this will only used for retrying remove TLC
+    pending_remove_tlcs_map: BTreeMap<TLCId, RemoveTlcReason>,
     waiting_ack: bool,
 }
 
@@ -2263,6 +2328,18 @@ impl TlcState {
 
     pub fn set_waiting_ack(&mut self, waiting_ack: bool) {
         self.waiting_ack = waiting_ack;
+    }
+
+    pub fn set_tlc_pending_remove(&mut self, tlc_id: TLCId, reason: RemoveTlcReason) {
+        self.pending_remove_tlcs_map.insert(tlc_id, reason);
+    }
+
+    pub fn get_pending_remove(&self) -> &BTreeMap<TLCId, RemoveTlcReason> {
+        &self.pending_remove_tlcs_map
+    }
+
+    pub fn remove_pending_remove_tlc(&mut self, tlc_id: &TLCId) {
+        self.pending_remove_tlcs_map.remove(tlc_id);
     }
 
     pub fn get(&self, id: &TLCId) -> Option<&AddTlcInfo> {
@@ -2661,6 +2738,7 @@ pub enum ChannelEvent {
     FundingTransactionConfirmed(BlockNumber, u32),
     CommitmentTransactionConfirmed,
     ClosingTransactionConfirmed,
+    CheckTlcSetdown,
 }
 
 pub type ProcessingChannelResult = Result<(), ProcessingChannelError>;
