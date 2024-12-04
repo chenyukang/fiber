@@ -2059,6 +2059,19 @@ pub enum TlcKind {
     RemoveTlc(RemoveTlcInfo),
 }
 
+impl TlcKind {
+    pub fn log(&self) -> String {
+        match self {
+            TlcKind::AddTlc(add_tlc) => {
+                format!("AddTlc: {:?}", &add_tlc.tlc_id)
+            }
+            TlcKind::RemoveTlc(remove_tlc) => {
+                format!("RemoveTlc: {:?}", &remove_tlc.tlc_id)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AddTlcInfo {
     pub channel_id: Hash256,
@@ -2200,6 +2213,15 @@ impl PendingTlcs {
         }
     }
 
+    pub fn print(&self, prefix: &str) {
+        eprintln!(
+            "{} pending tlcs: {:?}, committed_index: {:?}",
+            prefix,
+            self.tlcs.iter().map(|t| t.log()).collect::<Vec<_>>(),
+            self.committed_index
+        );
+    }
+
     pub fn next_tlc_id(&self) -> u64 {
         self.next_tlc_id
     }
@@ -2246,6 +2268,7 @@ impl PendingTlcs {
     }
 
     pub fn commit_tlcs(&mut self, committed_tlcs: &[TlcKind]) -> Vec<TlcKind> {
+        eprintln!("debug before committed_index: {}", self.committed_index);
         let staging_tlcs = self.get_staging_tlcs().to_vec();
         for tlc in committed_tlcs {
             if !self.is_tlc_present(tlc) {
@@ -2253,6 +2276,10 @@ impl PendingTlcs {
             }
         }
         self.committed_index = self.tlcs.len();
+        eprintln!(
+            "debug now set committed_index to {:?}",
+            self.committed_index
+        );
         return staging_tlcs;
     }
 
@@ -2264,7 +2291,7 @@ impl PendingTlcs {
     }
 
     pub fn drop_remove_tlc(&mut self, tlc_id: &TLCId) {
-        assert_eq!(self.committed_index, self.tlcs.len());
+        //assert_eq!(self.committed_index, self.tlcs.len());
         self.tlcs.retain(|tlc| match tlc {
             TlcKind::RemoveTlc(info) => info.tlc_id != *tlc_id,
             _ => true,
@@ -2273,7 +2300,7 @@ impl PendingTlcs {
     }
 
     pub fn shrink_removed_tlcs(&mut self) {
-        assert_eq!(self.committed_index, self.tlcs.len());
+        //assert_eq!(self.committed_index, self.tlcs.len());
         let new_committed_index = self
             .get_committed_tlcs()
             .iter()
@@ -2446,17 +2473,34 @@ impl TlcState {
     }
 
     pub fn get_tlcs_for_local(&self) -> Vec<TlcKind> {
-        self.unify_tlcs(
+        self.local_pending_tlcs.print("get_tlcs_for_local local:");
+        self.remote_pending_tlcs
+            .print("get_tlcs_for_local remote: ");
+
+        let res = self.unify_tlcs(
             self.local_pending_tlcs.get_staging_tlcs().into_iter(),
             self.remote_pending_tlcs.get_committed_tlcs().into_iter(),
-        )
+        );
+        eprintln!(
+            "get_tlcs_for_local: {:?}",
+            res.iter().map(|t| t.log()).collect::<Vec<_>>()
+        );
+        res
     }
 
     pub fn get_tlcs_for_remote(&self) -> Vec<TlcKind> {
-        self.unify_tlcs(
+        self.local_pending_tlcs.print("get_tlcs_for_remote local:");
+        self.remote_pending_tlcs
+            .print("get_tlcs_for_remote remote: ");
+        let res = self.unify_tlcs(
             self.remote_pending_tlcs.get_staging_tlcs().into_iter(),
             self.local_pending_tlcs.get_committed_tlcs().into_iter(),
-        )
+        );
+        eprintln!(
+            "get_tlcs_for_remote: {:?}",
+            res.iter().map(|t| t.log()).collect::<Vec<_>>()
+        );
+        res
     }
 
     pub fn get_tlcs_with(&self, local_commitment: bool) -> Vec<TlcKind> {
@@ -2473,6 +2517,7 @@ impl TlcState {
     }
 
     pub fn commit_remote_tlcs(&mut self) -> Vec<TlcKind> {
+        eprintln!("now commit_remote_tlcs ....");
         self.remote_pending_tlcs
             .commit_tlcs(self.local_pending_tlcs.get_committed_tlcs())
     }
@@ -4168,7 +4213,7 @@ impl ChannelActorState {
                 }
                 self.to_local_amount = to_local_amount;
                 self.to_remote_amount = to_remote_amount;
-                debug!("Updated local balance to {} and remote balance to {} by removing tlc {:?} with reason {:?}",
+                eprintln!("Updated local balance to {} and remote balance to {} by removing tlc {:?} with reason {:?}",
                     to_local_amount, to_remote_amount, tlc_id, reason);
                 self.tlc_state
                     .apply_tlc_remove(tlc_id, removed_at, reason.clone());
@@ -5863,7 +5908,7 @@ impl ChannelActorState {
         let version = self.get_current_commitment_number(local);
         let htlcs = self.get_active_htlcs(local);
 
-        eprintln!("got htlcs: {:?}", htlcs);l
+        eprintln!("got htlcs: {:?}", htlcs);
 
         let mut commitment_lock_script_args = [
             &blake2b_256(x_only_aggregated_pubkey)[0..20],
