@@ -1240,6 +1240,7 @@ pub struct TlcErrPacket {
 
 impl TlcErrPacket {
     pub fn new(tlc_fail: TlcErr) -> Self {
+        dbg!(&tlc_fail);
         TlcErrPacket {
             onion_packet: tlc_fail.serialize(),
         }

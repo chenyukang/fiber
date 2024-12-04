@@ -1104,6 +1104,8 @@ where
             ))
             .expect("myself alive");
 
+        state.save_remote_nonce_for_raa();
+
         match flags {
             CommitmentSignedFlags::SigningCommitment(flags) => {
                 let flags = flags | SigningCommitmentFlags::OUR_COMMITMENT_SIGNED_SENT;
@@ -2560,10 +2562,15 @@ pub struct ChannelActorState {
     #[serde_as(as = "EntityHex")]
     pub local_shutdown_script: Script,
 
+    // While building a CommitmentSigned message, we use a nonce sent by the counterparty
+    // to partially sign the commitment transaction. This nonce is also used while handling the revoke_and_ack
+    // message from the peer. We need to save this nonce because the counterparty may send other nonces during
+    // the period when our CommitmentSigned is sent and the counterparty's RevokeAndAck is received.
     #[serde_as(as = "Option<PubNonceAsBytes>")]
-    pub previous_remote_nonce: Option<PubNonce>,
-    #[serde_as(as = "Option<PubNonceAsBytes>")]
-    pub remote_nonce: Option<PubNonce>,
+    pub last_used_nonce_in_commitment_signed: Option<PubNonce>,
+
+    #[serde_as(as = "Vec<PubNonceAsBytes>")]
+    pub remote_nonces: Vec<PubNonce>,
 
     // The latest commitment transaction we're holding
     #[serde_as(as = "Option<EntityHex>")]
@@ -3281,8 +3288,8 @@ impl ChannelActorState {
             remote_channel_public_keys: Some(remote_pubkeys),
             commitment_numbers: Default::default(),
             remote_shutdown_script: Some(remote_shutdown_script),
-            previous_remote_nonce: None,
-            remote_nonce: Some(remote_nonce),
+            last_used_nonce_in_commitment_signed: None,
+            remote_nonces: vec![remote_nonce],
             remote_commitment_points: vec![first_commitment_point, second_commitment_point],
             local_shutdown_info: None,
             remote_shutdown_info: None,
@@ -3341,8 +3348,8 @@ impl ChannelActorState {
             max_tlc_number_in_flight,
             max_tlc_value_in_flight,
             remote_channel_public_keys: None,
-            previous_remote_nonce: None,
-            remote_nonce: None,
+            last_used_nonce_in_commitment_signed: None,
+            remote_nonces: vec![],
             commitment_numbers: Default::default(),
             remote_commitment_points: vec![],
             local_shutdown_script: shutdown_script,
@@ -3785,12 +3792,12 @@ impl ChannelActorState {
             .concat(),
         );
         let local_nonce = self.get_local_nonce();
-        let remote_nonce = self.get_previous_remote_nonce();
-        eprintln!(
+        let remote_nonce = self.get_remote_nonce();
+        debug!(
             "send local_nonce: {:?}, remote_nonce: {:?}",
             local_nonce, remote_nonce
         );
-        eprintln!(
+        debug!(
             "send commitment numbers: {:?}",
             self.get_current_commitment_numbers()
         );
@@ -3807,7 +3814,7 @@ impl ChannelActorState {
         eprintln!("send signature: {:?}", signature);
 
         // Note that we must update channel state here to update commitment number,
-        // so that next step will obtain the correct commitmen point.
+        // so that next step will obtain the correct commitment point.
         self.increment_remote_commitment_number();
         let point = self.get_current_local_commitment_point();
 
@@ -3856,17 +3863,39 @@ impl ChannelActorState {
     }
 
     pub fn get_remote_nonce(&self) -> PubNonce {
-        self.remote_nonce
-            .as_ref()
-            .expect("remote nonce exists")
-            .clone()
+        let comitment_number = self.get_remote_commitment_number();
+        debug!(
+            "Getting remote nonce: commitment number {}, current nonces: {:?}",
+            comitment_number, &self.remote_nonces
+        );
+        self.remote_nonces[comitment_number as usize].clone()
     }
 
-    pub fn get_previous_remote_nonce(&self) -> PubNonce {
-        self.previous_remote_nonce
-            .as_ref()
-            .expect("previous remote nonce exists")
-            .clone()
+    fn save_remote_nonce(&mut self, nonce: PubNonce) {
+        debug!(
+            "Saving remote nonce: new nonce {:?}, current nonces {:?}",
+            &nonce, &self.remote_nonces
+        );
+        self.remote_nonces.push(nonce);
+    }
+
+    fn save_remote_nonce_for_raa(&mut self) {
+        let nonce = self.get_remote_nonce();
+        debug!(
+            "Saving remote nonce used in commitment signed: {:?}",
+            &nonce
+        );
+        self.last_used_nonce_in_commitment_signed = Some(nonce);
+    }
+
+    fn take_remote_nonce_for_raa(&mut self) -> PubNonce {
+        debug!(
+            "Taking remote nonce used in commitment signed: {:?}",
+            &self.last_used_nonce_in_commitment_signed
+        );
+        self.last_used_nonce_in_commitment_signed
+            .take()
+            .expect("set last_used_nonce_in_commitment_signed in commitment signed")
     }
 
     pub fn get_current_commitment_numbers(&self) -> CommitmentNumbers {
@@ -4723,7 +4752,7 @@ impl ChannelActorState {
         self.to_remote_amount = accept_channel.funding_amount;
         self.remote_reserved_ckb_amount = accept_channel.reserved_ckb_amount;
 
-        self.remote_nonce = Some(accept_channel.next_local_nonce.clone());
+        self.save_remote_nonce(accept_channel.next_local_nonce.clone());
         let remote_pubkeys = (&accept_channel).into();
         self.remote_channel_public_keys = Some(remote_pubkeys);
         self.remote_commitment_points = vec![
@@ -4945,8 +4974,7 @@ impl ChannelActorState {
             self.get_remote_nonce(),
             &commitment_signed.next_local_nonce
         );
-        self.previous_remote_nonce = self.remote_nonce.clone();
-        self.remote_nonce = Some(commitment_signed.next_local_nonce);
+        self.save_remote_nonce(commitment_signed.next_local_nonce);
         self.latest_commitment_transaction = Some(tx.data());
         match flags {
             CommitmentSignedFlags::SigningCommitment(flags) => {
@@ -5236,23 +5264,23 @@ impl ChannelActorState {
         );
 
         let local_nonce = self.get_local_nonce();
-        let remote_nonce = self.get_remote_nonce();
-        eprintln!(
+        let remote_nonce = self.take_remote_nonce_for_raa();
+        debug!(
             "recv local_nonce: {:?}, remote_nonce: {:?}",
             local_nonce, remote_nonce
         );
-        eprintln!(
+        debug!(
             "recv commitment numbers: {:?}",
             self.get_current_commitment_numbers()
         );
-        let nonces = [remote_nonce, local_nonce];
+        let nonces = [remote_nonce.clone(), local_nonce];
         let agg_nonce = AggNonce::sum(nonces);
 
         let verify_ctx = Musig2VerifyContext {
             key_agg_ctx: key_agg_ctx.clone(),
             agg_nonce: agg_nonce.clone(),
             pubkey: *self.get_remote_funding_pubkey(),
-            pubnonce: self.get_remote_nonce(),
+            pubnonce: remote_nonce,
         };
 
         let RevokeAndAck {
@@ -5266,6 +5294,7 @@ impl ChannelActorState {
             message, partial_signature
         );
         verify_ctx.verify(partial_signature, message.as_slice())?;
+
         eprintln!("recv verify success .....");
 
         let sign_ctx: Musig2SignContext = Musig2SignContext {
@@ -6064,17 +6093,6 @@ pub struct Musig2VerifyContext {
     pub pubnonce: PubNonce,
 }
 
-impl From<Musig2SignContext> for Musig2VerifyContext {
-    fn from(value: Musig2SignContext) -> Self {
-        Musig2VerifyContext {
-            key_agg_ctx: value.key_agg_ctx,
-            agg_nonce: value.agg_nonce,
-            pubkey: value.seckey.pubkey(),
-            pubnonce: value.secnonce.public_nonce(),
-        }
-    }
-}
-
 impl Musig2VerifyContext {
     pub fn verify(&self, signature: PartialSignature, message: &[u8]) -> ProcessingChannelResult {
         let result = verify_partial(
@@ -6107,20 +6125,22 @@ pub struct Musig2SignContext {
 
 impl Musig2SignContext {
     pub fn sign(self, message: &[u8]) -> Result<PartialSignature, ProcessingChannelError> {
+        let result = sign_partial(
+            &self.key_agg_ctx,
+            self.seckey,
+            self.secnonce.clone(),
+            &self.agg_nonce,
+            message,
+        );
         debug!(
-            "Musig2 signing partial message {:?} with nonce {:?} (public nonce: {:?}), agg nonce {:?}",
+            "Musig2 signing partial message {:?} with nonce {:?} (public nonce: {:?}), agg nonce {:?}: result {:?}",
             hex::encode(message),
             self.secnonce,
             self.secnonce.public_nonce(),
-            &self.agg_nonce
-        );
-        Ok(sign_partial(
-            &self.key_agg_ctx,
-            self.seckey,
-            self.secnonce,
             &self.agg_nonce,
-            message,
-        )?)
+            &result
+        );
+        Ok(result?)
     }
 }
 

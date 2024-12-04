@@ -2064,6 +2064,7 @@ async fn do_test_add_tlc_number_limit() {
             let code = add_tlc_result.unwrap_err().decode().unwrap();
             assert_eq!(code.error_code, TlcErrorCode::TemporaryChannelFailure);
         } else {
+            dbg!(&add_tlc_result);
             assert!(add_tlc_result.is_ok());
         }
     }
