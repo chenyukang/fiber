@@ -382,6 +382,20 @@ where
         }
     }
 
+    pub(crate) fn num_of_nodes(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub(crate) fn sample_n_peers_to_connect(&self, n: usize) -> HashMap<PeerId, Vec<MultiAddr>> {
+        // TODO: we may need to shuffle the nodes before selecting the first n nodes,
+        // to avoid some malicious nodes from being always selected.
+        self.nodes
+            .iter()
+            .take(n)
+            .map(|(k, v)| (k.tentacle_peer_id(), v.addresses.clone()))
+            .collect()
+    }
+
     pub fn nodes(&self) -> impl Iterator<Item = &NodeInfo> {
         self.nodes.values()
     }

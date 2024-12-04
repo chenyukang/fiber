@@ -17,7 +17,6 @@ use serde_with::{serde_as, DisplayFromStr};
 use std::borrow::Cow;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::hash::RandomState;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -43,7 +42,7 @@ use tentacle::{
 };
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio_util::task::TaskTracker;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use super::channel::{
     AcceptChannelParameter, ChannelActor, ChannelActorMessage, ChannelActorStateStore,
@@ -945,13 +944,37 @@ where
                     );
                     return Ok(());
                 }
-                let peers_to_connect = state
-                    .state_to_be_persisted
-                    .sample_n_peers_to_connect(num_peers - num_connected_peers);
-                debug!(
-                    "Randomly selected peers to connect: {:?}",
-                    &peers_to_connect
-                );
+
+                let peers_to_connect = {
+                    let graph = self.network_graph.read().await;
+                    let n_peers_to_connect = num_peers - num_connected_peers;
+                    let n_graph_nodes = graph.num_of_nodes();
+                    let n_saved_peers = state.state_to_be_persisted.num_of_saved_nodes();
+                    let n_all_saved_peers = n_graph_nodes + n_saved_peers;
+                    if n_all_saved_peers == 0 {
+                        return Ok(());
+                    }
+                    let n_saved_peers_to_connect =
+                        n_peers_to_connect * n_saved_peers / n_all_saved_peers;
+                    let n_graph_nodes_to_connect = n_peers_to_connect - n_saved_peers_to_connect;
+
+                    let saved_peers_to_connect = state
+                        .state_to_be_persisted
+                        .sample_n_peers_to_connect(n_saved_peers_to_connect);
+                    trace!(
+                        "Randomly selected peers from saved addresses to connect: {:?}",
+                        &saved_peers_to_connect
+                    );
+                    let graph_nodes_to_connect =
+                        graph.sample_n_peers_to_connect(n_graph_nodes_to_connect);
+                    trace!(
+                        "Randomly selected peers from network graph to connect: {:?}",
+                        &graph_nodes_to_connect
+                    );
+                    saved_peers_to_connect
+                        .into_iter()
+                        .chain(graph_nodes_to_connect.into_iter())
+                };
                 for (peer_id, addresses) in peers_to_connect {
                     if let Some(session) = state.get_peer_session(&peer_id) {
                         debug!(
@@ -1587,10 +1610,6 @@ pub struct PersistentNetworkActorState {
     // This map is used to store the public key of the peer.
     #[serde_as(as = "Vec<(DisplayFromStr, _)>")]
     peer_pubkey_map: HashMap<PeerId, Pubkey>,
-    // These addresses are announced by the peer itself to the network.
-    // When a new NodeAnnouncement message is received, we will overwrite the old addresses.
-    #[serde_as(as = "Vec<(DisplayFromStr, _)>")]
-    announced_peer_addresses: HashMap<PeerId, Vec<Multiaddr>>,
     // These addresses are saved by the user (e.g. the user sends a ConnectPeer rpc to the node),
     // we will then save these addresses to the peer store.
     #[serde_as(as = "Vec<(DisplayFromStr, _)>")]
@@ -1641,23 +1660,17 @@ impl PersistentNetworkActorState {
         }
     }
 
-    pub(crate) fn sample_n_peers_to_connect(&self, n: usize) -> HashMap<PeerId, Vec<Multiaddr>> {
-        let nodes = self
-            .saved_peer_addresses
-            .keys()
-            .into_iter()
-            .chain(self.announced_peer_addresses.keys().into_iter())
-            .collect::<HashSet<_, RandomState>>();
+    fn num_of_saved_nodes(&self) -> usize {
+        self.saved_peer_addresses.len()
+    }
 
-        nodes
-            .into_iter()
+    pub(crate) fn sample_n_peers_to_connect(&self, n: usize) -> HashMap<PeerId, Vec<Multiaddr>> {
+        // TODO: we may need to shuffle the nodes before selecting the first n nodes,
+        // to avoid some malicious nodes from being always selected.
+        self.saved_peer_addresses
+            .iter()
             .take(n)
-            .map(|peer_id| {
-                (
-                    peer_id.clone(),
-                    self.get_peer_addresses(peer_id).into_iter().collect(),
-                )
-            })
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     }
 }

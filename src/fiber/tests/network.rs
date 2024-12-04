@@ -551,9 +551,8 @@ async fn test_persisting_announced_nodes() {
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
     node.stop().await;
-    let state = node.store.clone();
-    let state = state.get_network_actor_state(&node.peer_id).unwrap();
-    let peers = state.sample_n_peers_to_connect(1);
+    let graph = node.get_network_graph();
+    let peers = graph.sample_n_peers_to_connect(1);
     assert!(peers.get(&peer_id).is_some());
 }
 
