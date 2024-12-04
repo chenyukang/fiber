@@ -2431,7 +2431,7 @@ where
                 Err(Error::SendPaymentFirstHopError(err, need_retry)) => {
                     if need_retry {
                         // If this is the first hop error, like the WaitingTlcAck error,
-                        // we will just retry later, return Ok here for leter endpoint user
+                        // we will just retry later, return Ok here for letting endpoint user
                         // know payment session is created successfully
                         myself.send_after(Duration::from_millis(500), move || {
                             NetworkActorMessage::new_event(NetworkActorEvent::RetrySendPayment(
@@ -2503,7 +2503,7 @@ where
             }
         }
 
-        let payment_session = PaymentSession::new(payment_data, 10);
+        let payment_session = PaymentSession::new(payment_data, 5);
         self.store.insert_payment_session(payment_session.clone());
         let session = self
             .try_payment_session(myself, state, payment_session.payment_hash())
