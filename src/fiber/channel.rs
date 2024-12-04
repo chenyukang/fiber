@@ -1986,13 +1986,13 @@ pub struct AddTlcInfo {
     pub payment_hash: Hash256,
     pub expiry: u64,
     pub hash_algorithm: HashAlgorithm,
-    // the onion packet for next hop
+    // the onion packet for multi-hop payment
     pub onion_packet: Option<PaymentOnionPacket>,
     pub created_at: CommitmentNumbers,
     pub removed_at: Option<(CommitmentNumbers, RemoveTlcReason)>,
     pub payment_preimage: Option<Hash256>,
-    /// The previous tlc id if this tlc is a part of a multi-tlc payment.
-    /// Note: this is used to track the tlc chain for a multi-tlc payment,
+
+    /// Note: `previous_tlc` is used to track the tlc chain for a multi-tlc payment,
     ///       we need to know previous when removing tlc backwardly.
     ///
     /// Node A ---------> Node B ------------> Node C ----------> Node D
