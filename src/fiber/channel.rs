@@ -632,7 +632,6 @@ where
         // build commitment tx and verify signature from remote, if passed send ACK for partner
         state.handle_commitment_signed_message(commitment_signed, &self.network)?;
         self.flush_staging_tlc_operations(state).await;
-        state.update_state_on_raa_msg(false);
         Ok(())
     }
 
@@ -956,6 +955,7 @@ where
             self.try_to_relay_remove_tlc(state, tlc_info.tlc_id.into())
                 .await;
         }
+        state.tlc_state.shrink_removed_tlcs(remove_tlc.tlc_id);
         Ok(())
     }
 
@@ -1990,7 +1990,6 @@ pub struct AddTlcInfo {
     pub onion_packet: Option<PaymentOnionPacket>,
     pub created_at: CommitmentNumbers,
     pub removed_at: Option<(CommitmentNumbers, RemoveTlcReason)>,
-    pub removal_confirmed_at: Option<CommitmentNumbers>,
     pub payment_preimage: Option<Hash256>,
     /// The previous tlc id if this tlc is a part of a multi-tlc payment.
     /// Note: this is used to track the tlc chain for a multi-tlc payment,
@@ -2193,6 +2192,7 @@ impl PendingTlcs {
     }
 
     pub fn shrink_removed_tlcs(&mut self) {
+        assert_eq!(self.committed_index, self.tlcs.len());
         let new_committed_index = self
             .get_committed_tlcs()
             .iter()
@@ -2383,7 +2383,13 @@ impl TlcState {
         I: Iterator<Item = &'a TlcKind>,
     {
         tlcs.filter_map(|tlc| match tlc {
-            TlcKind::AddTlc(info) => Some((info.tlc_id, info)),
+            TlcKind::AddTlc(info) => {
+                if info.removed_at.is_some() {
+                    None
+                } else {
+                    Some((info.tlc_id, info))
+                }
+            }
             TlcKind::RemoveTlc(..) => None,
         })
         .collect::<BTreeMap<_, _>>()
@@ -2409,44 +2415,34 @@ impl TlcState {
         )
     }
 
-    pub fn all_committed_tlcs_mut(&mut self) -> impl Iterator<Item = &mut AddTlcInfo> {
-        self.local_pending_tlcs
-            .get_committed_tlcs_mut()
-            .into_iter()
-            .chain(
-                self.remote_pending_tlcs
-                    .get_committed_tlcs_mut()
-                    .into_iter(),
-            )
-            .filter_map(|tlc| match tlc {
-                TlcKind::AddTlc(info) => Some((info.tlc_id, info)),
-                TlcKind::RemoveTlc(..) => None,
-            })
-            .collect::<BTreeMap<_, _>>()
-            .into_iter()
-            .map(|(_, v)| v)
-    }
-
     pub fn apply_tlc_remove(
         &mut self,
         tlc_id: TLCId,
         removed_at: CommitmentNumbers,
         reason: RemoveTlcReason,
     ) {
+        // we don't consider RemoveTLC in the pending TLCS when build commitment signature
+        // so it's safe to remove them all from remote and local pending TLCS
+        self.local_pending_tlcs.drop_remove_tlc(&tlc_id);
+        self.remote_pending_tlcs.drop_remove_tlc(&tlc_id);
         if let Some(tlc) = self.local_pending_tlcs.get_mut(&tlc_id) {
             tlc.removed_at = Some((removed_at, reason.clone()));
         }
-        self.local_pending_tlcs.drop_remove_tlc(&tlc_id);
-
         if let Some(tlc) = self.remote_pending_tlcs.get_mut(&tlc_id) {
             tlc.removed_at = Some((removed_at, reason));
         }
-        self.remote_pending_tlcs.drop_remove_tlc(&tlc_id);
     }
 
-    pub fn shrink_removed_tlcs(&mut self) {
-        self.remote_pending_tlcs.shrink_removed_tlcs();
-        self.local_pending_tlcs.shrink_removed_tlcs();
+    pub fn shrink_removed_tlcs(&mut self, tlc_id: TLCId) {
+        // it's safe to remove multiple removed tlcs from pending TLCS,
+        // just make sure the two partners are operating on correct pending list,
+        // in other words, when one is remove from local TLCS,
+        // the peer should remove it from remote TLCS
+        if tlc_id.is_offered() {
+            self.local_pending_tlcs.shrink_removed_tlcs();
+        } else {
+            self.remote_pending_tlcs.shrink_removed_tlcs();
+        }
     }
 }
 
@@ -2476,7 +2472,6 @@ pub struct ChannelActorState {
     pub is_acceptor: bool,
 
     // TODO: consider transaction fee while building the commitment transaction.
-
     // The invariant here is that the sum of `to_local_amount` and `to_remote_amount`
     // should be equal to the total amount of the channel.
     // The changes of both `to_local_amount` and `to_remote_amount`
@@ -3787,69 +3782,6 @@ impl ChannelActorState {
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
     }
 
-    // After sending or receiving a RevokeAndAck message, all messages before
-    // are considered confirmed by both parties. These messages include
-    // AddTlc and RemoveTlc to operate on TLCs.
-    // Update state on revoke and ack message received on sent.
-    // This may fill in the creation_confirmed_at and removal_confirmed_at fields
-    // of the tlcs. And update the to_local_amount and to_remote_amount.
-    fn update_state_on_raa_msg(&mut self, is_received: bool) {
-        // If this revoke_and_ack message is received from the counterparty,
-        // then we should be operating on remote commitment numbers.
-        let commitment_numbers = self.get_current_commitment_numbers();
-
-        let (mut to_local_amount, mut to_remote_amount) =
-            (self.to_local_amount, self.to_remote_amount);
-
-        debug!("Updating local state on revoke_and_ack message {}, current commitment number: {:?}, to_local_amount: {}, to_remote_amount: {}",
-            if is_received { "received" } else { "sent" }, commitment_numbers, to_local_amount, to_remote_amount);
-
-        self.tlc_state.all_committed_tlcs_mut().for_each(|tlc| {
-            let amount = tlc.amount;
-
-            match (tlc.removed_at.clone(), tlc.removal_confirmed_at) {
-                (Some((_removed_at, reason)), None) => {
-                    tlc.removal_confirmed_at = Some(commitment_numbers);
-                     match reason {
-                        RemoveTlcReason::RemoveTlcFulfill(_)  => {
-                            if tlc.is_offered(){
-                                to_local_amount -= amount;
-                                to_remote_amount += amount;
-                            } else {
-                                to_local_amount += amount;
-                                to_remote_amount -= amount;
-                            };
-                            debug!(
-                                "Updated local amount to {} and remote amount to {} by removing fulfilled tlc {:?} from channel {:?} with reason {:?}",
-                                to_local_amount, to_remote_amount, tlc.tlc_id, self.id, reason
-                            );
-                        },
-                        RemoveTlcReason::RemoveTlcFail(_) => {
-                            debug!("Removing failed tlc {:?} from channel {:?} with reason {:?}", tlc.tlc_id, self.id, reason);
-                        },
-                    };
-                    debug!(
-                        "Setting removal_confirmed_at for tlc {:?} to commitment number {:?}",
-                        tlc.tlc_id, commitment_numbers)
-                }
-                (Some((removed_at, reason)), Some(removal_confirmed_at)) => {
-                    debug!(
-                        "TLC {:?} is already removed with reason {:?} at commitment number {:?} and is confirmed at {:?}",
-                        tlc.tlc_id, reason, removed_at, removal_confirmed_at
-                    );
-                }
-                _ => {
-                    debug!("Ignoring processing TLC {:?} as it is not removed yet", tlc.tlc_id);
-                }
-            }
-        });
-        self.to_local_amount = to_local_amount;
-        self.to_remote_amount = to_remote_amount;
-        debug!("Updated local state on revoke_and_ack message {}: current commitment number: {:?}, to_local_amount: {}, to_remote_amount: {}",
-        if is_received { "received" } else { "sent" }, commitment_numbers, to_local_amount, to_remote_amount);
-        self.tlc_state.shrink_removed_tlcs();
-    }
-
     pub fn get_id(&self) -> Hash256 {
         self.id
     }
@@ -4079,6 +4011,21 @@ impl ChannelActorState {
                         }
                     }
                 };
+
+                // update balance according to the tlc
+                let (mut to_local_amount, mut to_remote_amount) =
+                    (self.to_local_amount, self.to_remote_amount);
+                if add_tlc.is_offered() {
+                    to_local_amount -= add_tlc.amount;
+                    to_remote_amount += add_tlc.amount;
+                } else {
+                    to_local_amount += add_tlc.amount;
+                    to_remote_amount -= add_tlc.amount;
+                }
+                self.to_local_amount = to_local_amount;
+                self.to_remote_amount = to_remote_amount;
+                debug!("Updated local balance to {} and remote balance to {} by removing tlc {:?} with reason {:?}",
+                    to_local_amount, to_remote_amount, tlc_id, reason);
                 self.tlc_state
                     .apply_tlc_remove(tlc_id, removed_at, reason.clone());
                 current
@@ -4545,7 +4492,6 @@ impl ChannelActorState {
             created_at: self.get_current_commitment_numbers(),
             payment_preimage: None,
             removed_at: None,
-            removal_confirmed_at: None,
             onion_packet: command.onion_packet,
             previous_tlc: command
                 .previous_tlc
@@ -4569,7 +4515,6 @@ impl ChannelActorState {
             created_at: self.get_current_commitment_numbers(),
             payment_preimage: None,
             removed_at: None,
-            removal_confirmed_at: None,
             previous_tlc: None,
         };
         Ok(tlc_info)
@@ -5286,8 +5231,6 @@ impl ChannelActorState {
                 self.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_tlc.reason)?;
             }
         }
-
-        self.update_state_on_raa_msg(true);
         self.tlc_state.set_waiting_ack(false);
 
         network
