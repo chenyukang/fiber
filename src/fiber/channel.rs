@@ -5863,6 +5863,8 @@ impl ChannelActorState {
         let version = self.get_current_commitment_number(local);
         let htlcs = self.get_active_htlcs(local);
 
+        eprintln!("got htlcs: {:?}", htlcs);l
+
         let mut commitment_lock_script_args = [
             &blake2b_256(x_only_aggregated_pubkey)[0..20],
             (Since::new(SinceType::EpochNumberWithFraction, delay_epoch, true).value())
@@ -5980,10 +5982,16 @@ impl ChannelActorState {
         let (commitment_tx, settlement_tx) = self.build_commitment_and_settlement_tx(false);
 
         let verify_ctx = Musig2VerifyContext::from(self);
+        eprintln!(
+            "1111 verify funding_tx_partial_signature: {:?} with commitment_tx: {:?}",
+            funding_tx_partial_signature,
+            commitment_tx.hash().as_slice()
+        );
         verify_ctx.verify(
             funding_tx_partial_signature,
             commitment_tx.hash().as_slice(),
         )?;
+        eprintln!("2222 finished verify ...");
 
         let verify_ctx = Musig2VerifyContext::from((self, false));
         let to_local_output = settlement_tx
@@ -6019,6 +6027,7 @@ impl ChannelActorState {
             ]
             .concat(),
         );
+        eprintln!("verify message: {:?}", message);
         verify_ctx.verify(commitment_tx_partial_signature, message.as_slice())?;
 
         Ok(PartiallySignedCommitmentTransaction {
@@ -6035,7 +6044,12 @@ impl ChannelActorState {
         let (commitment_tx, settlement_tx) = self.build_commitment_and_settlement_tx(true);
 
         let sign_ctx = Musig2SignContext::from(self);
+        eprintln!(
+            "sign with commitment_tx: {:?}",
+            commitment_tx.hash().as_slice()
+        );
         let funding_tx_partial_signature = sign_ctx.sign(commitment_tx.hash().as_slice())?;
+        eprintln!("finished sign ... :{:?}", funding_tx_partial_signature);
 
         let sign_ctx = Musig2SignContext::from((self, true));
         let to_local_output = settlement_tx
@@ -6071,6 +6085,8 @@ impl ChannelActorState {
             ]
             .concat(),
         );
+
+        eprintln!("sign message: {:?}", message);
         let commitment_tx_partial_signature = sign_ctx.sign(message.as_slice())?;
 
         Ok(PartiallySignedCommitmentTransaction {
