@@ -1342,14 +1342,7 @@ where
     }
 
     pub fn check_tlc_setdown(&self, state: &mut ChannelActorState) {
-        let mut removed = vec![];
-        let pending_removes: Vec<(TLCId, RemoveTlcReason)> = state
-            .tlc_state
-            .get_pending_remove()
-            .iter()
-            .map(|(tlc_id, reason)| (tlc_id.clone(), reason.clone()))
-            .collect();
-        eprintln!("now begin to process pending: {:?}", &pending_removes);
+        let pending_removes = state.tlc_state.get_pending_remove();
         for (tlc_id, reason) in pending_removes.iter() {
             let id: u64 = (*tlc_id).into();
             let command = RemoveTlcCommand {
@@ -1357,13 +1350,11 @@ where
                 reason: reason.clone(),
             };
             if let Ok(_) = self.handle_remove_tlc_command(state, command) {
-                removed.push(tlc_id.clone());
+                eprintln!("now remove tlc: {:?} with reason: {:?}", &tlc_id, &reason);
+                state.tlc_state.remove_pending_remove_tlc(&tlc_id);
             } else {
                 error!("Failed to remove tlc: {:?}, retry it later", &tlc_id);
             }
-        }
-        for tlc_id in removed {
-            state.tlc_state.remove_pending_remove_tlc(&tlc_id);
         }
     }
 
@@ -2334,8 +2325,11 @@ impl TlcState {
         self.pending_remove_tlcs_map.insert(tlc_id, reason);
     }
 
-    pub fn get_pending_remove(&self) -> &BTreeMap<TLCId, RemoveTlcReason> {
-        &self.pending_remove_tlcs_map
+    pub fn get_pending_remove(&self) -> Vec<(TLCId, RemoveTlcReason)> {
+        self.pending_remove_tlcs_map
+            .iter()
+            .map(|(tlc_id, reason)| (tlc_id.clone(), reason.clone()))
+            .collect()
     }
 
     pub fn remove_pending_remove_tlc(&mut self, tlc_id: &TLCId) {
