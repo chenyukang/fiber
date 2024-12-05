@@ -38,8 +38,6 @@ pub fn get_node_prefix() -> &'static str {
 
 #[cfg(test)]
 pub use tests::now_timestamp;
-#[cfg(test)]
-pub use tests::set_now_timestamp;
 
 #[cfg(not(test))]
 pub fn now_timestamp() -> u64 {
