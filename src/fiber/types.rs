@@ -2602,7 +2602,7 @@ impl BroadcastMessageID {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Cursor {
     pub(crate) timestamp: u64,
     pub(crate) message_id: BroadcastMessageID,

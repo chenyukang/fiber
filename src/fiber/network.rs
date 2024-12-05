@@ -1197,7 +1197,7 @@ where
             NetworkActorCommand::BroadcastMessages(message) => {
                 let _ = state
                     .gossip_actor
-                    .send_message(GossipActorMessage::BroadcastMessages(message));
+                    .send_message(GossipActorMessage::TryBroadcastMessages(message));
             }
             NetworkActorCommand::SignMessage(message, reply) => {
                 let signature = state.private_key.sign(message);
