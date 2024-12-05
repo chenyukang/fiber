@@ -683,10 +683,6 @@ struct PeerState {
     // send messages to the peer. If the peer sends us a new filter, we will update this field,
     // and send all the messages after the cursor to the peer immediately.
     filter_processor: Option<PeerFilterProcessor>,
-    // We will search for messages after this cursor in the store and send them to the
-    // peer. This cursor is updated whenever we look for messages to send to the peer.
-    // This cursor must be greater than the cursor in the filter.
-    after_cursor: Cursor,
 }
 
 impl PeerState {
@@ -694,7 +690,6 @@ impl PeerState {
         Self {
             session,
             filter_processor: Default::default(),
-            after_cursor: Default::default(),
         }
     }
 }
@@ -2167,7 +2162,6 @@ where
                                         )
                                         .await,
                                     );
-                                    peer_state.after_cursor = after_cursor.clone();
                                     peer_state
                                 }
                             },
