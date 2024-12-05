@@ -663,7 +663,8 @@ where
                         .apply_remove_tlc_operation(state, remove_tlc)
                         .await
                         .map_err(|e| {
-                            error!("Error handling RemoveTlc command: {:?}", e);
+                            debug!("error happened in apply_remove_tlc_operation: {:?}", e);
+                            error!("Error handling apply_remove_tlc_operation: {:?}", e);
                         });
                 }
             }
@@ -740,10 +741,18 @@ where
                 CkbInvoiceStatus::Paid => {
                     unreachable!("Paid invoice shold not be paid again");
                 }
-                _ => {}
+                _ => {
+                    self.store
+                        .update_invoice_status(&tlc.payment_hash, CkbInvoiceStatus::Paid)
+                        .expect("update invoice status error");
+                }
             }
         }
 
+        debug!(
+            "register remove reason: {:?} with reason: {:?}",
+            tlc.tlc_id, remove_reason
+        );
         self.register_tlc_remove(state, tlc.tlc_id, remove_reason);
     }
 
@@ -903,15 +912,6 @@ where
         let channel_id = state.get_id();
         let remove_reason = remove_tlc.reason.clone();
         let tlc_info = state.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_reason)?;
-        if let RemoveTlcReason::RemoveTlcFulfill(_) = remove_reason {
-            if let Some(invoice) = self.store.get_invoice(&tlc_info.payment_hash) {
-                let status = self.get_invoice_status(&invoice);
-                assert_eq!(status, CkbInvoiceStatus::Received);
-                self.store
-                    .update_invoice_status(&tlc_info.payment_hash, CkbInvoiceStatus::Paid)
-                    .expect("update invoice status failed");
-            }
-        }
         if let (
             Some(ref udt_type_script),
             RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill { payment_preimage }),
@@ -4125,6 +4125,7 @@ impl ChannelActorState {
                 self.to_remote_amount = to_remote_amount;
                 debug!("Updated local balance to {} and remote balance to {} by removing tlc {:?} with reason {:?}",
                     to_local_amount, to_remote_amount, tlc_id, reason);
+
                 self.tlc_state
                     .apply_tlc_remove(tlc_id, removed_at, reason.clone());
                 current
