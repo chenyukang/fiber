@@ -2063,10 +2063,10 @@ impl TlcKind {
     pub fn log(&self) -> String {
         match self {
             TlcKind::AddTlc(add_tlc) => {
-                format!("AddTlc: {:?}", &add_tlc.tlc_id)
+                format!("{:?}", &add_tlc.tlc_id)
             }
             TlcKind::RemoveTlc(remove_tlc) => {
-                format!("RemoveTlc: {:?}", &remove_tlc.tlc_id)
+                format!("RemoveTlc({:?})", &remove_tlc.tlc_id)
             }
         }
     }
@@ -2479,7 +2479,10 @@ impl TlcState {
 
         let res = self.unify_tlcs(
             self.local_pending_tlcs.get_staging_tlcs().into_iter(),
-            self.remote_pending_tlcs.get_committed_tlcs().into_iter(),
+            self.local_pending_tlcs
+                .get_committed_tlcs()
+                .into_iter()
+                .chain(self.remote_pending_tlcs.get_committed_tlcs().into_iter()),
         );
         eprintln!(
             "get_tlcs_for_local: {:?}",
@@ -2494,7 +2497,10 @@ impl TlcState {
             .print("get_tlcs_for_remote remote: ");
         let res = self.unify_tlcs(
             self.remote_pending_tlcs.get_staging_tlcs().into_iter(),
-            self.local_pending_tlcs.get_committed_tlcs().into_iter(),
+            self.remote_pending_tlcs
+                .get_committed_tlcs()
+                .into_iter()
+                .chain(self.local_pending_tlcs.get_committed_tlcs().into_iter()),
         );
         eprintln!(
             "get_tlcs_for_remote: {:?}",
