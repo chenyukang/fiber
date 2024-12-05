@@ -480,7 +480,7 @@ where
                 });
                 // Send a new GetBroadcastMessages request to the newly-connected peer.
                 // If we have less than NUM_SIMULTANEOUS_GET_REQUESTS requests inflight.
-                if state.inflight_requests.len() < NUM_SIMULTANEOUS_GET_REQUESTS {
+                if state.inflight_requests.len() > NUM_SIMULTANEOUS_GET_REQUESTS {
                     debug!("Not sending new GetBroadcastMessages request because there are already {} requests inflight (max {})", state.inflight_requests.len(), NUM_SIMULTANEOUS_GET_REQUESTS);
                     return Ok(());
                 }
