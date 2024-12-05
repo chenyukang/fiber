@@ -694,10 +694,7 @@ where
         _myself: ActorRef<Self::Msg>,
         subscription: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        self.store
-            .unsubscribe(subscription)
-            .await
-            .expect("unsubscribe store updates");
+        let _ = self.store.unsubscribe(subscription).await;
         Ok(())
     }
 }

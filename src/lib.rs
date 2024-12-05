@@ -36,18 +36,10 @@ pub fn get_node_prefix() -> &'static str {
     INSTANCE.get_or_init(|| std::env::var("LOG_PREFIX").unwrap_or_else(|_| "".to_string()))
 }
 
-// A test helper to get a timestamp which will always increment by 1 when called.
-// This guarantees that the timestamp is always increasing in tests.
-// now_timestamp may return two identical timestamps in consecutive calls.
 #[cfg(test)]
-pub fn now_timestamp() -> u64 {
-    use once_cell::sync::OnceCell;
-    use std::sync::atomic::AtomicU64;
-
-    static INSTANCE: OnceCell<AtomicU64> = OnceCell::with_value(AtomicU64::new(0));
-    let count = INSTANCE.get().unwrap();
-    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-}
+pub use tests::now_timestamp;
+#[cfg(test)]
+pub use tests::set_now_timestamp;
 
 #[cfg(not(test))]
 pub fn now_timestamp() -> u64 {

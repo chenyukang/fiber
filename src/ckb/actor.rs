@@ -49,6 +49,10 @@ impl GetBlockTimestampRequest {
     pub fn from_block_hash(block_hash: H256) -> Self {
         Self { block_hash }
     }
+
+    pub fn block_hash(&self) -> H256 {
+        self.block_hash.clone()
+    }
 }
 
 pub type GetBlockTimestampResponse = u64;

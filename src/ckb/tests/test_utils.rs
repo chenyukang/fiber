@@ -16,7 +16,7 @@ use crate::{
         contracts::{Contract, ContractsContext, ContractsInfo},
         TraceTxRequest, TraceTxResponse,
     },
-    now_timestamp,
+    set_now_timestamp,
 };
 
 use crate::ckb::CkbChainMessage;
@@ -490,8 +490,20 @@ impl Actor for MockChainActor {
                     }
                 };
             }
-            GetBlockTimestamp(_, rpc_reply_port) => {
-                let _ = rpc_reply_port.send(Ok(Some(now_timestamp())));
+            GetBlockTimestamp(request, rpc_reply_port) => {
+                // The problem of channel announcement is that each nodes will query the block timestamp
+                // and use it as the channel announcement timestamp. In current tests, we don't have a way
+                // to guarantee that the block timestamp is the same across all nodes. This is important
+                // because if a node A has a greater channel announcement timestamp than node B, then when
+                // A tries to get broadcast messages after this channel announcement timestamp, B will return
+                // the channel announcement. But for A, it is not a later broadcast message. This process will
+                // cause an infinite loop.
+
+                // TODO: One problem here is that we may lose the monotonicity of the timestamp.
+                // E.g. if the current timestamp is already 100, and then we set the timestamp to 50,
+                set_now_timestamp(timestamp);
+                debug!("GetBlockTimestamp request: {:?} => {}", request, timestamp);
+                let _ = rpc_reply_port.send(Ok(Some(timestamp)));
             }
         }
         Ok(())
