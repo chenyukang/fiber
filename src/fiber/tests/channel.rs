@@ -849,8 +849,7 @@ async fn test_network_send_previous_tlc_error() {
                 command: ChannelCommand::AddTlc(
                     AddTlcCommand {
                         amount: 10000,
-                        preimage: None,
-                        payment_hash: Some(generated_payment_hash),
+                        payment_hash: generated_payment_hash,
                         expiry: DEFAULT_EXPIRY_DELTA + now_timestamp_as_millis_u64(),
                         hash_algorithm: HashAlgorithm::Sha256,
                         // invalid onion packet
@@ -1532,9 +1531,8 @@ async fn do_test_channel_commitment_tx_after_add_tlc(algorithm: HashAlgorithm) {
                     AddTlcCommand {
                         amount: tlc_amount,
                         hash_algorithm: algorithm,
-                        payment_hash: Some(digest.into()),
+                        payment_hash: digest.into(),
                         expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
-                        preimage: None,
                         onion_packet: None,
                         previous_tlc: None,
                     },
@@ -1802,9 +1800,8 @@ async fn do_test_remove_tlc_with_wrong_hash_algorithm(
                     AddTlcCommand {
                         amount: tlc_amount,
                         hash_algorithm: correct_algorithm,
-                        payment_hash: Some(digest.into()),
+                        payment_hash: digest.into(),
                         expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
-                        preimage: None,
                         onion_packet: None,
                         previous_tlc: None,
                     },
@@ -1854,9 +1851,8 @@ async fn do_test_remove_tlc_with_wrong_hash_algorithm(
                     AddTlcCommand {
                         amount: tlc_amount,
                         hash_algorithm: wrong_algorithm,
-                        payment_hash: Some(digest.into()),
+                        payment_hash: digest.into(),
                         expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
-                        preimage: None,
                         onion_packet: None,
                         previous_tlc: None,
                     },
@@ -1912,9 +1908,8 @@ async fn do_test_remove_tlc_with_expiry_error() {
     let add_tlc_command = AddTlcCommand {
         amount: tlc_amount,
         hash_algorithm: HashAlgorithm::CkbHash,
-        payment_hash: Some(digest.into()),
+        payment_hash: digest.into(),
         expiry: now_timestamp_as_millis_u64() + 10,
-        preimage: None,
         onion_packet: None,
         previous_tlc: None,
     };
@@ -1935,9 +1930,8 @@ async fn do_test_remove_tlc_with_expiry_error() {
     let add_tlc_command = AddTlcCommand {
         amount: tlc_amount,
         hash_algorithm: HashAlgorithm::CkbHash,
-        payment_hash: Some(digest.into()),
+        payment_hash: digest.into(),
         expiry: now_timestamp_as_millis_u64() + MAX_PAYMENT_TLC_EXPIRY_LIMIT + 10,
-        preimage: None,
         onion_packet: None,
         previous_tlc: None,
     };
@@ -1974,9 +1968,8 @@ async fn do_test_add_tlc_duplicated() {
         let add_tlc_command = AddTlcCommand {
             amount: tlc_amount,
             hash_algorithm: HashAlgorithm::CkbHash,
-            payment_hash: Some(digest.into()),
+            payment_hash: digest.into(),
             expiry: now_timestamp_as_millis_u64() + 10,
-            preimage: None,
             onion_packet: None,
             previous_tlc: None,
         };
@@ -2016,7 +2009,6 @@ async fn do_test_add_tlc_waiting_ack() {
             hash_algorithm: HashAlgorithm::CkbHash,
             payment_hash: gen_sha256_hash().into(),
             expiry: now_timestamp_as_millis_u64() + 100000000,
-            preimage: None,
             onion_packet: None,
             previous_tlc: None,
         };
@@ -2068,7 +2060,6 @@ async fn do_test_add_tlc_number_limit() {
             hash_algorithm: HashAlgorithm::CkbHash,
             payment_hash: gen_sha256_hash().into(),
             expiry: now_timestamp_as_millis_u64() + 100000000,
-            preimage: None,
             onion_packet: None,
             previous_tlc: None,
         };
@@ -2121,7 +2112,6 @@ async fn do_test_add_tlc_value_limit() {
             hash_algorithm: HashAlgorithm::CkbHash,
             payment_hash: gen_sha256_hash().into(),
             expiry: now_timestamp_as_millis_u64() + 100000000,
-            preimage: None,
             onion_packet: None,
             previous_tlc: None,
         };
@@ -2179,9 +2169,8 @@ async fn do_test_channel_with_simple_update_operation(algorithm: HashAlgorithm) 
                     AddTlcCommand {
                         amount: tlc_amount,
                         hash_algorithm: algorithm,
-                        payment_hash: Some(digest.into()),
+                        payment_hash: digest.into(),
                         expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
-                        preimage: None,
                         onion_packet: None,
                         previous_tlc: None,
                     },

@@ -2184,8 +2184,7 @@ where
         let command = ChannelCommand::AddTlc(
             AddTlcCommand {
                 amount: info.amount,
-                preimage: None,
-                payment_hash: Some(info.payment_hash),
+                payment_hash: info.payment_hash,
                 expiry: info.expiry,
                 hash_algorithm: info.hash_algorithm,
                 onion_packet: peeled_onion_packet.next.clone(),
