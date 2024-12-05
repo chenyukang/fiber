@@ -143,71 +143,37 @@ async fn test_sync_channel_announcement_on_startup() {
     assert!(!channels.is_empty());
 }
 
-async fn create_a_channel() -> (NetworkNode, ChannelAnnouncement, Privkey, Privkey, Privkey) {
+async fn create_a_channel() -> (NetworkNode, ChannelAnnouncement, Privkey, Privkey) {
     init_tracing();
 
-    let mut node1 = NetworkNode::new_with_node_name("node1").await;
-    let capacity = 42;
-    let priv_key: Privkey = get_test_priv_key();
-    let pubkey = priv_key.x_only_pub_key().serialize();
-    let pubkey_hash = &blake2b_256(pubkey.as_slice())[0..20];
-    let tx = TransactionView::new_advanced_builder()
-        .output(
-            CellOutput::new_builder()
-                .capacity(capacity.pack())
-                .lock(ScriptBuilder::default().args(pubkey_hash.pack()).build())
-                .build(),
-        )
-        .output_data(vec![0u8; 8].pack())
-        .build();
-    let outpoint = tx.output_pts()[0].clone();
-    let x_only_pub_key = priv_key.x_only_pub_key();
-    let sk1 = Privkey::from([1u8; 32]);
-    let pk1 = sk1.pubkey();
-    let sk2 = Privkey::from([2u8; 32]);
-    let pk2 = sk2.pubkey();
+    let node_a_funding_amount = 100000000000;
+    let node_b_funding_amount = 6200000000;
 
-    let mut channel_announcement = ChannelAnnouncement::new_unsigned(
-        &pk1,
-        &pk2,
-        outpoint,
-        get_chain_hash(),
-        &x_only_pub_key,
-        capacity as u128,
-        None,
-    );
-    let message = channel_announcement.message_to_sign();
+    let (node1, mut node2, _, funding_tx) = NetworkNode::new_2_nodes_with_established_channel(
+        node_a_funding_amount,
+        node_b_funding_amount,
+        true,
+    )
+    .await;
 
-    channel_announcement.ckb_signature = Some(priv_key.sign_schnorr(message));
-    channel_announcement.node1_signature = Some(sk1.sign(message));
-    channel_announcement.node2_signature = Some(sk2.sign(message));
-    node1
-        .network_actor
-        .send_message(NetworkActorMessage::Event(
-            NetworkActorEvent::GossipMessage(
-                get_test_peer_id(),
-                BroadcastMessage::ChannelAnnouncement(channel_announcement.clone())
-                    .create_broadcast_messages_filter_result(),
-            ),
-        ))
-        .expect("send message to network actor");
+    // Wait for the broadcast message to be processed.
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    let outpoint = funding_tx.output_pts_iter().next().unwrap();
+    node2.stop().await;
 
-    assert_eq!(node1.submit_tx(tx.clone()).await, Status::Committed);
-
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    let channel = node1
+    let (_, channel_announcement) = node2
         .store
-        .get_latest_channel_announcement(&channel_announcement.channel_outpoint)
-        .expect("channel saved")
-        .1;
-    assert_eq!(&channel, &channel_announcement);
+        .get_latest_channel_announcement(&outpoint)
+        .expect("get channel");
 
-    (node1, channel, priv_key, sk1, sk2)
+    let node1_priv_key = node1.get_private_key().clone();
+    let node2_priv_key = node2.get_private_key().clone();
+    (node1, channel_announcement, node1_priv_key, node2_priv_key)
 }
 
 #[tokio::test]
 async fn test_node1_node2_channel_update() {
-    let (node, channel_announcement, _priv_key, sk1, sk2) = create_a_channel().await;
+    let (node, channel_announcement, sk1, sk2) = create_a_channel().await;
 
     let create_channel_update = |timestamp: u64, message_flags: u32, key: Privkey| {
         let mut channel_update = ChannelUpdate::new_unsigned(
@@ -266,7 +232,7 @@ async fn test_node1_node2_channel_update() {
 
 #[tokio::test]
 async fn test_channel_update_version() {
-    let (node, channel_info, _priv_key, sk1, _sk2) = create_a_channel().await;
+    let (node, channel_info, sk1, _sk2) = create_a_channel().await;
 
     let create_channel_update = |timestamp: u64, key: &Privkey| {
         let mut channel_update = ChannelUpdate::new_unsigned(

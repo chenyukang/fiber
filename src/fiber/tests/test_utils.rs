@@ -1,6 +1,6 @@
 use ckb_types::packed::OutPoint;
 use ckb_types::{core::TransactionView, packed::Byte32};
-use ractor::{Actor, ActorRef};
+use ractor::{call, Actor, ActorRef};
 use rand::Rng;
 use secp256k1::{rand, PublicKey, Secp256k1, SecretKey};
 use std::{
@@ -22,9 +22,10 @@ use tokio::{
 };
 
 use crate::fiber::gossip::{GossipMessageStore, DEFAULT_NUM_OF_BROADCAST_MESSAGE};
+use crate::fiber::network::{AcceptChannelCommand, OpenChannelCommand};
 use crate::fiber::types::{
     BroadcastMessageID, BroadcastMessageWithTimestamp, ChannelAnnouncement, ChannelUpdate, Cursor,
-    NodeAnnouncement,
+    NodeAnnouncement, Privkey,
 };
 use crate::{
     actors::{RootActor, RootActorMessage},
@@ -165,7 +166,7 @@ pub struct NetworkNode {
     pub listening_addrs: Vec<MultiAddr>,
     pub network_actor: ActorRef<NetworkActorMessage>,
     pub chain_actor: ActorRef<CkbChainMessage>,
-    pub public_key: Pubkey,
+    pub private_key: Privkey,
     pub peer_id: PeerId,
     pub event_emitter: mpsc::Receiver<NetworkServiceEvent>,
 }
@@ -173,6 +174,14 @@ pub struct NetworkNode {
 impl NetworkNode {
     pub fn get_node_address(&self) -> &MultiAddr {
         &self.listening_addrs[0]
+    }
+
+    pub fn get_private_key(&self) -> &Privkey {
+        &self.private_key
+    }
+
+    pub fn get_public_key(&self) -> Pubkey {
+        self.private_key.pubkey()
     }
 }
 
@@ -254,6 +263,100 @@ impl NetworkNodeConfigBuilder {
         }
         config
     }
+}
+
+pub async fn establish_channel_between_nodes(
+    node_a: &mut NetworkNode,
+    node_b: &mut NetworkNode,
+    node_a_funding_amount: u128,
+    node_b_funding_amount: u128,
+    public: bool,
+) -> (Hash256, TransactionView) {
+    let message = |rpc_reply| {
+        NetworkActorMessage::Command(NetworkActorCommand::OpenChannel(
+            OpenChannelCommand {
+                peer_id: node_b.peer_id.clone(),
+                public,
+                shutdown_script: None,
+                funding_amount: node_a_funding_amount,
+                funding_udt_type_script: None,
+                commitment_fee_rate: None,
+                commitment_delay_epoch: None,
+                funding_fee_rate: None,
+                tlc_expiry_delta: None,
+                tlc_min_value: None,
+                tlc_max_value: None,
+                tlc_fee_proportional_millionths: None,
+                max_tlc_number_in_flight: None,
+                max_tlc_value_in_flight: None,
+            },
+            rpc_reply,
+        ))
+    };
+    let open_channel_result = call!(node_a.network_actor, message)
+        .expect("node_a alive")
+        .expect("open channel success");
+
+    node_b
+        .expect_event(|event| match event {
+            NetworkServiceEvent::ChannelPendingToBeAccepted(peer_id, channel_id) => {
+                println!("A channel ({:?}) to {:?} create", &channel_id, peer_id);
+                assert_eq!(peer_id, &node_a.peer_id);
+                true
+            }
+            _ => false,
+        })
+        .await;
+    let message = |rpc_reply| {
+        NetworkActorMessage::Command(NetworkActorCommand::AcceptChannel(
+            AcceptChannelCommand {
+                temp_channel_id: open_channel_result.channel_id,
+                funding_amount: node_b_funding_amount,
+                shutdown_script: None,
+            },
+            rpc_reply,
+        ))
+    };
+    let accept_channel_result = call!(node_b.network_actor, message)
+        .expect("node_b alive")
+        .expect("accept channel success");
+    let new_channel_id = accept_channel_result.new_channel_id;
+
+    let funding_tx_outpoint = node_a
+        .expect_to_process_event(|event| match event {
+            NetworkServiceEvent::ChannelReady(peer_id, channel_id, funding_tx_outpoint) => {
+                println!(
+                    "A channel ({:?}) to {:?} is now ready",
+                    &channel_id, &peer_id
+                );
+                assert_eq!(peer_id, &node_b.peer_id);
+                assert_eq!(channel_id, &new_channel_id);
+                Some(funding_tx_outpoint.clone())
+            }
+            _ => None,
+        })
+        .await;
+
+    node_b
+        .expect_event(|event| match event {
+            NetworkServiceEvent::ChannelReady(peer_id, channel_id, _funding_tx_hash) => {
+                println!(
+                    "A channel ({:?}) to {:?} is now ready",
+                    &channel_id, &peer_id
+                );
+                assert_eq!(peer_id, &node_a.peer_id);
+                assert_eq!(channel_id, &new_channel_id);
+                true
+            }
+            _ => false,
+        })
+        .await;
+
+    let funding_tx = node_a
+        .get_tx_from_hash(funding_tx_outpoint.tx_hash())
+        .await
+        .expect("tx found");
+    (new_channel_id, funding_tx)
 }
 
 impl NetworkNode {
@@ -344,7 +447,7 @@ impl NetworkNode {
             listening_addrs: announced_addrs,
             network_actor,
             chain_actor,
-            public_key: public_key.into(),
+            private_key: secret_key.into(),
             peer_id,
             event_emitter: event_receiver,
         }
@@ -387,7 +490,7 @@ impl NetworkNode {
     }
 
     pub fn get_network_graph(&self) -> NetworkGraph<MemoryStore> {
-        NetworkGraph::new(self.store.clone(), self.public_key)
+        NetworkGraph::new(self.store.clone(), self.get_public_key())
     }
 
     pub async fn new_n_interconnected_nodes<const N: usize>() -> [Self; N] {
@@ -409,6 +512,25 @@ impl NetworkNode {
             Ok(nodes) => nodes,
             Err(_) => unreachable!(),
         }
+    }
+
+    pub async fn new_2_nodes_with_established_channel(
+        node_a_funding_amount: u128,
+        node_b_funding_amount: u128,
+        public: bool,
+    ) -> (NetworkNode, NetworkNode, Hash256, TransactionView) {
+        let [mut node_a, mut node_b] = NetworkNode::new_n_interconnected_nodes().await;
+
+        let (channel_id, funding_tx) = establish_channel_between_nodes(
+            &mut node_a,
+            &mut node_b,
+            node_a_funding_amount,
+            node_b_funding_amount,
+            public,
+        )
+        .await;
+
+        (node_a, node_b, channel_id, funding_tx)
     }
 
     // Create n nodes and connect them. The config_gen function

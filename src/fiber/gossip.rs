@@ -21,7 +21,7 @@ use tentacle::{
     SessionId,
 };
 use tokio::sync::oneshot;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     ckb::{CkbChainMessage, GetBlockTimestampRequest, TraceTxRequest, TraceTxResponse},
@@ -264,6 +264,7 @@ pub trait SubscribableGossipMessageStore {
     async fn unsubscribe(&self, subscription: &Self::Subscription) -> Result<(), Self::Error>;
 }
 
+#[derive(Debug)]
 pub(crate) enum GossipActorMessage {
     /// Network events to be processed by this actor.
     PeerConnected(PeerId, Pubkey, SessionContext),
@@ -1008,10 +1009,15 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
             }
 
             ExtendedGossipMessageStoreMessage::SaveMessage(message) => {
+                trace!("ExtendedGossipMessageActor saving message: {:?}", message);
                 let message_cursor = message.cursor();
                 let message_id = message.message_id();
                 // Check if the message is lagged. If it is, then save it also to lagged_messages.
                 if message_cursor < state.last_cursor {
+                    trace!(
+                        "ExtendedGossipMessageActor saving lagged message: {:?}",
+                        message
+                    );
                     state
                         .lagged_messages
                         .insert(message_id.clone(), message.clone());
@@ -1021,6 +1027,10 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 if get_dependent_message_queries(&message, &state.store).is_empty() {
                     save_broadcast_message(&state.store, message.clone());
                 } else {
+                    trace!(
+                        "ExtendedGossipMessageActor saving message to be saved later: {:?}",
+                        message
+                    );
                     state
                         .messages_to_be_saved
                         .insert(message_id.clone(), message.clone());
@@ -1069,6 +1079,10 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                             .collect::<Vec<_>>(),
                         None => lagged_complete_messages.clone(),
                     };
+                    debug!(
+                        "ExtendedGossipMessageActor sending lagged complete messages to subscriber: number of messages = {}",
+                        messages_to_send.len()
+                    );
                     for chunk in messages_to_send.chunks(MAX_NUM_OF_BROADCAST_MESSAGES as usize) {
                         if chunk.is_empty() {
                             break;
@@ -1079,11 +1093,21 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                     }
                 }
 
+                debug!(
+                    "ExtendedGossipMessageActor saving messages: number of lagged complete messages = {}, number of complete messages to be saved = {}",
+                    lagged_complete_messages.len(),
+                    complete_messages_to_be_saved.len()
+                );
+
                 // Saving all the messages that are complete and have also their dependencies saved.
                 for message in lagged_complete_messages
                     .into_iter()
                     .chain(complete_messages_to_be_saved)
                 {
+                    trace!(
+                        "ExtendedGossipMessageActor saving new complete message: {:?}",
+                        message
+                    );
                     // TODO: we may need to order all the messages by their dependencies, because
                     // the saving of broadcast messages is not an atomic operation. The node may fail any time
                     // while saving the messages. If the node failed, some messages in the store may not have their
@@ -1211,7 +1235,7 @@ where
                 .await
                 .map_err(|error| {
                     error!(
-                        "Failed to process broadcast message with id {:?}: {:?}",
+                        "Failed to verify broadcast message with id {:?}: {:?}",
                         message_id, &error
                     );
                     error
@@ -1569,7 +1593,7 @@ async fn verify_channel_announcement<S: GossipMessageStore>(
     };
 
     debug!(
-        "Saving channel announcement after obtained block timestamp for transaction {:?}: {}",
+        "Obtained block timestamp for channel: outpoint {:?}, timestamp {}",
         &channel_announcement.channel_outpoint, timestamp
     );
 
@@ -1800,6 +1824,8 @@ where
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        trace!("Gossip actor received message: {:?}", &message);
+
         match message {
             GossipActorMessage::PeerConnected(peer_id, pubkey, session) => {
                 if state.is_peer_connected(&peer_id) {

@@ -11,14 +11,15 @@ use crate::{
         config::DEFAULT_CHANNEL_MINIMAL_CKB_AMOUNT,
         hash_algorithm::HashAlgorithm,
         network::{AcceptChannelCommand, OpenChannelCommand},
-        types::{Hash256, Privkey, RemoveTlcFulfill, RemoveTlcReason},
+        tests::test_utils::establish_channel_between_nodes,
+        types::{Privkey, RemoveTlcFulfill, RemoveTlcReason},
         NetworkActorCommand, NetworkActorMessage,
     },
     now_timestamp, NetworkServiceEvent,
 };
 use ckb_jsonrpc_types::Status;
 use ckb_types::{
-    core::{FeeRate, TransactionView},
+    core::FeeRate,
     packed::{CellInput, Script, Transaction},
     prelude::{AsTransactionBuilder, Builder, Entity, IntoTransactionView, Pack, Unpack},
 };
@@ -152,9 +153,12 @@ async fn test_create_private_channel() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (_node_a, _node_b, _new_channel_id) =
-        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, false)
-            .await;
+    let (_node_a, _node_b, _new_channel_id, _) = NetworkNode::new_2_nodes_with_established_channel(
+        node_a_funding_amount,
+        node_b_funding_amount,
+        false,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -164,9 +168,12 @@ async fn test_create_public_channel() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (_node_a, _node_b, _new_channel_id) =
-        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, true)
-            .await;
+    let (_node_a, _node_b, _new_channel_id, _) = NetworkNode::new_2_nodes_with_established_channel(
+        node_a_funding_amount,
+        node_b_funding_amount,
+        true,
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -176,9 +183,13 @@ async fn test_public_channel_saved_to_the_owner_graph() {
     let node1_funding_amount = 100000000000;
     let node2_funding_amount = 6200000000;
 
-    let (mut node1, mut node2, _new_channel_id) =
-        create_nodes_with_established_channel(node1_funding_amount, node2_funding_amount, true)
-            .await;
+    let (mut node1, mut node2, _new_channel_id, _) =
+        NetworkNode::new_2_nodes_with_established_channel(
+            node1_funding_amount,
+            node2_funding_amount,
+            true,
+        )
+        .await;
 
     // Wait for the channel announcement to be broadcasted
     tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
@@ -300,9 +311,12 @@ async fn test_stash_broadcast_messages() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (_node_a, _node_b, _new_channel_id) =
-        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, true)
-            .await;
+    let (_node_a, _node_b, _new_channel_id, _) = NetworkNode::new_2_nodes_with_established_channel(
+        node_a_funding_amount,
+        node_b_funding_amount,
+        true,
+    )
+    .await;
 
     // Wait for the channel announcement to be broadcasted
     tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
@@ -498,119 +512,6 @@ async fn test_channel_commitment_tx_after_add_tlc_sha256() {
     do_test_channel_commitment_tx_after_add_tlc(HashAlgorithm::Sha256).await
 }
 
-async fn establish_channel_between_nodes(
-    node_a: &mut NetworkNode,
-    node_b: &mut NetworkNode,
-    node_a_funding_amount: u128,
-    node_b_funding_amount: u128,
-    public: bool,
-) -> (Hash256, TransactionView) {
-    let message = |rpc_reply| {
-        NetworkActorMessage::Command(NetworkActorCommand::OpenChannel(
-            OpenChannelCommand {
-                peer_id: node_b.peer_id.clone(),
-                public,
-                shutdown_script: None,
-                funding_amount: node_a_funding_amount,
-                funding_udt_type_script: None,
-                commitment_fee_rate: None,
-                commitment_delay_epoch: None,
-                funding_fee_rate: None,
-                tlc_expiry_delta: None,
-                tlc_min_value: None,
-                tlc_max_value: None,
-                tlc_fee_proportional_millionths: None,
-                max_tlc_number_in_flight: None,
-                max_tlc_value_in_flight: None,
-            },
-            rpc_reply,
-        ))
-    };
-    let open_channel_result = call!(node_a.network_actor, message)
-        .expect("node_a alive")
-        .expect("open channel success");
-
-    node_b
-        .expect_event(|event| match event {
-            NetworkServiceEvent::ChannelPendingToBeAccepted(peer_id, channel_id) => {
-                println!("A channel ({:?}) to {:?} create", &channel_id, peer_id);
-                assert_eq!(peer_id, &node_a.peer_id);
-                true
-            }
-            _ => false,
-        })
-        .await;
-    let message = |rpc_reply| {
-        NetworkActorMessage::Command(NetworkActorCommand::AcceptChannel(
-            AcceptChannelCommand {
-                temp_channel_id: open_channel_result.channel_id,
-                funding_amount: node_b_funding_amount,
-                shutdown_script: None,
-            },
-            rpc_reply,
-        ))
-    };
-    let accept_channel_result = call!(node_b.network_actor, message)
-        .expect("node_b alive")
-        .expect("accept channel success");
-    let new_channel_id = accept_channel_result.new_channel_id;
-
-    let funding_tx_outpoint = node_a
-        .expect_to_process_event(|event| match event {
-            NetworkServiceEvent::ChannelReady(peer_id, channel_id, funding_tx_outpoint) => {
-                println!(
-                    "A channel ({:?}) to {:?} is now ready",
-                    &channel_id, &peer_id
-                );
-                assert_eq!(peer_id, &node_b.peer_id);
-                assert_eq!(channel_id, &new_channel_id);
-                Some(funding_tx_outpoint.clone())
-            }
-            _ => None,
-        })
-        .await;
-
-    node_b
-        .expect_event(|event| match event {
-            NetworkServiceEvent::ChannelReady(peer_id, channel_id, _funding_tx_hash) => {
-                println!(
-                    "A channel ({:?}) to {:?} is now ready",
-                    &channel_id, &peer_id
-                );
-                assert_eq!(peer_id, &node_a.peer_id);
-                assert_eq!(channel_id, &new_channel_id);
-                true
-            }
-            _ => false,
-        })
-        .await;
-
-    let funding_tx = node_a
-        .get_tx_from_hash(funding_tx_outpoint.tx_hash())
-        .await
-        .expect("tx found");
-    (new_channel_id, funding_tx)
-}
-
-async fn create_nodes_with_established_channel(
-    node_a_funding_amount: u128,
-    node_b_funding_amount: u128,
-    public: bool,
-) -> (NetworkNode, NetworkNode, Hash256) {
-    let [mut node_a, mut node_b] = NetworkNode::new_n_interconnected_nodes().await;
-
-    let (channel_id, _funding_tx) = establish_channel_between_nodes(
-        &mut node_a,
-        &mut node_b,
-        node_a_funding_amount,
-        node_b_funding_amount,
-        public,
-    )
-    .await;
-
-    (node_a, node_b, channel_id)
-}
-
 async fn do_test_remove_tlc_with_wrong_hash_algorithm(
     correct_algorithm: HashAlgorithm,
     wrong_algorithm: HashAlgorithm,
@@ -618,9 +519,12 @@ async fn do_test_remove_tlc_with_wrong_hash_algorithm(
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (node_a, node_b, new_channel_id) =
-        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, false)
-            .await;
+    let (node_a, node_b, new_channel_id, _) = NetworkNode::new_2_nodes_with_established_channel(
+        node_a_funding_amount,
+        node_b_funding_amount,
+        false,
+    )
+    .await;
 
     let preimage = [1; 32];
     let digest = correct_algorithm.hash(&preimage);
@@ -741,9 +645,13 @@ async fn do_test_channel_with_simple_update_operation(algorithm: HashAlgorithm) 
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (mut node_a, mut node_b, new_channel_id) =
-        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, false)
-            .await;
+    let (mut node_a, mut node_b, new_channel_id, _) =
+        NetworkNode::new_2_nodes_with_established_channel(
+            node_a_funding_amount,
+            node_b_funding_amount,
+            false,
+        )
+        .await;
 
     let preimage = [1; 32];
     let digest = algorithm.hash(&preimage);
@@ -1333,8 +1241,8 @@ async fn test_reestablish_channel() {
 
 #[tokio::test]
 async fn test_force_close_channel_when_remote_is_offline() {
-    let (mut node_a, mut node_b, channel_id) =
-        create_nodes_with_established_channel(16200000000, 6200000000, true).await;
+    let (mut node_a, mut node_b, channel_id, _) =
+        NetworkNode::new_2_nodes_with_established_channel(16200000000, 6200000000, true).await;
 
     node_b.stop().await;
     node_a
@@ -1365,8 +1273,8 @@ async fn test_force_close_channel_when_remote_is_offline() {
 #[tokio::test]
 async fn test_commitment_tx_capacity() {
     let (amount_a, amount_b) = (16200000000, 6200000000);
-    let (node_a, _node_b, channel_id) =
-        create_nodes_with_established_channel(amount_a, amount_b, true).await;
+    let (node_a, _node_b, channel_id, _) =
+        NetworkNode::new_2_nodes_with_established_channel(amount_a, amount_b, true).await;
 
     let state = node_a.store.get_channel_actor_state(&channel_id).unwrap();
     let commitment_tx = state.latest_commitment_transaction.unwrap().into_view();
@@ -1387,9 +1295,13 @@ async fn test_connect_to_peers_with_mutual_channel_on_restart_1() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (mut node_a, node_b, _new_channel_id) =
-        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, true)
-            .await;
+    let (mut node_a, node_b, _new_channel_id, _) =
+        NetworkNode::new_2_nodes_with_established_channel(
+            node_a_funding_amount,
+            node_b_funding_amount,
+            true,
+        )
+        .await;
 
     node_a.restart().await;
 
@@ -1406,9 +1318,13 @@ async fn test_connect_to_peers_with_mutual_channel_on_restart_2() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (mut node_a, mut node_b, _new_channel_id) =
-        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, true)
-            .await;
+    let (mut node_a, mut node_b, _new_channel_id, _) =
+        NetworkNode::new_2_nodes_with_established_channel(
+            node_a_funding_amount,
+            node_b_funding_amount,
+            true,
+        )
+        .await;
 
     node_a.stop().await;
 
