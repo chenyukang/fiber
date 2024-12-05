@@ -22,6 +22,7 @@ use musig2::errors::DecodeError;
 use musig2::secp::{Point, Scalar};
 use musig2::{BinaryEncoding, PartialSignature, PubNonce};
 use once_cell::sync::OnceCell;
+use ractor::concurrency::Duration;
 use secp256k1::{
     ecdsa::Signature as Secp256k1Signature, schnorr::Signature as SchnorrSignature, All, PublicKey,
     Secp256k1, SecretKey, Signing,
@@ -2613,6 +2614,25 @@ impl Cursor {
         Self {
             timestamp,
             message_id,
+        }
+    }
+
+    /// Create a new cursor which is the same as the current cursor but with a smaller timestamp.
+    /// This is useful when we want to query messages back from this cursor for a certain duration.
+    /// For example, sometimes we aren't particularly sure about whether we have already seen all messages before
+    /// the latest cursor in our broadcast message store, because it is possible that we that messages are not
+    /// saved in strictly increasing order of their timestamps. In this case, we can go back for some time
+    /// (e.g. one week) to make sure we don't miss any messages.
+    pub fn go_back_for_some_time(&self, duration: Duration) -> Self {
+        let current_timestamp = self.timestamp;
+        let duration_millis = duration.as_millis() as u64;
+        if current_timestamp > duration_millis {
+            Self {
+                timestamp: current_timestamp - duration_millis,
+                message_id: self.message_id.clone(),
+            }
+        } else {
+            Default::default()
         }
     }
 

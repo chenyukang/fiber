@@ -40,6 +40,10 @@ use super::{
     },
 };
 
+// The maximum duration drift between the broadcast message timestamp and latest cursor in store.
+pub(crate) const MAX_MISSING_BROADCAST_MESSAGE_TIMESTAMP_DRIFT: Duration =
+    Duration::from_secs(60 * 60 * 2);
+
 const MAX_BROADCAST_MESSAGE_TIMESTAMP_DRIFT: Duration = Duration::from_secs(60);
 const MAX_BROADCAST_MESSAGE_TIMESTAMP_DRIFT_MILLIS: u64 =
     MAX_BROADCAST_MESSAGE_TIMESTAMP_DRIFT.as_millis() as u64;
@@ -401,10 +405,14 @@ where
     ) -> Result<(), ActorProcessingErr> {
         match message {
             GossipSyncerMessage::PeerConnected(peer_id) => {
+                debug!(
+                    "Peer connected, trying to send new GetBroadcastMessages: peer_id {:?}",
+                    &peer_id
+                );
+                let _ = myself.send_message(GossipSyncerMessage::NewGetRequest());
                 state
                     .peers
                     .insert(peer_id, SyncingPeerState { failed_times: 0 });
-                let _ = myself.send_message(GossipSyncerMessage::NewGetRequest());
             }
             GossipSyncerMessage::PeerDisconnected(peer_id) => {
                 let _ = state.peers.remove(&peer_id);
@@ -419,11 +427,20 @@ where
                         peer.failed_times += 1;
                     }
                 }
+                debug!(
+                    "Sending new GetBroadcastMessages request after timeout: id {}",
+                    request_id
+                );
                 myself
                     .send_message(GossipSyncerMessage::NewGetRequest())
                     .expect("gossip syncing actor alive");
             }
             GossipSyncerMessage::ResponseReceived(peer_id, result) => {
+                trace!(
+                    "Received GetBroadcastMessages response from peer {:?}: {:?}",
+                    peer_id,
+                    result
+                );
                 if let Some((peer, handle)) = state.inflight_requests.remove(&result.id) {
                     if &peer != &peer_id {
                         warn!(
@@ -433,6 +450,7 @@ where
                         state.inflight_requests.insert(result.id, (peer, handle));
                         return Ok(());
                     }
+                    // Stop the timeout notification.
                     handle.abort();
                     let messages = result.messages;
                     // If we are receiving an empty response, then the syncing process is finished.
@@ -460,9 +478,15 @@ where
                             .await
                             .expect("store actor alive");
                     }
+                    debug!("Sending new GetBroadcastMessages request after receiving response: peer_id {:?}", &peer_id);
                     myself
                         .send_message(GossipSyncerMessage::NewGetRequest())
                         .expect("gossip syncing actor alive");
+                } else {
+                    warn!(
+                        "Received GetBroadcastMessages response from peer {:?} with unknown request id: {:?}",
+                        peer_id, result
+                    );
                 }
             }
             GossipSyncerMessage::NewGetRequest() => {
@@ -472,6 +496,10 @@ where
                     .get_latest_broadcast_message_cursor()
                     .unwrap_or_default();
                 let request_id = state.get_and_increment_request_id();
+                debug!(
+                    "Sending GetBroadcastMessages request to peers: request_id {}, latest_cursor {:?}",
+                    request_id, latest_cursor
+                );
                 let request = GossipMessage::GetBroadcastMessages(GetBroadcastMessages {
                     id: request_id,
                     chain_hash: get_chain_hash(),
@@ -904,10 +932,18 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
     }
 
     fn has_transitive_dependencies(&self, message: &BroadcastMessageWithTimestamp) -> bool {
+        debug!(
+            "Verifying transitive dependencies for message {:?}",
+            message
+        );
         match message {
             BroadcastMessageWithTimestamp::ChannelAnnouncement(_, channel_announcement) => {
                 let node1 = &channel_announcement.node1_id;
                 let node2 = &channel_announcement.node2_id;
+                debug!(
+                    "Verifying transitive dependencies for channel announcement: node1 {:?} {}, node2 {:?} {}",
+                    node1, self.has_node_announcement(node1), node2, self.has_node_announcement(node2)
+                );
                 self.has_node_announcement(node1) && self.has_node_announcement(node2)
             }
             BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
@@ -915,9 +951,19 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
                     Some(channel_announcement) => {
                         let node1 = &channel_announcement.node1_id;
                         let node2 = &channel_announcement.node2_id;
+                        debug!(
+                            "Verifying transitive dependencies for channel update: node1 {:?} {}, node2 {:?} {}",
+                            node1, self.has_node_announcement(node1), node2, self.has_node_announcement(node2)
+                        );
                         self.has_node_announcement(node1) && self.has_node_announcement(node2)
                     }
-                    None => false,
+                    None => {
+                        debug!(
+                            "Channel announcement not found for channel update: {:?}",
+                            channel_update
+                        );
+                        false
+                    }
                 }
             }
             BroadcastMessageWithTimestamp::NodeAnnouncement(_) => true,
@@ -1097,6 +1143,10 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 }
 
                 if should_save {
+                    debug!(
+                        "ExtendedGossipMessageActor saving message immediately: {:?}",
+                        message
+                    );
                     state.save_broadcast_message(message.clone());
                     let cursor = message.cursor();
                     if let Some(notifier) = state.message_saving_notifier.remove(&cursor) {
@@ -1120,6 +1170,18 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                     .values()
                     .filter(|output| !output.is_loading_initially)
                     .collect::<Vec<_>>();
+
+                debug!(
+                    "ExtendedGossipMessageActor processing tick: last_cursor = {:?} #subscriptions = {}, #lagged_messages = {}, #messages_to_be_saved = {}",
+                    state.last_cursor,
+                    effective_subscriptions.len(),
+                    state.lagged_messages.len(),
+                    state.messages_to_be_saved.len()
+                );
+                trace!(
+                    "ExtendedGossipMessageActor processing tick: state.messages_to_be_saved {:?}",
+                    state.messages_to_be_saved
+                );
 
                 // Messages that have their dependencies saved are complete messages.
                 // We need to save them to the store.
@@ -1356,7 +1418,9 @@ where
     }
 
     async fn send_broadcast_message_filter(&mut self, peer_id: &PeerId) {
-        let cursor = self.get_latest_cursor();
+        let cursor = self
+            .get_latest_cursor()
+            .go_back_for_some_time(MAX_MISSING_BROADCAST_MESSAGE_TIMESTAMP_DRIFT);
         let message = GossipMessage::BroadcastMessagesFilter(BroadcastMessagesFilter {
             chain_hash: get_chain_hash(),
             after_cursor: cursor.clone(),
@@ -2052,6 +2116,7 @@ where
             }
 
             GossipActorMessage::InitialSyncingFinished => {
+                debug!("Initial syncing finished");
                 if let Some(sync_actor) = state.gossip_sync_actor.take() {
                     sync_actor.stop(Some("initial syncing finished".to_string()));
                 }
