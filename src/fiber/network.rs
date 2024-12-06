@@ -1210,6 +1210,11 @@ where
                     .send_message(GossipActorMessage::TryBroadcastMessages(message));
             }
             NetworkActorCommand::SignMessage(message, reply) => {
+                debug!(
+                    "Signing message with node private key: message {:?}, public key {:?}",
+                    message,
+                    state.get_public_key()
+                );
                 let signature = state.private_key.sign(message);
                 let _ = reply.send(signature);
             }

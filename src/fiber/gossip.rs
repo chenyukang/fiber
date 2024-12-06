@@ -1194,7 +1194,9 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                                 m.cursor(),
                             ),
                         )?;
-                        output.output_port.send(GossipMessageUpdates::new(messages));
+                        subscription
+                            .output_port
+                            .send(GossipMessageUpdates::new(messages));
                     }
                     None => {
                         // All the messages that are newer than store_last_cursor_while_starting
@@ -1372,6 +1374,15 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 // out and send them to the subscribers. Here we need to take messages directly from the
                 // store because some messages with complete dependencies are previously saved directly
                 // to the store.
+
+                // This is the cursor that all the subscribers will be updated to.
+                // We read the latest cursor from the store and filter all the messages to have cursor <= last_cursor.
+                // This is because while processing the messages, some new messages may be saved to the store.
+                // Either updating our last_cursor to the initial last_cursor or the final last_cursor is problematic.
+                let last_cursor_now = state
+                    .store
+                    .get_latest_broadcast_message_cursor()
+                    .unwrap_or(state.last_cursor.clone());
                 for subscription in all_subscriptions {
                     let filter = subscription.filter.clone().unwrap_or_default();
                     // We still need to check if the messages returned are newer than the filter,
@@ -1383,14 +1394,18 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                         filter
                     };
                     loop {
-                        let messages = state.store.get_broadcast_messages(
-                            &starting_cursor_in_the_loop,
-                            Some(MAX_NUM_OF_BROADCAST_MESSAGES),
-                        );
+                        let messages = state
+                            .store
+                            .get_broadcast_messages(
+                                &starting_cursor_in_the_loop,
+                                Some(MAX_NUM_OF_BROADCAST_MESSAGES),
+                            )
+                            .into_iter()
+                            .filter(|m| m.cursor() <= last_cursor_now)
+                            .collect::<Vec<_>>();
                         match messages.last() {
                             Some(m) => {
                                 starting_cursor_in_the_loop = m.cursor();
-                                state.last_cursor = m.cursor();
                                 subscription
                                     .output_port
                                     .send(GossipMessageUpdates::new(messages));
@@ -1401,6 +1416,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                         }
                     }
                 }
+                state.last_cursor = last_cursor_now;
             }
         }
         Ok(())
@@ -2268,6 +2284,10 @@ where
                     state.num_of_active_syncing_peers(),
                     state.num_of_passive_syncing_peers(),
                     state.pending_queries.len()
+                );
+                debug!(
+                    "Network maintenance ticked, current state: peer states: {:?}",
+                    state.peer_states
                 );
 
                 for peer in state.new_peers_to_start_active_syncing() {

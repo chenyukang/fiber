@@ -659,8 +659,15 @@ impl NetworkNode {
     }
 
     pub async fn get_network_graph_channel(&self, channel_id: &OutPoint) -> Option<ChannelInfo> {
-        self.with_network_graph(|graph| graph.get_channel(channel_id).cloned())
-            .await
+        self.with_network_graph(|graph| {
+            tracing::debug!("Getting channel info for {:?}", channel_id);
+            tracing::debug!(
+                "Channels: {:?}",
+                graph.channels().into_iter().collect::<Vec<_>>()
+            );
+            graph.get_channel(channel_id).cloned()
+        })
+        .await
     }
 }
 

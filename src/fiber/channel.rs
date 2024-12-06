@@ -2589,6 +2589,11 @@ impl ChannelActorState {
             .get_unsigned_channel_update_message()
             .expect("public channel can generate channel update message");
         f(&mut channel_update);
+        debug!(
+            "Generated channel update message for channel {:?}: {:?}",
+            &self.get_id(),
+            &channel_update
+        );
         let node_signature =
             sign_network_message(network.clone(), channel_update.message_to_sign())
                 .await

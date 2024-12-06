@@ -256,6 +256,13 @@ async fn test_channel_update_version() {
             0,
             10,
         );
+        tracing::debug!(
+            "Signing channel update: {:?} with key (pub {:?}) (pk1 {:?}) (pk2 {:?})",
+            &channel_update,
+            &key.pubkey(),
+            &sk1.pubkey(),
+            &sk2.pubkey()
+        );
 
         channel_update.signature = Some(key.sign(channel_update.message_to_sign()));
         channel_update
