@@ -744,6 +744,14 @@ impl PeerSyncStatus {
             _ => false,
         }
     }
+
+    fn can_start_active_syncing(&self) -> bool {
+        !self.is_active_syncing() && !self.is_passive_syncing()
+    }
+
+    fn can_start_passive_syncing(&self) -> bool {
+        !self.is_passive_syncing() && !self.is_active_syncing()
+    }
 }
 
 impl Default for PeerSyncStatus {
@@ -1479,9 +1487,7 @@ where
 
         self.peer_states
             .iter()
-            .filter(|(_, state)| {
-                !state.sync_status.is_active_syncing() && !state.sync_status.has_finished_syncing()
-            })
+            .filter(|(_, state)| state.sync_status.can_start_active_syncing())
             .take(MAX_NUM_OF_ACTIVE_SYNCING_PEERS - num_of_active_syncing_peers)
             .map(|(peer_id, _)| peer_id)
             .cloned()
@@ -1500,9 +1506,7 @@ where
 
         self.peer_states
             .iter()
-            .filter(|(_, state)| {
-                !state.sync_status.is_passive_syncing() && !state.sync_status.is_active_syncing()
-            })
+            .filter(|(_, state)| state.sync_status.can_start_passive_syncing())
             .take(MIN_NUM_OF_PASSIVE_SYNCING_PEERS - num_of_passive_syncing_peers)
             .map(|(peer_id, _)| peer_id)
             .cloned()
