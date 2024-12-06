@@ -105,6 +105,16 @@ const NUM_PEER_CONNECTIONS: usize = 40;
 // The duration for which we will try to maintain the number of peers in connection.
 const MAINTAINING_CONNECTIONS_INTERVAL: Duration = Duration::from_secs(3600);
 
+// While creating a network graph from the gossip messages, we will load current gossip messages
+// in the store and process them. We will load all current messages and get the latest cursor.
+// The problem is that we can't guarantee that the messages are in order, that is to say it is
+// possible that messages with smaller cursor may arrive at the store from the time we create
+// the graph. So we have to subscribe to gossip messages with a cursor slightly smaller than
+// current latest cursor. This parameter is the difference between the cursor we use to subscribe
+// and the latest cursor.
+const MAX_GRAPH_MISSING_BROADCAST_MESSAGE_TIMESTAMP_DRIFT: Duration =
+    Duration::from_secs(60 * 60 * 2);
+
 static CHAIN_HASH_INSTANCE: OnceCell<Hash256> = OnceCell::new();
 
 pub fn init_chain_hash(chain_hash: Hash256) {
@@ -2714,10 +2724,12 @@ where
         )
         .await;
         let graph = self.network_graph.read().await;
-        let current_last_cursor = graph.get_latest_cursor().clone();
+        let graph_subscribing_cursor = graph
+            .get_latest_cursor()
+            .go_back_for_some_time(MAX_GRAPH_MISSING_BROADCAST_MESSAGE_TIMESTAMP_DRIFT);
 
         store_update_subscriber
-            .subscribe(Some(current_last_cursor), myself.clone(), |m| {
+            .subscribe(Some(graph_subscribing_cursor), myself.clone(), |m| {
                 Some(NetworkActorMessage::new_event(
                     NetworkActorEvent::GossipMessageUpdates(m),
                 ))
