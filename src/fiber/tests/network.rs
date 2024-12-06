@@ -282,7 +282,7 @@ async fn test_channel_update_version() {
         .await
         .unwrap();
     assert_eq!(
-        new_channel_info.update_of_node2,
+        new_channel_info.update_of_node1,
         Some(ChannelUpdateInfo::from(&channel_update_2))
     );
 
