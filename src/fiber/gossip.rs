@@ -864,6 +864,10 @@ impl<S: GossipMessageStore + Sync> SubscribableGossipMessageStore
         receiver: ActorRef<TReceiverMsg>,
         converter: F,
     ) -> Result<Self::Subscription, Self::Error> {
+        debug!(
+            "Creating a new subscription from cursor {:?} with receiver {:?}",
+            &cursor, &receiver
+        );
         const DEFAULT_TIMEOUT: u64 = Duration::from_secs(5).as_millis() as u64;
         match call_t!(
             &self.actor,
@@ -909,11 +913,11 @@ impl<S: GossipMessageStore + Sync> SubscribableGossipMessageStore
 }
 
 struct BroadcastMessageOutput {
-    // A subscriber may send a very small filter cursor to us. That filter cursor may be much smaller than
-    // our last_cursor. In this case, we need to load all the messages from the store that are newer than
-    // the filter cursor. Only after we have loaded all "historical" messages, we can start sending messages
-    // in the normal procedure, i.e. sending only messages in lagged_messages and messages that are newer than last_cursor.
-    is_loading_initially: bool,
+    // This is the last cursor of the ExtendedGossipMessageStore when the subscriber is created.
+    // We have to send all messages up to this cursor to the subscriber immediately after the
+    // subscription is created. Other messages (messages after this cursor) are automatically
+    // forwarded to the subscriber by the store actor.
+    store_last_cursor_while_starting: Cursor,
     // The filter that a subscriber has set. We will only send messages that are newer than this filter.
     // This is normally a cursor that the subscriber is confident that it has received all the messages
     // before this cursor.
@@ -924,12 +928,12 @@ struct BroadcastMessageOutput {
 
 impl BroadcastMessageOutput {
     fn new(
-        is_syncing: bool,
+        store_last_cursor_while_starting: Cursor,
         filter: Option<Cursor>,
         output_port: Arc<OutputPort<GossipMessageUpdates>>,
     ) -> Self {
         Self {
-            is_loading_initially: is_syncing,
+            store_last_cursor_while_starting,
             filter,
             output_port,
         }
@@ -1124,24 +1128,25 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 state.next_id += 1;
                 let output_port = Arc::new(OutputPort::default());
                 let _ = reply.send((id, Arc::clone(&output_port)));
-                let is_syncing = match &cursor {
-                    // We are going to take all the messages that are older than last_cursor but newer than filter.
-                    // After this we need only to look for messages after last_cursor and messages in lagged_messages
-                    // that satisfy the filter.
-                    Some(filter) if filter < &state.last_cursor => {
+                let store_last_cursor_while_starting = state.last_cursor.clone();
+                match &cursor {
+                    Some(cursor) if cursor < &store_last_cursor_while_starting => {
                         myself.send_message(
                             ExtendedGossipMessageStoreMessage::LoadMessagesFromStore(
                                 id,
-                                filter.clone(),
+                                cursor.clone(),
                             ),
                         )?;
-                        true
                     }
-                    _ => false,
-                };
+                    _ => {}
+                }
                 state.output_ports.insert(
                     id,
-                    BroadcastMessageOutput::new(is_syncing, cursor, Arc::clone(&output_port)),
+                    BroadcastMessageOutput::new(
+                        store_last_cursor_while_starting,
+                        cursor,
+                        Arc::clone(&output_port),
+                    ),
                 );
             }
 
@@ -1168,9 +1173,9 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 };
                 let messages = state
                     .store
-                    .get_broadcast_messages(&cursor, Some(MAX_NUM_OF_BROADCAST_MESSAGES))
+                    .get_broadcast_messages(&cursor, Some(DEFAULT_NUM_OF_BROADCAST_MESSAGE))
                     .into_iter()
-                    .filter(|m| m.cursor() < state.last_cursor)
+                    .filter(|m| m.cursor() <= output.store_last_cursor_while_starting)
                     .collect::<Vec<_>>();
                 match messages.last() {
                     Some(m) => {
@@ -1182,11 +1187,9 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                         )?;
                         output.output_port.send(GossipMessageUpdates::new(messages));
                     }
-                    // All the messages that are newer than the given cursor are now also newer than our global last_cursor.
-                    // This means that we can use the global last_cursor as a starting point to send messages to the subscriber.
                     None => {
-                        output.is_loading_initially = false;
-                        return Ok(());
+                        // All the messages that are newer than store_last_cursor_while_starting
+                        // This means that we have finished initial loading.
                     }
                 }
             }
@@ -1268,16 +1271,12 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
 
             ExtendedGossipMessageStoreMessage::Tick => {
                 // These subscriptions are the subscriptions that are not loading "historic" messages from the store.
-                let effective_subscriptions = state
-                    .output_ports
-                    .values()
-                    .filter(|output| !output.is_loading_initially)
-                    .collect::<Vec<_>>();
+                let all_subscriptions = state.output_ports.values().collect::<Vec<_>>();
 
                 debug!(
                     "ExtendedGossipMessageActor processing tick: last_cursor = {:?} #subscriptions = {}, #lagged_messages = {}, #messages_to_be_saved = {}",
                     state.last_cursor,
-                    effective_subscriptions.len(),
+                    all_subscriptions.len(),
                     state.lagged_messages.len(),
                     state.messages_to_be_saved.len()
                 );
@@ -1311,7 +1310,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
 
                 // We need to send the lagged complete messages to the subscribers. After doing this,
                 // we may remove the messages from the lagged_messages.
-                for subscription in &effective_subscriptions {
+                for subscription in &all_subscriptions {
                     let messages_to_send = match subscription.filter {
                         Some(ref filter) => lagged_complete_messages
                             .iter()
@@ -1364,7 +1363,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 // out and send them to the subscribers. Here we need to take messages directly from the
                 // store because some messages with complete dependencies are previously saved directly
                 // to the store.
-                for subscription in effective_subscriptions {
+                for subscription in all_subscriptions {
                     let filter = subscription.filter.clone().unwrap_or_default();
                     // We still need to check if the messages returned are newer than the filter,
                     // because a subscriber may set filter so large that our last_cursor is still smaller
