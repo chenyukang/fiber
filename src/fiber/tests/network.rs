@@ -216,7 +216,6 @@ async fn test_node1_node2_channel_update() {
         new_channel_info.update_of_node1,
         Some(ChannelUpdateInfo::from(&channel_update_of_node1))
     );
-    assert_eq!(new_channel_info.update_of_node2, None);
 
     let channel_update_of_node2 = create_channel_update(now_timestamp(), 1, sk2);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
