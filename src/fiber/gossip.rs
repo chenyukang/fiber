@@ -913,6 +913,8 @@ impl<S: GossipMessageStore + Sync> SubscribableGossipMessageStore
 }
 
 struct BroadcastMessageOutput {
+    // The id of the subscriber. Mostly for debugging.
+    id: u64,
     // This is the last cursor of the ExtendedGossipMessageStore when the subscriber is created.
     // We have to send all messages up to this cursor to the subscriber immediately after the
     // subscription is created. Other messages (messages after this cursor) are automatically
@@ -928,11 +930,13 @@ struct BroadcastMessageOutput {
 
 impl BroadcastMessageOutput {
     fn new(
+        id: u64,
         store_last_cursor_while_starting: Cursor,
         filter: Option<Cursor>,
         output_port: Arc<OutputPort<GossipMessageUpdates>>,
     ) -> Self {
         Self {
+            id,
             store_last_cursor_while_starting,
             filter,
             output_port,
@@ -1131,6 +1135,10 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 let store_last_cursor_while_starting = state.last_cursor.clone();
                 match &cursor {
                     Some(cursor) if cursor < &store_last_cursor_while_starting => {
+                        debug!(
+                            "Loading messages from store for subscriber {}: subscription cursor {:?}, store cursor {:?}",
+                            id, cursor, store_last_cursor_while_starting
+                        );
                         myself.send_message(
                             ExtendedGossipMessageStoreMessage::LoadMessagesFromStore(
                                 id,
@@ -1143,6 +1151,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 state.output_ports.insert(
                     id,
                     BroadcastMessageOutput::new(
+                        id,
                         store_last_cursor_while_starting,
                         cursor,
                         Arc::clone(&output_port),
@@ -1166,7 +1175,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
             }
 
             ExtendedGossipMessageStoreMessage::LoadMessagesFromStore(id, cursor) => {
-                let output = match state.output_ports.get_mut(&id) {
+                let subscription = match state.output_ports.get_mut(&id) {
                     Some(output) => output,
                     // Subscriber has already unsubscribed, early return.
                     None => return Ok(()),
@@ -1175,7 +1184,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                     .store
                     .get_broadcast_messages(&cursor, Some(DEFAULT_NUM_OF_BROADCAST_MESSAGE))
                     .into_iter()
-                    .filter(|m| m.cursor() <= output.store_last_cursor_while_starting)
+                    .filter(|m| m.cursor() <= subscription.store_last_cursor_while_starting)
                     .collect::<Vec<_>>();
                 match messages.last() {
                     Some(m) => {
