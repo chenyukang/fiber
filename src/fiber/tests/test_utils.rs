@@ -394,13 +394,17 @@ impl NetworkNode {
             .expect("start mock chain actor")
             .0;
 
-        let secp = Secp256k1::new();
-        let secret_key = SecretKey::from_slice(&[0xcd; 32]).expect("32 bytes, within curve order");
-        let public_key = PublicKey::from_secret_key(&secp, &secret_key);
+        let secret_key: Privkey = fiber_config
+            .read_or_generate_secret_key()
+            .expect("must generate key")
+            .into();
+        let public_key = secret_key.pubkey();
+
         let network_graph = Arc::new(TokioRwLock::new(NetworkGraph::new(
             store.clone(),
             public_key.into(),
         )));
+
         let network_actor = Actor::spawn_linked(
             Some(format!("network actor at {}", base_dir.to_str())),
             NetworkActor::new(
