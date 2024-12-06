@@ -734,13 +734,16 @@ impl GossipMessageStore for MemoryStore {
         after_cursor: &Cursor,
         count: Option<u16>,
     ) -> Vec<BroadcastMessageWithTimestamp> {
-        self.gossip_messages_map
+        let mut messages = self
+            .gossip_messages_map
             .read()
             .unwrap()
             .values()
             .filter_map(|msg| (after_cursor < &msg.cursor()).then_some(msg.clone()))
             .take(count.unwrap_or(DEFAULT_NUM_OF_BROADCAST_MESSAGE as u16) as usize)
-            .collect()
+            .collect::<Vec<_>>();
+        messages.sort_by(|a, b| a.cursor().cmp(&b.cursor()));
+        messages
     }
 
     fn save_channel_announcement(&self, timestamp: u64, channel_announcement: ChannelAnnouncement) {
