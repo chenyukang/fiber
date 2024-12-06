@@ -2080,7 +2080,8 @@ async fn do_test_add_tlc_waiting_ack() {
     let tlc_amount = 1000000000;
 
     for i in 1..=2 {
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        //std::thread::sleep(std::time::Duration::from_millis(400));
+        //tokio::time::sleep(std::time::Duration::from_millis(400)).await;
         let add_tlc_command = AddTlcCommand {
             amount: tlc_amount,
             hash_algorithm: HashAlgorithm::CkbHash,
