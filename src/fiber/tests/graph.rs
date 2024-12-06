@@ -244,8 +244,8 @@ fn test_graph_graph_apis() {
     let node1 = mock_network.keys[1];
     let node2 = mock_network.keys[2];
     let node3 = mock_network.keys[3];
-    assert!(mock_network.graph.get_node(node1.into()).is_some());
-    assert!(mock_network.graph.get_node(node2.into()).is_some());
+    assert!(mock_network.graph.get_node(&node1.into()).is_some());
+    assert!(mock_network.graph.get_node(&node2.into()).is_some());
 
     let node1_channels = mock_network.graph.get_channels_by_peer(node1.into());
     assert_eq!(node1_channels.count(), 0);

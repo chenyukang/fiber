@@ -415,8 +415,8 @@ where
             .collect()
     }
 
-    pub fn get_node(&self, node_id: Pubkey) -> Option<&NodeInfo> {
-        self.nodes.get(&node_id)
+    pub fn get_node(&self, node_id: &Pubkey) -> Option<&NodeInfo> {
+        self.nodes.get(node_id)
     }
 
     pub fn channels(&self) -> impl Iterator<Item = &ChannelInfo> {

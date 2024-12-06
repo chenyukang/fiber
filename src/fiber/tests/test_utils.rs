@@ -165,6 +165,7 @@ pub struct NetworkNode {
     pub fiber_config: FiberConfig,
     pub listening_addrs: Vec<MultiAddr>,
     pub network_actor: ActorRef<NetworkActorMessage>,
+    pub network_graph: Arc<TokioRwLock<NetworkGraph<MemoryStore>>>,
     pub chain_actor: ActorRef<CkbChainMessage>,
     pub private_key: Privkey,
     pub peer_id: PeerId,
@@ -411,7 +412,7 @@ impl NetworkNode {
                 event_sender,
                 chain_actor.clone(),
                 store.clone(),
-                network_graph,
+                network_graph.clone(),
             ),
             NetworkActorStartArguments {
                 config: fiber_config.clone(),
@@ -450,6 +451,7 @@ impl NetworkNode {
             fiber_config,
             listening_addrs: announced_addrs,
             network_actor,
+            network_graph,
             chain_actor,
             private_key: secret_key.into(),
             peer_id,
@@ -491,10 +493,6 @@ impl NetworkNode {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
         tracing::debug!("Node stopped, restarting");
         self.start().await;
-    }
-
-    pub fn get_network_graph(&self) -> NetworkGraph<MemoryStore> {
-        NetworkGraph::new(self.store.clone(), self.get_public_key())
     }
 
     pub async fn new_n_interconnected_nodes<const N: usize>() -> [Self; N] {
@@ -628,6 +626,38 @@ impl NetworkNode {
         tx_hash: Byte32,
     ) -> Result<TransactionView, anyhow::Error> {
         get_tx_from_hash(self.chain_actor.clone(), tx_hash).await
+    }
+
+    pub fn get_network_graph(&self) -> &Arc<TokioRwLock<NetworkGraph<MemoryStore>>> {
+        &self.network_graph
+    }
+
+    pub async fn with_network_graph<F, T>(&self, f: F) -> T
+    where
+        F: FnOnce(&NetworkGraph<MemoryStore>) -> T,
+    {
+        let graph = self.get_network_graph().read().await;
+        f(&*graph)
+    }
+
+    pub async fn get_network_graph_nodes(&self) -> Vec<NodeInfo> {
+        self.with_network_graph(|graph| graph.nodes().into_iter().cloned().collect())
+            .await
+    }
+
+    pub async fn get_network_graph_node(&self, pubkey: &Pubkey) -> Option<NodeInfo> {
+        self.with_network_graph(|graph| graph.get_node(pubkey).cloned())
+            .await
+    }
+
+    pub async fn get_network_graph_channels(&self) -> Vec<ChannelInfo> {
+        self.with_network_graph(|graph| graph.channels().into_iter().cloned().collect())
+            .await
+    }
+
+    pub async fn get_network_graph_channel(&self, channel_id: &OutPoint) -> Option<ChannelInfo> {
+        self.with_network_graph(|graph| graph.get_channel(channel_id).cloned())
+            .await
     }
 }
 
