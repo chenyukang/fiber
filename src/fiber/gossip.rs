@@ -826,14 +826,19 @@ impl<S> ExtendedGossipMessageStore<S>
 where
     S: GossipMessageStore + Send + Sync + Clone + 'static,
 {
-    async fn new(store: S, chain_actor: ActorRef<CkbChainMessage>, supervisor: ActorCell) -> Self {
+    async fn new(
+        maintenance_interval: Duration,
+        store: S,
+        chain_actor: ActorRef<CkbChainMessage>,
+        supervisor: ActorCell,
+    ) -> Self {
         let (actor, _) = Actor::spawn_linked(
             Some(format!(
                 "gossip message store actor supervised by {:?}",
                 supervisor.get_id()
             )),
             ExtendedGossipMessageStoreActor::new(),
-            (store.clone(), chain_actor),
+            (maintenance_interval, store.clone(), chain_actor),
             supervisor,
         )
         .await
@@ -1094,15 +1099,14 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreActor<S> {
 impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMessageStoreActor<S> {
     type Msg = ExtendedGossipMessageStoreMessage;
     type State = ExtendedGossipMessageStoreState<S>;
-    type Arguments = (S, ActorRef<CkbChainMessage>);
+    type Arguments = (Duration, S, ActorRef<CkbChainMessage>);
 
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        (store, chain_actor): Self::Arguments,
+        (gossip_store_maintenance_interval, store, chain_actor): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        // TODO: make this interval configurable.
-        myself.send_interval(Duration::from_millis(500), || {
+        myself.send_interval(gossip_store_maintenance_interval, || {
             ExtendedGossipMessageStoreMessage::Tick
         });
         Ok(ExtendedGossipMessageStoreState::new(store, chain_actor))
@@ -2022,6 +2026,7 @@ impl GossipProtocolHandle {
     pub(crate) async fn new<S>(
         name: Option<String>,
         gossip_network_maintenance_interval: Duration,
+        gossip_store_maintenance_interval: Duration,
         store: S,
         chain_actor: ActorRef<CkbChainMessage>,
         supervisor: ActorCell,
@@ -2039,6 +2044,7 @@ impl GossipProtocolHandle {
                 network_control_receiver,
                 store_sender,
                 gossip_network_maintenance_interval,
+                gossip_store_maintenance_interval,
                 store,
                 chain_actor,
             ),
@@ -2081,6 +2087,7 @@ where
         oneshot::Receiver<ServiceAsyncControl>,
         oneshot::Sender<ExtendedGossipMessageStore<S>>,
         Duration,
+        Duration,
         S,
         ActorRef<CkbChainMessage>,
     );
@@ -2088,10 +2095,15 @@ where
     async fn pre_start(
         &self,
         myself: ActorRef<Self::Msg>,
-        (rx, tx, network_maintenance_interval, store, chain_actor): Self::Arguments,
+        (rx, tx, network_maintenance_interval, store_maintenance_interval, store, chain_actor): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        let store =
-            ExtendedGossipMessageStore::new(store, chain_actor.clone(), myself.get_cell()).await;
+        let store = ExtendedGossipMessageStore::new(
+            store_maintenance_interval,
+            store,
+            chain_actor.clone(),
+            myself.get_cell(),
+        )
+        .await;
         if let Err(_) = tx.send(store.clone()) {
             panic!("failed to send store to the caller");
         }

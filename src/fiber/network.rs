@@ -2717,7 +2717,8 @@ where
         let fiber_handle = FiberProtocolHandle::from(&handle);
         let (gossip_handle, store_update_subscriber) = GossipProtocolHandle::new(
             Some(format!("gossip actor {:?}", my_peer_id)),
-            Duration::from_millis(config.gossip_maintenance_interval_ms()).into(),
+            Duration::from_millis(config.gossip_network_maintenance_interval_ms()).into(),
+            Duration::from_millis(config.gossip_store_maintenance_interval_ms()).into(),
             self.store.clone(),
             self.chain_actor.clone(),
             myself.get_cell(),
