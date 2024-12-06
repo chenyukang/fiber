@@ -61,12 +61,14 @@ fn create_fake_channel_announcement_mesage(
     priv_key: Privkey,
     capacity: u64,
     outpoint: OutPoint,
-) -> ChannelAnnouncement {
+) -> (NodeAnnouncement, NodeAnnouncement, ChannelAnnouncement) {
     let x_only_pub_key = priv_key.x_only_pub_key();
     let sk1 = Privkey::from([1u8; 32]);
+    let node_announcement1 = create_fake_node_announcement_mesage_with_priv_key(&sk1);
     let sk2 = Privkey::from([2u8; 32]);
+    let node_announcement2 = create_fake_node_announcement_mesage_with_priv_key(&sk2);
 
-    let mut announcement = ChannelAnnouncement::new_unsigned(
+    let mut channel_announcement = ChannelAnnouncement::new_unsigned(
         &sk1.pubkey(),
         &sk2.pubkey(),
         outpoint,
@@ -75,23 +77,27 @@ fn create_fake_channel_announcement_mesage(
         capacity as u128,
         None,
     );
-    let message = announcement.message_to_sign();
+    let message = channel_announcement.message_to_sign();
 
-    announcement.ckb_signature = Some(priv_key.sign_schnorr(message));
-    announcement.node1_signature = Some(sk1.sign(message));
-    announcement.node2_signature = Some(sk2.sign(message));
-    announcement
+    channel_announcement.ckb_signature = Some(priv_key.sign_schnorr(message));
+    channel_announcement.node1_signature = Some(sk1.sign(message));
+    channel_announcement.node2_signature = Some(sk2.sign(message));
+    (node_announcement1, node_announcement2, channel_announcement)
 }
 
-fn create_fake_node_announcement_mesage() -> NodeAnnouncement {
-    let priv_key = get_test_priv_key();
+fn create_fake_node_announcement_mesage_with_priv_key(priv_key: &Privkey) -> NodeAnnouncement {
     let node_name = "fake node";
     let addresses =
         vec!["/ip4/1.1.1.1/tcp/8346/p2p/QmaFDJb9CkMrXy7nhTWBY5y9mvuykre3EzzRsCJUAVXprZ"]
             .iter()
             .map(|x| MultiAddr::from_str(x).expect("valid multiaddr"))
             .collect();
-    NodeAnnouncement::new(node_name.into(), addresses, &priv_key, now_timestamp(), 0)
+    NodeAnnouncement::new(node_name.into(), addresses, priv_key, now_timestamp(), 0)
+}
+
+fn create_fake_node_announcement_mesage() -> NodeAnnouncement {
+    let priv_key = get_test_priv_key();
+    create_fake_node_announcement_mesage_with_priv_key(&priv_key)
 }
 
 #[tokio::test]
@@ -115,28 +121,30 @@ async fn test_sync_channel_announcement_on_startup() {
         .output_data(vec![0u8; 8].pack())
         .build();
     let outpoint = tx.output_pts()[0].clone();
-    let channel_announcement =
+    let (node_announcement_1, node_announcement_2, channel_announcement) =
         create_fake_channel_announcement_mesage(priv_key, capacity, outpoint);
 
     assert_eq!(node1.submit_tx(tx.clone()).await, Status::Committed);
 
-    node1
-        .network_actor
-        .send_message(NetworkActorMessage::Event(
-            NetworkActorEvent::GossipMessage(
-                get_test_peer_id(),
-                BroadcastMessage::ChannelAnnouncement(channel_announcement)
-                    .create_broadcast_messages_filter_result(),
-            ),
-        ))
-        .expect("send message to network actor");
+    for message in [
+        BroadcastMessage::NodeAnnouncement(node_announcement_1.clone()),
+        BroadcastMessage::NodeAnnouncement(node_announcement_2.clone()),
+        BroadcastMessage::ChannelAnnouncement(channel_announcement.clone()),
+    ] {
+        node1
+            .network_actor
+            .send_message(NetworkActorMessage::Event(
+                NetworkActorEvent::GossipMessage(
+                    get_test_peer_id(),
+                    message.create_broadcast_messages_filter_result(),
+                ),
+            ))
+            .expect("send message to network actor");
+    }
 
     node1.connect_to(&node2).await;
 
     assert_eq!(node2.submit_tx(tx.clone()).await, Status::Committed);
-    node2
-        .expect_event(|c| matches!(c, NetworkServiceEvent::SyncingCompleted))
-        .await;
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     let channels = node2.get_network_graph_channels().await;
@@ -438,10 +446,6 @@ async fn test_sync_node_announcement_on_startup() {
 
     node1.connect_to(&node2).await;
 
-    node2
-        .expect_event(|c| matches!(c, NetworkServiceEvent::SyncingCompleted))
-        .await;
-
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
@@ -462,13 +466,6 @@ async fn test_sync_node_announcement_after_restart() {
 
     let [mut node1, mut node2] = NetworkNode::new_n_interconnected_nodes().await;
 
-    node1
-        .expect_event(|c| matches!(c, NetworkServiceEvent::SyncingCompleted))
-        .await;
-    node2
-        .expect_event(|c| matches!(c, NetworkServiceEvent::SyncingCompleted))
-        .await;
-
     node2.stop().await;
 
     let test_pub_key = get_test_pub_key();
@@ -486,10 +483,6 @@ async fn test_sync_node_announcement_after_restart() {
 
     node2.start().await;
     node2.connect_to(&node1).await;
-
-    node2
-        .expect_event(|c| matches!(c, NetworkServiceEvent::SyncingCompleted))
-        .await;
 
     // Wait for the broadcast message to be processed.
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;

@@ -483,8 +483,6 @@ pub enum NetworkServiceEvent {
     // and we successfully assemble the partial signature from other party
     // to create a complete commitment transaction.
     RemoteCommitmentSigned(PeerId, Hash256, u64, TransactionView),
-    // The syncing of network information has completed.
-    SyncingCompleted,
 }
 
 /// Events that can be sent to the network actor. Except for NetworkServiceEvent,
