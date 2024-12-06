@@ -425,6 +425,7 @@ where
         // to avoid some malicious nodes from being always selected.
         self.nodes
             .iter()
+            .filter(|(k, _)| **k != self.source)
             .take(n)
             .map(|(k, v)| (k.tentacle_peer_id(), v.addresses.clone()))
             .collect()
