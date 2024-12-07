@@ -1,5 +1,21 @@
 # Development
 
+## Build from source code
+
+1. Build the project:
+
+Build dependences:
+
+```
+sudo apt-get install build-essential libclang-dev pkg-config libssl-dev g++
+```
+
+Build step:
+
+```
+cargo build
+```
+
 ## Run 3 nodes with default balances and deploy contracts to the devchain
 
 Below command automatically start 3 FNN and 1 ckb node.
@@ -31,4 +47,11 @@ We can (re)initialize the dev chain to transfer some balances from the default d
 ```
 cd tests/bruno
 npm exec -- @usebruno/cli run e2e/open-use-close-a-channel -r --env test
+```
+
+## Run unit test
+
+```
+cargo install cargo-nextest --locked
+make test
 ```
