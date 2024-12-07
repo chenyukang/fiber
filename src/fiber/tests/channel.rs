@@ -3133,3 +3133,77 @@ async fn test_shutdown_channel_with_different_size_shutdown_script() {
         Status::Committed
     );
 }
+
+#[test]
+fn test_pending_tlcs_with_remove_tlc_quake() {
+    let mut tlc_state = TlcState::default();
+    let add_tlc1 = AddTlcInfo {
+        amount: 10000,
+        channel_id: gen_sha256_hash(),
+        payment_hash: gen_sha256_hash(),
+        expiry: now_timestamp_as_millis_u64() + 1000,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: None,
+        tlc_id: TLCId::Offered(0),
+        created_at: CommitmentNumbers::default(),
+        removed_at: None,
+        payment_preimage: None,
+        previous_tlc: None,
+    };
+    let add_tlc2 = AddTlcInfo {
+        amount: 20000,
+        channel_id: gen_sha256_hash(),
+        payment_hash: gen_sha256_hash(),
+        expiry: now_timestamp_as_millis_u64() + 2000,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: None,
+        tlc_id: TLCId::Offered(1),
+        created_at: CommitmentNumbers::default(),
+        removed_at: None,
+        payment_preimage: None,
+        previous_tlc: None,
+    };
+    let add_tlc3 = AddTlcInfo {
+        amount: 30000,
+        channel_id: gen_sha256_hash(),
+        payment_hash: gen_sha256_hash(),
+        expiry: now_timestamp_as_millis_u64() + 2000,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: None,
+        tlc_id: TLCId::Offered(2),
+        created_at: CommitmentNumbers::default(),
+        removed_at: None,
+        payment_preimage: None,
+        previous_tlc: None,
+    };
+    let remote_tlc = RemoveTlcInfo {
+        channel_id: gen_sha256_hash(),
+        tlc_id: TLCId::Offered(0),
+        reason: RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill {
+            payment_preimage: gen_sha256_hash(),
+        }),
+    };
+
+    tlc_state.add_local_tlc(TlcKind::AddTlc(add_tlc1.clone()));
+    tlc_state.add_local_tlc(TlcKind::AddTlc(add_tlc2.clone()));
+    // received ack from remote, then commit the staging tlcs
+    let tx1 = tlc_state.commit_local_tlcs();
+    assert_eq!(tx1.len(), 2);
+
+    tlc_state.add_remote_tlc(TlcKind::RemoveTlc(remote_tlc.clone()));
+    // received signed from remote, then commit the staging tlcs
+    let remote_tlcs = tlc_state.get_tlcs_for_remote();
+    eprintln!("remote_tlcs: {:?}", remote_tlcs);
+
+    let local_tlcs = tlc_state.get_tlcs_for_local();
+    eprintln!("local_tlcs: {:?}", local_tlcs);
+
+    // eprintln!("begin to commit remote tlcs");
+    // tlc_state.commit_remote_tlcs();
+
+    // tlc_state.add_local_tlc(TlcKind::AddTlc(add_tlc3.clone()));
+    // let tx1 = tlc_state.get_tlcs_for_local();
+    // assert_eq!(tx1.len(), 2);
+    // let first = &tx1[0];
+    // assert_eq!(first.tlc_id(), TLCId::Offered(1));
+}

@@ -632,6 +632,7 @@ where
 
     async fn flush_staging_tlc_operations(&self, state: &mut ChannelActorState) {
         let pending_apply_tlcs = state.tlc_state.commit_remote_tlcs();
+        let _ = state.tlc_state.get_tlcs_for_local();
         for tlc_info in pending_apply_tlcs {
             match tlc_info {
                 TlcKind::AddTlc(add_tlc) => {
@@ -2225,13 +2226,18 @@ impl PendingTlcs {
     }
 
     pub fn commit_tlcs(&mut self, committed_tlcs: &[TlcKind]) -> Vec<TlcKind> {
+        // self.committed_index 0
         let staging_tlcs = self.get_staging_tlcs().to_vec();
+        eprintln!("staging_tlcs: {:?}", staging_tlcs);
+        eprintln!("committed_tlcs: {:?}", committed_tlcs);
+        eprintln!("self.tlcs: {:?}", self.tlcs);
         for tlc in committed_tlcs {
             if !self.is_tlc_present(tlc) {
                 self.tlcs.push(tlc.clone());
             }
         }
         self.committed_index = self.tlcs.len();
+        // self.committed_index => 1
         return staging_tlcs;
     }
 
@@ -2392,7 +2398,9 @@ impl TlcState {
     ) -> Vec<TlcKind> {
         let mut add_tlcs: BTreeMap<TLCId, TlcKind> = Default::default();
         let mut remove_tlcs = vec![];
-        for tlc in committed_tlcs {
+        let committed = committed_tlcs.collect::<Vec<_>>();
+        eprintln!("in unify_tlcs committed_tlcs: {:?}", committed);
+        for tlc in committed {
             match tlc {
                 TlcKind::AddTlc(info) => {
                     if info.removed_at.is_none() {
@@ -2400,7 +2408,8 @@ impl TlcState {
                     }
                 }
                 TlcKind::RemoveTlc(..) => {
-                    unreachable!("RemoveTlc should not be in committed tlcs")
+                    //unreachable!("RemoveTlc should not be in committed tlcs")
+                    remove_tlcs.push(tlc.clone());
                 }
             }
         }
@@ -2419,6 +2428,7 @@ impl TlcState {
         }
         for tlc in remove_tlcs {
             let tlc_id = tlc.tlc_id();
+            eprintln!("removing tlc : {:?} !!!!!!!!!!!!!!", tlc_id);
             let _ = add_tlcs.remove(&tlc_id);
         }
         add_tlcs.values().map(|tlc| tlc.clone()).collect()
@@ -4395,6 +4405,7 @@ impl ChannelActorState {
             b.sort_by(|x, y| u64::from(x.0.tlc_id).cmp(&u64::from(y.0.tlc_id)));
             [a, b].concat()
         };
+        eprintln!("Active HTLCs: {:?}", tlcs);
         if tlcs.is_empty() {
             Vec::new()
         } else {
