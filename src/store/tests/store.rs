@@ -299,7 +299,7 @@ fn test_channel_actor_state_store() {
         commitment_numbers: Default::default(),
         remote_shutdown_script: Some(Script::default()),
         last_used_nonce_in_commitment_signed: None,
-        remote_nonces: vec![(0, pub_nonce.clone())],
+        remote_nonces: Some(pub_nonce.clone()),
         remote_commitment_points: vec![
             (0, generate_pubkey().into()),
             (1, generate_pubkey().into()),

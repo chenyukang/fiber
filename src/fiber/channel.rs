@@ -2626,8 +2626,10 @@ pub struct ChannelActorState {
     #[serde_as(as = "Option<PubNonceAsBytes>")]
     pub last_used_nonce_in_commitment_signed: Option<PubNonce>,
 
-    #[serde_as(as = "Vec<(U64Hex, PubNonceAsBytes)>")]
-    pub remote_nonces: Vec<(u64, PubNonce)>,
+    // #[serde_as(as = "Vec<(U64Hex, PubNonceAsBytes)>")]
+    // pub remote_nonces: Vec<(u64, PubNonce)>,
+    #[serde_as(as = "Option<PubNonceAsBytes>")]
+    pub remote_nonces: Option<PubNonce>,
 
     // The latest commitment transaction we're holding
     #[serde_as(as = "Option<EntityHex>")]
@@ -3347,7 +3349,7 @@ impl ChannelActorState {
             commitment_numbers: Default::default(),
             remote_shutdown_script: Some(remote_shutdown_script),
             last_used_nonce_in_commitment_signed: None,
-            remote_nonces: vec![(0, remote_nonce)],
+            remote_nonces: Some(remote_nonce),
             remote_commitment_points: vec![
                 (0, first_commitment_point),
                 (1, second_commitment_point),
@@ -3410,7 +3412,7 @@ impl ChannelActorState {
             max_tlc_value_in_flight,
             remote_channel_public_keys: None,
             last_used_nonce_in_commitment_signed: None,
-            remote_nonces: vec![],
+            remote_nonces: None,
             commitment_numbers: Default::default(),
             remote_commitment_points: vec![],
             local_shutdown_script: shutdown_script,
@@ -3908,43 +3910,48 @@ impl ChannelActorState {
 
     pub fn get_remote_nonce(&self) -> PubNonce {
         let comitment_number = self.get_remote_commitment_number();
-        debug!(
+        eprintln!(
             "Getting remote nonce: commitment number {}, current nonces: {:?}",
             comitment_number, &self.remote_nonces
         );
         self.remote_nonces
-            .iter()
-            .rev()
-            .find_map(|(number, nonce)| {
-                if *number == comitment_number {
-                    Some(nonce.clone())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| {
-                self.remote_nonces
-                    .last()
-                    .expect("expect remote nonce")
-                    .1
-                    .clone()
-            })
+            .as_ref()
+            .expect("expect to get remote nonce")
+            .clone()
+        // self.remote_nonces
+        //     .iter()
+        //     .rev()
+        //     .find_map(|(number, nonce)| {
+        //         if *number == comitment_number {
+        //             Some(nonce.clone())
+        //         } else {
+        //             None
+        //         }
+        //     })
+        //     .unwrap_or_else(|| {
+        //         self.remote_nonces
+        //             .last()
+        //             .expect("expect remote nonce")
+        //             .1
+        //             .clone()
+        //     })
     }
 
     fn save_remote_nonce(&mut self, nonce: PubNonce) {
-        debug!(
+        eprintln!(
             "Saving remote nonce: new nonce {:?}, current nonces {:?}, commitment numbers {:?}",
             &nonce, &self.remote_nonces, self.commitment_numbers
         );
-        self.remote_nonces
-            .push((self.get_remote_commitment_number() + 1, nonce));
-        loop {
-            let len = self.remote_nonces.len();
-            if len <= 2 {
-                break;
-            }
-            self.remote_nonces.remove(0);
-        }
+        self.remote_nonces = Some(nonce);
+        // self.remote_nonces
+        //     .push((self.get_remote_commitment_number() + 1, nonce));
+        // loop {
+        //     let len = self.remote_nonces.len();
+        //     if len <= 2 {
+        //         break;
+        //     }
+        //     self.remote_nonces.remove(0);
+        // }
     }
 
     fn save_remote_nonce_for_raa(&mut self) {
