@@ -10,9 +10,6 @@
 /// | 64           | PeerId | Hash256     | ChannelState                |
 /// | 96           | Cursor               | BroadcastMessage            |
 /// | 97           | BroadcastMessageID   | u64                         |
-/// | 128          | NodeId               | NodeInfo                    |
-/// | 129          | Timestamp            | NodeId                      |
-/// | 160          | PeerId               | MultiAddr                   |
 /// | 192          | Hash256              | PaymentSession              |
 /// | 193          | OutPoint | Direction | TimedResult                 |
 /// | 224          | Hash256              | ChannelData                 |
