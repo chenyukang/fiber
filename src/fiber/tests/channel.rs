@@ -2179,7 +2179,7 @@ async fn do_test_remove_tlc_with_wrong_hash_algorithm(
 }
 
 #[tokio::test]
-async fn do_test_remove_tlc_with_expiry_error() {
+async fn test_remove_tlc_with_expiry_error() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
@@ -2218,7 +2218,7 @@ async fn do_test_remove_tlc_with_expiry_error() {
         amount: tlc_amount,
         hash_algorithm: HashAlgorithm::CkbHash,
         payment_hash: digest.into(),
-        expiry: now_timestamp_as_millis_u64() + MAX_PAYMENT_TLC_EXPIRY_LIMIT + 10,
+        expiry: now_timestamp_as_millis_u64() + MAX_PAYMENT_TLC_EXPIRY_LIMIT + 20 * 1000,
         onion_packet: None,
         previous_tlc: None,
     };
