@@ -183,6 +183,7 @@ pub fn generate_store() -> Store {
     store.expect("create store")
 }
 
+#[derive(Debug)]
 pub struct NetworkNode {
     /// The base directory of the node, will be deleted after this struct dropped.
     pub base_dir: Arc<TempDir>,
@@ -423,36 +424,57 @@ pub async fn create_3_nodes_with_established_channel(
     (channel_2_amount_b, channel_2_amount_c): (u128, u128),
     public: bool,
 ) -> (NetworkNode, NetworkNode, NetworkNode, Hash256, Hash256) {
-    let [mut node_a, mut node_b, mut node_c] = NetworkNode::new_n_interconnected_nodes().await;
-
-    let (channel_id_ab, funding_tx_ab) = establish_channel_between_nodes(
-        &mut node_a,
-        &mut node_b,
+    let (nodes, channels) = create_n_nodes_with_established_channel(
+        &[
+            (channel_1_amount_a, channel_1_amount_b),
+            (channel_2_amount_b, channel_2_amount_c),
+        ],
+        3,
         public,
-        channel_1_amount_a,
-        channel_1_amount_b,
-        None,
-        None,
     )
     .await;
+    let [node_a, node_b, node_c] = nodes.try_into().expect("3 nodes");
+    (node_a, node_b, node_c, channels[0], channels[1])
+}
 
-    let res = node_c.submit_tx(funding_tx_ab).await;
-    assert_eq!(res, Status::Committed);
+pub async fn create_n_nodes_with_established_channel(
+    amounts: &[(u128, u128)],
+    n: usize,
+    public: bool,
+) -> (Vec<NetworkNode>, Vec<Hash256>) {
+    assert!(n >= 2);
+    assert_eq!(amounts.len(), n - 1);
+    let mut nodes = NetworkNode::new_interconnected_nodes(n).await;
+    let mut channels = vec![];
 
-    let (channel_id_bc, funding_tx_bc) = establish_channel_between_nodes(
-        &mut node_b,
-        &mut node_c,
-        public,
-        channel_2_amount_b,
-        channel_2_amount_c,
-        None,
-        None,
-    )
-    .await;
-
-    let res = node_a.submit_tx(funding_tx_bc).await;
-    assert_eq!(res, Status::Committed);
-    (node_a, node_b, node_c, channel_id_ab, channel_id_bc)
+    for i in 0..n - 1 {
+        let (channel_id, funding_tx) = {
+            let (node_a, node_b) = {
+                // avoid borrow nodes as mutbale more than once
+                let (left, right) = nodes.split_at_mut(i + 1);
+                (&mut left[i], &mut right[0])
+            };
+            establish_channel_between_nodes(
+                node_a,
+                node_b,
+                public,
+                amounts[i].0,
+                amounts[i].1,
+                None,
+                None,
+            )
+            .await
+        };
+        channels.push(channel_id);
+        // all the other nodes submit_tx
+        for j in 0..n {
+            if j != i {
+                let res = nodes[j].submit_tx(funding_tx.clone()).await;
+                assert_eq!(res, Status::Committed);
+            }
+        }
+    }
+    (nodes, channels)
 }
 
 impl NetworkNode {
@@ -592,8 +614,16 @@ impl NetworkNode {
     }
 
     pub async fn new_n_interconnected_nodes<const N: usize>() -> [Self; N] {
-        let mut nodes: Vec<NetworkNode> = Vec::with_capacity(N);
-        for i in 0..N {
+        let nodes = Self::new_interconnected_nodes(N).await;
+        match nodes.try_into() {
+            Ok(nodes) => nodes,
+            Err(_) => unreachable!(),
+        }
+    }
+
+    pub async fn new_interconnected_nodes(n: usize) -> Vec<Self> {
+        let mut nodes: Vec<NetworkNode> = Vec::with_capacity(n);
+        for i in 0..n {
             let new = Self::new_with_config(
                 NetworkNodeConfigBuilder::new()
                     .node_name(Some(format!("node-{}", i)))
