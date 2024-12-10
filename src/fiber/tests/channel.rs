@@ -21,7 +21,6 @@ use crate::{
             ShutdownCommand, DEFAULT_COMMITMENT_FEE_RATE,
         },
         config::DEFAULT_AUTO_ACCEPT_CHANNEL_CKB_FUNDING_AMOUNT,
-        graph::NetworkGraphStateStore,
         hash_algorithm::HashAlgorithm,
         network::{AcceptChannelCommand, OpenChannelCommand},
         tests::test_utils::establish_channel_between_nodes,
@@ -419,10 +418,8 @@ async fn test_public_channel_saved_to_the_owner_graph() {
     // Wait for the channel announcement to be broadcasted
     tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
 
-    let node1_store = node1.store.clone();
     let node1_id = node1.peer_id.clone();
     node1.stop().await;
-    let node2_store = node2.store.clone();
     let node2_id = node2.peer_id.clone();
     node2.stop().await;
 

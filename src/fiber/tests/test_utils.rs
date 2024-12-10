@@ -25,17 +25,11 @@ use tokio::{
     time::sleep,
 };
 
+use crate::fiber::graph::ChannelInfo;
 use crate::fiber::network::{AcceptChannelCommand, OpenChannelCommand};
 use crate::fiber::types::Pubkey;
-use crate::fiber::types::{
-    BroadcastMessageID, BroadcastMessageWithTimestamp, ChannelAnnouncement, ChannelUpdate, Cursor,
-    EcdsaSignature, NodeAnnouncement, Privkey,
-};
+use crate::fiber::types::{EcdsaSignature, Privkey};
 use crate::fiber::{channel::ChannelActorStateStore, graph::NodeInfo};
-use crate::fiber::{
-    gossip::{GossipMessageStore, DEFAULT_NUM_OF_BROADCAST_MESSAGE},
-    graph::ChannelInfo,
-};
 use crate::store::Store;
 use crate::{
     actors::{RootActor, RootActorMessage},
@@ -51,7 +45,6 @@ use crate::{
     tasks::{new_tokio_cancellation_token, new_tokio_task_tracker},
     FiberConfig, NetworkServiceEvent,
 };
-use tentacle::secio::SecioKeyPair;
 
 static RETAIN_VAR: &str = "TEST_TEMP_RETAIN";
 

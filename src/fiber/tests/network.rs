@@ -435,7 +435,7 @@ async fn test_sync_node_announcement_on_startup() {
     init_tracing();
 
     let mut node1 = NetworkNode::new_with_node_name("node1").await;
-    let mut node2 = NetworkNode::new_with_node_name("node2").await;
+    let node2 = NetworkNode::new_with_node_name("node2").await;
     let test_pub_key = get_test_pub_key();
     let test_peer_id = get_test_peer_id();
 
@@ -470,7 +470,7 @@ async fn test_sync_node_announcement_on_startup() {
 async fn test_sync_node_announcement_after_restart() {
     init_tracing();
 
-    let [mut node1, mut node2] = NetworkNode::new_n_interconnected_nodes().await;
+    let [node1, mut node2] = NetworkNode::new_n_interconnected_nodes().await;
 
     node2.stop().await;
 

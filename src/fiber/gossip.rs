@@ -1303,9 +1303,6 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
             }
 
             ExtendedGossipMessageStoreMessage::Tick => {
-                // These subscriptions are the subscriptions that are not loading "historic" messages from the store.
-                let all_subscriptions = state.output_ports.values().collect::<Vec<_>>();
-
                 debug!(
                     "ExtendedGossipMessageActor processing tick: last_cursor = {:?} #subscriptions = {}, #lagged_messages = {}, #messages_to_be_saved = {}",
                     state.last_cursor,

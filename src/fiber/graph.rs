@@ -9,14 +9,12 @@ use super::types::{
 };
 use super::types::{Cursor, Pubkey, TlcErr};
 use crate::ckb::config::UdtCfgInfos;
-use crate::fiber::channel::CHANNEL_DISABLED_FLAG;
 use crate::fiber::fee::calculate_tlc_forward_fee;
 use crate::fiber::path::NodeHeapElement;
 use crate::fiber::serde_utils::EntityHex;
 use crate::fiber::types::PaymentHopData;
 use crate::invoice::CkbInvoice;
 use crate::now_timestamp_as_millis_u64;
-use ckb_jsonrpc_types::JsonBytes;
 use ckb_types::packed::{OutPoint, Script};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -25,7 +23,7 @@ use tentacle::multiaddr::MultiAddr;
 use tentacle::secio::PeerId;
 use thiserror::Error;
 use tracing::log::error;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, trace};
 
 const DEFAULT_MIN_PROBABILITY: f64 = 0.01;
 

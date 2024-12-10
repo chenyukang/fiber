@@ -6,7 +6,7 @@ use crate::fiber::types::Pubkey;
 use crate::now_timestamp_as_millis_u64;
 use crate::{
     fiber::{
-        graph::{ChannelInfo, NetworkGraph, NodeInfo, PathEdge},
+        graph::{NetworkGraph, PathEdge},
         network::{get_chain_hash, SendPaymentCommand, SendPaymentData},
         types::{ChannelAnnouncement, ChannelUpdate, Hash256, NodeAnnouncement},
     },

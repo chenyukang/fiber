@@ -72,7 +72,7 @@ use crate::fiber::channel::{
 };
 use crate::fiber::config::{DEFAULT_TLC_EXPIRY_DELTA, MAX_PAYMENT_TLC_EXPIRY_LIMIT};
 use crate::fiber::gossip::{GossipProtocolHandle, SubscribableGossipMessageStore};
-use crate::fiber::graph::{ChannelInfo, PaymentSession, PaymentSessionStatus};
+use crate::fiber::graph::{PaymentSession, PaymentSessionStatus};
 use crate::fiber::serde_utils::EntityHex;
 use crate::fiber::types::{
     FiberChannelMessage, PaymentOnionPacket, PeeledPaymentOnionPacket, TxSignatures,
