@@ -7,8 +7,10 @@ use crate::{
     fiber::{
         fee::calculate_tlc_forward_fee,
         network::{get_chain_hash, SendOnionPacketCommand},
-        serde_utils::PubNonceAsBytes,
-        types::{BroadcastMessage, ChannelUpdate, PeeledPaymentOnionPacket, TlcErr, TlcErrPacket, TlcErrorCode},
+        types::{
+            BroadcastMessage, ChannelUpdate, PeeledPaymentOnionPacket, TlcErr, TlcErrPacket,
+            TlcErrorCode,
+        },
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceStore},
     now_timestamp_as_millis_u64,
@@ -70,7 +72,7 @@ use super::{
     hash_algorithm::HashAlgorithm,
     key::blake2b_hash_with_salt,
     network::FiberMessageWithPeerId,
-    serde_utils::EntityHex,
+    serde_utils::{EntityHex, PubNonceAsBytes},
     types::{
         AcceptChannel, AddTlc, ChannelAnnouncement, ChannelReady, ClosingSigned, CommitmentSigned,
         EcdsaSignature, FiberChannelMessage, FiberMessage, Hash256, OpenChannel,

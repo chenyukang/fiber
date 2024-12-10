@@ -736,6 +736,14 @@ where
         Ok(())
     }
 
+    // We normally don't need to manually call this to update graph from store data,
+    // because network actor will automatically update the graph when it receives
+    // updates. But in some standalone tests, we may need to manually update the graph.
+    async fn update_graph(&self) {
+        let mut graph = self.network_graph.write().await;
+        graph.load_from_store();
+    }
+
     pub async fn handle_event(
         &self,
         myself: ActorRef<NetworkActorMessage>,
@@ -1586,6 +1594,7 @@ where
         state: &mut NetworkActorState<S>,
         payment_hash: Hash256,
     ) -> Result<PaymentSession, Error> {
+        self.update_graph().await;
         let Some(mut payment_session) = self.store.get_payment_session(payment_hash) else {
             return Err(Error::InvalidParameter(payment_hash.to_string()));
         };
