@@ -327,6 +327,16 @@ where
         }
     }
 
+    // Completely reload from store. Because messages with larger timestamp
+    // can be added to the store earlier than messages with smaller timestamp,
+    // It is possible in regular load_from_store may skip some messages.
+    // We use this method to reset the cursor and load all messages from start.
+    #[cfg(test)]
+    pub(crate) fn reload_from_store(&mut self) {
+        self.reset();
+        self.load_from_store();
+    }
+
     fn load_channel_updates_from_store(&self, channel_info: &mut ChannelInfo) {
         let channel_update_of_node1 = self
             .store
@@ -589,6 +599,7 @@ where
 
     #[cfg(test)]
     pub fn reset(&mut self) {
+        self.latest_cursor = Cursor::default();
         self.channels.clear();
         self.nodes.clear();
         self.history.reset();

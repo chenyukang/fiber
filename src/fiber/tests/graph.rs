@@ -158,7 +158,7 @@ impl MockNetworkGraph {
                 channel_outpoint: channel_outpoint.clone(),
             });
         }
-        self.graph.load_from_store();
+        self.graph.reload_from_store();
     }
 
     pub fn add_edge(
