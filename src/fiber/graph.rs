@@ -718,7 +718,6 @@ where
             });
             current_expiry += expiry;
             current_amount += fee;
-            current_expiry += expiry;
         }
         // Add the first hop as the instruction for the current node, so the logic for send HTLC can be reused.
         hops_data.push(PaymentHopData {
