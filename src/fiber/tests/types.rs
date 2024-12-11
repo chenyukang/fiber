@@ -72,6 +72,43 @@ fn test_serde_cursor_channel_update() {
 }
 
 #[test]
+fn test_cursor_timestamp() {
+    let node_id = gen_rand_public_key();
+    // 255 is larger than 256 in little endian.
+    assert!(
+        Cursor::new(255, BroadcastMessageID::NodeAnnouncement(node_id.clone()))
+            < Cursor::new(256, BroadcastMessageID::NodeAnnouncement(node_id.clone()))
+    );
+}
+
+#[test]
+fn test_cursor_types() {
+    let node_id = gen_rand_public_key();
+    let channel_outpoint = gen_random_channel_outpoint();
+    assert!(
+        Cursor::new(
+            0,
+            BroadcastMessageID::ChannelAnnouncement(channel_outpoint.clone())
+        ) < Cursor::new(0, BroadcastMessageID::NodeAnnouncement(node_id.clone()))
+    );
+    assert!(
+        Cursor::new(
+            0,
+            BroadcastMessageID::ChannelAnnouncement(channel_outpoint.clone())
+        ) < Cursor::new(
+            0,
+            BroadcastMessageID::ChannelUpdate(channel_outpoint.clone())
+        )
+    );
+    assert!(
+        Cursor::new(
+            0,
+            BroadcastMessageID::ChannelUpdate(channel_outpoint.clone())
+        ) < Cursor::new(0, BroadcastMessageID::NodeAnnouncement(node_id.clone()))
+    );
+}
+
+#[test]
 fn test_add_tlc_serialization() {
     let add_tlc = AddTlc {
         channel_id: [42; 32].into(),

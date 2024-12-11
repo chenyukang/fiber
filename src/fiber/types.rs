@@ -2718,7 +2718,7 @@ impl Cursor {
 
     pub fn to_bytes(&self) -> [u8; 45] {
         self.timestamp
-            .to_le_bytes()
+            .to_be_bytes()
             .into_iter()
             .chain(self.message_id.to_bytes())
             .collect::<Vec<_>>()
@@ -2734,7 +2734,7 @@ impl Cursor {
                 CURSOR_SIZE
             )));
         }
-        let timestamp = u64::from_le_bytes(bytes[..8].try_into().expect("Cursor timestamp to u64"));
+        let timestamp = u64::from_be_bytes(bytes[..8].try_into().expect("Cursor timestamp to u64"));
         let message_id = BroadcastMessageID::from_bytes(&bytes[8..])?;
         Ok(Cursor {
             timestamp,
@@ -2751,7 +2751,7 @@ impl Ord for Cursor {
 
 impl PartialOrd for Cursor {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.to_bytes().partial_cmp(&other.to_bytes())
+        Some(self.cmp(other))
     }
 }
 
@@ -2769,7 +2769,7 @@ impl From<Cursor> for molecule_gossip::Cursor {
     fn from(cursor: Cursor) -> Self {
         let serialized = cursor
             .timestamp
-            .to_le_bytes()
+            .to_be_bytes()
             .into_iter()
             .chain(cursor.message_id.to_bytes())
             .map(Byte::new)
@@ -2795,7 +2795,7 @@ impl TryFrom<molecule_gossip::Cursor> for Cursor {
                 CURSOR_SIZE
             )));
         }
-        let timestamp = u64::from_le_bytes(slice[..8].try_into().expect("Cursor timestamp to u64"));
+        let timestamp = u64::from_be_bytes(slice[..8].try_into().expect("Cursor timestamp to u64"));
         let message_id = BroadcastMessageID::from_bytes(&slice[8..])?;
         Ok(Cursor {
             timestamp,

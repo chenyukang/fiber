@@ -266,7 +266,7 @@ impl StoreKeyValue for KeyValue {
                 persistent_network_actor_state,
                 "PersistentNetworkActorState",
             ),
-            KeyValue::BroadcastMessageTimestamp(_, value) => value.to_le_bytes().into(),
+            KeyValue::BroadcastMessageTimestamp(_, value) => value.to_be_bytes().into(),
             KeyValue::BroadcastMessage(_cursor, broadcast_message) => {
                 serialize_to_vec(broadcast_message, "BroadcastMessage")
             }
@@ -489,7 +489,7 @@ impl GossipMessageStore for Store {
                 debug_assert_eq!(key.len(), 1 + CURSOR_SIZE);
                 let mut timestamp_bytes = [0u8; 8];
                 timestamp_bytes.copy_from_slice(&key[1..9]);
-                let timestamp = u64::from_le_bytes(timestamp_bytes);
+                let timestamp = u64::from_be_bytes(timestamp_bytes);
                 let message: BroadcastMessage =
                     deserialize_from(value.as_ref(), "BroadcastMessage");
                 (message, timestamp).into()
@@ -532,7 +532,7 @@ impl GossipMessageStore for Store {
         )
         .map(|v| {
             let v: [u8; 24] = v.try_into().expect("Invalid timestamp value length");
-            u64::from_le_bytes(
+            u64::from_be_bytes(
                 v[..8]
                     .try_into()
                     .expect("timestamp length valid, shown above"),
@@ -557,7 +557,7 @@ impl GossipMessageStore for Store {
         .map(|v| {
             let v: [u8; 24] = v.try_into().expect("Invalid timestamp value length");
             let start_index = if is_node1 { 8 } else { 16 };
-            u64::from_le_bytes(
+            u64::from_be_bytes(
                 v[start_index..start_index + 8]
                     .try_into()
                     .expect("timestamp length valid, shown above"),
@@ -578,7 +578,7 @@ impl GossipMessageStore for Store {
             ]
             .concat(),
         )
-        .map(|v| u64::from_le_bytes(v.try_into().expect("Invalid timestamp value length")))
+        .map(|v| u64::from_be_bytes(v.try_into().expect("Invalid timestamp value length")))
     }
 
     fn save_channel_announcement(
@@ -610,7 +610,7 @@ impl GossipMessageStore for Store {
             .get(&timestamp_key)
             .map(|v| v.try_into().expect("Invalid timestamp value length"))
             .unwrap_or([0u8; 24]);
-        timestamps[..8].copy_from_slice(&timestamp.to_le_bytes());
+        timestamps[..8].copy_from_slice(&timestamp.to_be_bytes());
         batch.put(timestamp_key, timestamps);
 
         // Save the channel announcement
@@ -663,7 +663,7 @@ impl GossipMessageStore for Store {
             16
         };
         timestamps[start_index..start_index + 8]
-            .copy_from_slice(&channel_update.timestamp.to_le_bytes());
+            .copy_from_slice(&channel_update.timestamp.to_be_bytes());
         batch.put(timestamp_key, timestamps);
 
         // Save the channel update
@@ -705,7 +705,7 @@ impl GossipMessageStore for Store {
                 message_id.to_bytes().as_slice(),
             ]
             .concat(),
-            node_announcement.timestamp.to_le_bytes(),
+            node_announcement.timestamp.to_be_bytes(),
         );
 
         // Save the channel update
