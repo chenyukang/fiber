@@ -93,7 +93,7 @@ pub const FUNDING_CELL_WITNESS_LEN: usize = 16 + 32 + 64;
 pub const INITIAL_COMMITMENT_NUMBER: u64 = 0;
 
 // Whether we are receiving a channel update from node1 or node2.
-// If the flag is set, it means the channel update is from node2, otherwise it is from node1.
+// If the flag is set, it means the channel update is from node1, otherwise it is from node2.
 pub const MESSAGE_OF_NODE1_FLAG: u32 = 0;
 
 // Whether we are receiving a channel update from node1 or node2.
