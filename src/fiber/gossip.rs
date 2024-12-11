@@ -57,7 +57,7 @@ const MAX_NUM_OF_BROADCAST_MESSAGES: u16 = 1000;
 pub(crate) const DEFAULT_NUM_OF_BROADCAST_MESSAGE: u16 = 100;
 
 const MAX_NUM_OF_ACTIVE_SYNCING_PEERS: usize = 1;
-const MIN_NUM_OF_PASSIVE_SYNCING_PEERS: usize = 2;
+const MIN_NUM_OF_PASSIVE_SYNCING_PEERS: usize = 3;
 
 const NUM_SIMULTANEOUS_GET_REQUESTS: usize = 1;
 const GET_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -287,10 +287,16 @@ pub trait SubscribableGossipMessageStore {
 }
 
 #[derive(Debug)]
-pub(crate) enum GossipActorMessage {
+pub enum GossipActorMessage {
     // Network events to be processed by this actor.
     PeerConnected(PeerId, Pubkey, SessionContext),
     PeerDisconnected(PeerId, SessionContext),
+
+    // Current implementation will take a few connected peers and send BroadcastMessageFilter to them.
+    // It is almost certain that we will send the filter to the peers that we connected to first.
+    // This message will be used to rotate the list of peers that we send the filter to,
+    // which will make the network more robust.
+    RotatePassiveSyncingPeers,
 
     // The function of TickNetworkMaintenance is to maintain the network state.
     // Currently it will do the following things:
@@ -1475,6 +1481,8 @@ pub enum ExtendedGossipMessageStoreMessage {
 pub(crate) struct GossipActorState<S> {
     store: ExtendedGossipMessageStore<S>,
     control: ServiceAsyncControl,
+    num_of_active_syncing_peers: usize,
+    num_of_passive_syncing_peers: usize,
     next_request_id: u64,
     myself: ActorRef<GossipActorMessage>,
     chain_actor: ActorRef<CkbChainMessage>,
@@ -1504,10 +1512,19 @@ where
     }
 
     fn num_of_passive_syncing_peers(&self) -> usize {
+        self.passive_syncing_peers().len()
+    }
+
+    fn passive_syncing_peers(&self) -> Vec<PeerId> {
         self.peer_states
-            .values()
-            .filter(|state| state.sync_status.is_passive_syncing())
-            .count()
+            .iter()
+            .filter_map(|(peer_id, state)| {
+                state
+                    .sync_status
+                    .is_passive_syncing()
+                    .then_some(peer_id.clone())
+            })
+            .collect()
     }
 
     // Passive syncer should be started when there is at least one peer is in the state of passive syncing.
@@ -1528,33 +1545,44 @@ where
         }
 
         let num_of_active_syncing_peers = self.num_of_active_syncing_peers();
-        if num_of_active_syncing_peers >= MAX_NUM_OF_ACTIVE_SYNCING_PEERS {
+        if num_of_active_syncing_peers >= self.num_of_active_syncing_peers {
             return vec![];
         }
 
         self.peer_states
             .iter()
             .filter(|(_, state)| state.sync_status.can_start_active_syncing())
-            .take(MAX_NUM_OF_ACTIVE_SYNCING_PEERS - num_of_active_syncing_peers)
+            .take(self.num_of_active_syncing_peers - num_of_active_syncing_peers)
             .map(|(peer_id, _)| peer_id)
             .cloned()
             .collect()
     }
 
-    fn peers_to_start_passive_syncing(&self) -> Vec<PeerId> {
+    fn peers_to_start_passive_syncing(&self, rotate: bool) -> Vec<PeerId> {
         if !self.is_ready_for_passive_syncing() {
             return vec![];
         }
 
-        let num_of_passive_syncing_peers = self.num_of_passive_syncing_peers();
-        if num_of_passive_syncing_peers >= MIN_NUM_OF_PASSIVE_SYNCING_PEERS {
+        let num_current_of_passive_syncing_peers = if rotate {
+            0
+        } else {
+            self.num_of_passive_syncing_peers()
+        };
+        if num_current_of_passive_syncing_peers >= self.num_of_passive_syncing_peers {
             return vec![];
         }
 
         self.peer_states
             .iter()
-            .filter(|(_, state)| state.sync_status.can_start_passive_syncing())
-            .take(MIN_NUM_OF_PASSIVE_SYNCING_PEERS - num_of_passive_syncing_peers)
+            .filter(|(_, state)| {
+                if rotate {
+                    state.sync_status.can_start_passive_syncing()
+                        || state.sync_status.is_passive_syncing()
+                } else {
+                    state.sync_status.can_start_passive_syncing()
+                }
+            })
+            .take(self.num_of_passive_syncing_peers - num_current_of_passive_syncing_peers)
             .map(|(peer_id, _)| peer_id)
             .cloned()
             .collect()
@@ -1586,9 +1614,16 @@ where
             .sync_status = PeerSyncStatus::ActiveGet(sync_actor.0);
     }
 
-    async fn start_new_passive_syncer(&mut self, peer_id: &PeerId) {
-        match self.send_broadcast_message_filter(peer_id).await {
-            Ok(cursor) => {
+    async fn start_passive_syncer(&mut self, peer_id: &PeerId) {
+        debug!("Starting passive syncer to peer {:?}", peer_id);
+        let cursor = self.get_safe_cursor_to_start_syncing();
+        let filter = BroadcastMessagesFilter {
+            chain_hash: get_chain_hash(),
+            after_cursor: cursor.clone(),
+        };
+
+        match self.send_broadcast_message_filter(peer_id, filter).await {
+            Ok(_) => {
                 self.peer_states
                     .get_mut(peer_id)
                     .expect("get peer state")
@@ -1603,18 +1638,45 @@ where
         }
     }
 
-    async fn send_broadcast_message_filter(&mut self, peer_id: &PeerId) -> crate::Result<Cursor> {
-        let cursor = self.get_safe_cursor_to_start_syncing();
-        let message = GossipMessage::BroadcastMessagesFilter(BroadcastMessagesFilter {
+    async fn stop_passive_syncer(&mut self, peer_id: &PeerId) {
+        debug!("Stopping passive syncer to peer {:?}", peer_id);
+        let filter = BroadcastMessagesFilter {
             chain_hash: get_chain_hash(),
-            after_cursor: cursor.clone(),
-        });
+            after_cursor: Cursor::max(),
+        };
+        match self.peer_states.get(peer_id) {
+            Some(peer) if peer.sync_status.is_passive_syncing() => {
+                match self.send_broadcast_message_filter(peer_id, filter).await {
+                    Ok(_) => {
+                        self.peer_states
+                            .get_mut(peer_id)
+                            .expect("get peer state")
+                            .sync_status = PeerSyncStatus::NotSyncing();
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to send BroadcastMessagesFilter to peer {:?}: {:?}",
+                            peer_id, e
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    async fn send_broadcast_message_filter(
+        &self,
+        peer_id: &PeerId,
+        filter: BroadcastMessagesFilter,
+    ) -> crate::Result<()> {
         debug!(
             "Sending BroadcastMessagesFilter to peer {:?}: {:?}",
-            &peer_id, &message
+            &peer_id, &filter
         );
+        let message = GossipMessage::BroadcastMessagesFilter(filter);
         self.send_message_to_peer(peer_id, message).await?;
-        Ok(cursor)
+        Ok(())
     }
 
     fn is_peer_connected(&self, peer_id: &PeerId) -> bool {
@@ -2224,6 +2286,8 @@ where
         let state = Self::State {
             store,
             control,
+            num_of_active_syncing_peers: MAX_NUM_OF_ACTIVE_SYNCING_PEERS,
+            num_of_passive_syncing_peers: MIN_NUM_OF_PASSIVE_SYNCING_PEERS,
             myself,
             chain_actor,
             next_request_id: Default::default(),
@@ -2370,6 +2434,32 @@ where
                 }
             }
 
+            GossipActorMessage::RotatePassiveSyncingPeers => {
+                let current_peers = state
+                    .passive_syncing_peers()
+                    .into_iter()
+                    .collect::<HashSet<_>>();
+                let new_peers = state
+                    .peers_to_start_passive_syncing(true)
+                    .into_iter()
+                    .collect::<HashSet<_>>();
+                debug!(
+                    "Rotating passive syncing peers: current {:?}, new {:?}",
+                    &current_peers, &new_peers
+                );
+                for peers in new_peers.difference(&current_peers) {
+                    debug!(
+                        "Starting new passive syncer to peer for rotation {:?}",
+                        &peers
+                    );
+                    state.start_passive_syncer(&peers).await;
+                }
+                for peers in current_peers.difference(&new_peers) {
+                    debug!("Stopping passive syncer to peer for rotation {:?}", &peers);
+                    state.stop_passive_syncer(&peers).await;
+                }
+            }
+
             GossipActorMessage::TickNetworkMaintenance => {
                 trace!(
                     "Gossip network maintenance ticked, current state: num of peers: {}, num of finished syncing peers: {}, num of active syncing peers: {}, num of passive syncing peers: {}, num of pending queries: {}, peer states: {:?}",
@@ -2385,9 +2475,9 @@ where
                     state.start_new_active_syncer(&peer).await;
                 }
 
-                for peer in state.peers_to_start_passive_syncing() {
+                for peer in state.peers_to_start_passive_syncing(false) {
                     debug!("Starting new passive syncer for peer {:?}", &peer);
-                    state.start_new_passive_syncer(&peer).await;
+                    state.start_passive_syncer(&peer).await;
                 }
 
                 // Query missing messages from peers.
@@ -2446,6 +2536,14 @@ where
                         after_cursor,
                     }) => {
                         check_chain_hash(&chain_hash)?;
+                        if after_cursor.is_max() {
+                            info!(
+                                "Received BroadcastMessagesFilter with max cursor from peer, stopping filter processor to {:?}",
+                                &peer_id
+                            );
+                            state.peer_states.remove(&peer_id);
+                            return Ok(());
+                        }
                         match state.peer_states.get_mut(&peer_id) {
                             Some(peer_state) => match peer_state.filter_processor.as_mut() {
                                 Some(filter_processor) => {

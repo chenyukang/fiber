@@ -2741,6 +2741,19 @@ impl Cursor {
             message_id,
         })
     }
+
+    // A dummy cursor with the maximum timestamp and a dummy message id. This is useful when
+    // we want to create a cursor after which none of the messages should be included.
+    pub fn max() -> Self {
+        Self {
+            timestamp: u64::MAX,
+            message_id: BroadcastMessageID::ChannelAnnouncement(OutPoint::default()),
+        }
+    }
+
+    pub fn is_max(&self) -> bool {
+        self.timestamp == u64::MAX
+    }
 }
 
 impl Ord for Cursor {
