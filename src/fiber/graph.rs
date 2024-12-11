@@ -316,6 +316,12 @@ where
     // Load all the broadcast messages starting from latest_cursor from the store.
     // Process them and set nodes and channels accordingly.
     pub(crate) fn load_from_store(&mut self) {
+        dbg!(
+            "Loading from store",
+            &self.nodes,
+            &self.channels,
+            &self.latest_cursor
+        );
         loop {
             let messages = self.store.get_broadcast_messages(&self.latest_cursor, None);
             if messages.is_empty() {
@@ -323,6 +329,12 @@ where
             }
             self.update_for_messages(messages);
         }
+        dbg!(
+            "Loading from store",
+            &self.nodes,
+            &self.channels,
+            &self.latest_cursor
+        );
     }
 
     // Completely reload from store. Because messages with larger timestamp
