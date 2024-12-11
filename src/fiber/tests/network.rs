@@ -171,7 +171,7 @@ async fn create_a_channel() -> (NetworkNode, ChannelAnnouncement, Privkey, Privk
     .await;
 
     // Wait for the broadcast message to be processed.
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     let outpoint = funding_tx.output_pts_iter().next().unwrap();
     node2.stop().await;
 
@@ -219,7 +219,8 @@ async fn test_node1_node2_channel_update() {
         channel_update
     };
 
-    let channel_update_of_node1 = create_channel_update(now_timestamp_as_millis_u64(), 0, sk1);
+    let channel_update_of_node1 =
+        create_channel_update(now_timestamp_as_millis_u64(), MESSAGE_OF_NODE1_FLAG, sk1);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
     let new_channel_info = node
@@ -231,7 +232,8 @@ async fn test_node1_node2_channel_update() {
         Some(ChannelUpdateInfo::from(&channel_update_of_node1))
     );
 
-    let channel_update_of_node2 = create_channel_update(now_timestamp_as_millis_u64(), 1, sk2);
+    let channel_update_of_node2 =
+        create_channel_update(now_timestamp_as_millis_u64(), MESSAGE_OF_NODE2_FLAG, sk2);
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
     let new_channel_info = node
