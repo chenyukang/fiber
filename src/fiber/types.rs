@@ -2357,9 +2357,19 @@ impl BroadcastMessage {
             messages: vec![self.clone()],
         })
     }
+
+    pub fn cursor(&self) -> Option<Cursor> {
+        match self {
+            BroadcastMessage::ChannelAnnouncement(_) => None,
+            BroadcastMessage::ChannelUpdate(channel_update) => Some(channel_update.cursor()),
+            BroadcastMessage::NodeAnnouncement(node_announcement) => {
+                Some(node_announcement.cursor())
+            }
+        }
+    }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BroadcastMessageWithTimestamp {
     NodeAnnouncement(NodeAnnouncement),
     ChannelAnnouncement(u64, ChannelAnnouncement),

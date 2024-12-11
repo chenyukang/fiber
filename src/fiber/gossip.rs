@@ -1,4 +1,9 @@
-use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+    sync::Arc,
+    time::Duration,
+};
 
 use ckb_hash::blake2b_256;
 use ckb_jsonrpc_types::{Status, TxStatus};
@@ -474,15 +479,15 @@ where
                     match messages.last() {
                         Some(last_message) => {
                             // We need the message timestamp to construct a valid cursor.
-                            match partially_verify_broadcast_message(
+                            match get_message_cursor(
                                 last_message.clone(),
                                 &state.store.store,
                                 &state.chain_actor,
                             )
                             .await
                             {
-                                Ok((m, _)) => {
-                                    state.cursor = m.cursor();
+                                Ok(cursor) => {
+                                    state.cursor = cursor;
                                 }
                                 Err(error) => {
                                     warn!(
@@ -979,7 +984,7 @@ pub struct ExtendedGossipMessageStoreState<S> {
     next_id: u64,
     output_ports: HashMap<u64, BroadcastMessageOutput>,
     last_cursor: Cursor,
-    messages_to_be_saved: HashMap<BroadcastMessageID, BroadcastMessageWithTimestamp>,
+    messages_to_be_saved: HashSet<BroadcastMessageWithTimestamp>,
     // TODO: we need to remove the notifiers that are there for a long time to avoid memory leak
     // when the node is running for a long time.
     message_saving_notifier: HashMap<Cursor, GossipMessageSavingNotificationSender>,
@@ -1052,44 +1057,133 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
     // Saving all the messages whose transitive dependencies are already available.
     // We will also change the relevant state (e.g. update the latest cursor).
     // The returned list may be sent to the subscribers.
-    fn prune_complete_messages_to_be_saved(&mut self) -> Vec<BroadcastMessageWithTimestamp> {
+    fn prune_messages_to_be_saved(&mut self) -> Vec<BroadcastMessageWithTimestamp> {
         let complete_messages = self
             .messages_to_be_saved
-            .values()
+            .iter()
             .filter(|m| self.has_transitive_dependencies(m))
             .cloned()
-            .collect::<Vec<_>>();
+            .collect::<HashSet<_>>();
         self.messages_to_be_saved
-            .retain(|_, v| !complete_messages.contains(v));
+            .retain(|v| !complete_messages.contains(v));
         for message in &complete_messages {
             self.save_broadcast_message(message.clone());
         }
 
-        complete_messages
+        let mut sorted_messages = Vec::with_capacity(complete_messages.len());
+        let mut message_latest_cursors = HashMap::new();
+
+        for message in complete_messages {
+            let key = (
+                message.message_id(),
+                match &message {
+                    // Message id alone is not enough to differentiate channel updates.
+                    // We need a flag to indicate if the message is an update of node 1.
+                    BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                        channel_update.is_update_of_node_1()
+                    }
+                    _ => false,
+                },
+            );
+            match message_latest_cursors.get(&key) {
+                // Ignore the message if we already have a newer message in the list.
+                Some(latest_cursor) if latest_cursor > &message.cursor() => continue,
+                _ => {
+                    message_latest_cursors.insert(key, message.cursor());
+                    sorted_messages.extend(self.get_dependent_messages_in_memory(&message));
+                    sorted_messages.push(message);
+                }
+            }
+        }
+
+        sorted_messages
     }
 
-    fn has_node_announcement(&self, node_id: &Pubkey) -> bool {
+    fn get_node_announcement(&self, node_id: &Pubkey) -> Option<NodeAnnouncement> {
         self.store
-            .get_latest_node_announcement_timestamp(node_id)
-            .is_some()
-            || self
-                .messages_to_be_saved
-                .contains_key(&BroadcastMessageID::NodeAnnouncement(node_id.clone()))
+            .get_latest_node_announcement(node_id)
+            .or_else(|| self.get_node_announcement_in_memory(node_id))
     }
 
-    fn get_channel_annnouncement(&self, outpoint: &OutPoint) -> Option<ChannelAnnouncement> {
+    fn get_node_announcement_in_memory(&self, node_id: &Pubkey) -> Option<NodeAnnouncement> {
+        self.messages_to_be_saved.iter().find_map(|m| match m {
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement)
+                if &node_announcement.node_id == node_id =>
+            {
+                Some(node_announcement.clone())
+            }
+            _ => None,
+        })
+    }
+
+    fn get_channel_annnouncement(&self, outpoint: &OutPoint) -> Option<(u64, ChannelAnnouncement)> {
         self.store
             .get_latest_channel_announcement(outpoint)
-            .map(|(_, channel_announcement)| channel_announcement)
-            .or(self
-                .messages_to_be_saved
-                .get(&BroadcastMessageID::ChannelAnnouncement(outpoint.clone()))
-                .and_then(|message| match message {
-                    BroadcastMessageWithTimestamp::ChannelAnnouncement(_, channel_announcement) => {
-                        Some(channel_announcement.clone())
+            .or_else(|| self.get_channel_annnouncement_in_memory(outpoint))
+    }
+
+    fn get_channel_annnouncement_in_memory(
+        &self,
+        outpoint: &OutPoint,
+    ) -> Option<(u64, ChannelAnnouncement)> {
+        self.messages_to_be_saved.iter().find_map(|m| match m {
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement)
+                if &channel_announcement.channel_outpoint == outpoint =>
+            {
+                Some((*timestamp, channel_announcement.clone()))
+            }
+            _ => None,
+        })
+    }
+
+    fn get_dependent_messages_in_memory(
+        &self,
+        message: &BroadcastMessageWithTimestamp,
+    ) -> Vec<BroadcastMessageWithTimestamp> {
+        debug!("Getting transitive dependencies for message {:?}", message);
+        let mut messages = vec![];
+        match message {
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(_, channel_announcement) => {
+                match self.get_node_announcement_in_memory(&channel_announcement.node1_id) {
+                    Some(node_announcement) => {
+                        messages.push(BroadcastMessageWithTimestamp::NodeAnnouncement(
+                            node_announcement,
+                        ));
                     }
-                    _ => None,
-                }))
+                    _ => {}
+                };
+                match self.get_node_announcement_in_memory(&channel_announcement.node2_id) {
+                    None => return vec![],
+                    Some(node_announcement) => {
+                        messages.push(BroadcastMessageWithTimestamp::NodeAnnouncement(
+                            node_announcement,
+                        ));
+                    }
+                }
+            }
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                match self.get_channel_annnouncement(&channel_update.channel_outpoint) {
+                    Some((timestamp, channel_announcement)) => {
+                        let channel_announcement =
+                            BroadcastMessageWithTimestamp::ChannelAnnouncement(
+                                timestamp,
+                                channel_announcement,
+                            );
+                        messages
+                            .extend(self.get_dependent_messages_in_memory(&channel_announcement));
+                        messages.push(channel_announcement);
+                    }
+                    _ => {
+                        panic!(
+                            "Channel announcement not found for channel update: {:?}",
+                            channel_update
+                        );
+                    }
+                }
+            }
+            BroadcastMessageWithTimestamp::NodeAnnouncement(_) => {}
+        }
+        messages
     }
 
     fn has_transitive_dependencies(&self, message: &BroadcastMessageWithTimestamp) -> bool {
@@ -1099,32 +1193,21 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
         );
         match message {
             BroadcastMessageWithTimestamp::ChannelAnnouncement(_, channel_announcement) => {
-                let node1 = &channel_announcement.node1_id;
-                let node2 = &channel_announcement.node2_id;
-                debug!(
-                    "Verifying transitive dependencies for channel announcement: node1 {:?} {}, node2 {:?} {}",
-                    node1, self.has_node_announcement(node1), node2, self.has_node_announcement(node2)
-                );
-                self.has_node_announcement(node1) && self.has_node_announcement(node2)
+                self.get_node_announcement(&channel_announcement.node1_id)
+                    .is_some()
+                    && self
+                        .get_node_announcement(&channel_announcement.node2_id)
+                        .is_some()
             }
             BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
                 match self.get_channel_annnouncement(&channel_update.channel_outpoint) {
-                    Some(channel_announcement) => {
-                        let node1 = &channel_announcement.node1_id;
-                        let node2 = &channel_announcement.node2_id;
-                        debug!(
-                            "Verifying transitive dependencies for channel update: node1 {:?} {}, node2 {:?} {}",
-                            node1, self.has_node_announcement(node1), node2, self.has_node_announcement(node2)
-                        );
-                        self.has_node_announcement(node1) && self.has_node_announcement(node2)
-                    }
-                    None => {
-                        debug!(
-                            "Channel announcement not found for channel update: {:?}",
-                            channel_update
-                        );
-                        false
-                    }
+                    Some((timestamp, channel_announcement)) => self.has_transitive_dependencies(
+                        &BroadcastMessageWithTimestamp::ChannelAnnouncement(
+                            timestamp,
+                            channel_announcement,
+                        ),
+                    ),
+                    _ => false,
                 }
             }
             BroadcastMessageWithTimestamp::NodeAnnouncement(_) => true,
@@ -1261,6 +1344,17 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
             }
 
             ExtendedGossipMessageStoreMessage::SaveMessage(message, wait_for_saving, reply) => {
+                if let Some(existing_message) =
+                    get_existing_newer_broadcast_message(&message, &state.store)
+                {
+                    let _ = reply.send(Err(Error::InvalidParameter(format!(
+                            "An existing broadcast message already saved to store: existing {:?}, new message to store {:?}",
+                            existing_message,
+                            message
+                        ))));
+                    return Ok(());
+                }
+
                 let (message, _) = match partially_verify_broadcast_message(
                     message.clone(),
                     &state.store,
@@ -1276,7 +1370,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                         let _ = reply.send(Err(error));
                         return Ok(());
                     }
-                    Ok((verified_message, should_save)) => (verified_message, should_save),
+                    Ok((verified_message, is_complete)) => (verified_message, is_complete),
                 };
 
                 if message.timestamp()
@@ -1301,23 +1395,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 }
 
                 trace!("ExtendedGossipMessageActor saving message: {:?}", message);
-                let message_cursor = message.cursor();
-                let message_id = message.message_id();
-                match state.messages_to_be_saved.get(&message_id) {
-                    Some(saved_message) if saved_message.timestamp() > message.timestamp() => {
-                        let error = GossipMessageProcessingError::NewerMessageSaved(format!(
-                            "A newer message is already saved: {:?}",
-                            saved_message
-                        ));
-                        state.notify_message_saving_result(&message_cursor, Err(error));
-                        return Ok(());
-                    }
-                    _ => {
-                        state
-                            .messages_to_be_saved
-                            .insert(message_id, message.clone());
-                    }
-                }
+                state.messages_to_be_saved.insert(message);
             }
 
             ExtendedGossipMessageStoreMessage::Tick => {
@@ -1332,7 +1410,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                     state.messages_to_be_saved
                 );
 
-                let complete_messages = state.prune_complete_messages_to_be_saved();
+                let complete_messages = state.prune_messages_to_be_saved();
 
                 // We need to send the lagged complete messages to the subscribers. After doing this,
                 // we may remove the messages from the lagged_messages.
@@ -1667,6 +1745,65 @@ fn get_dependent_message_queries<S: GossipMessageStore>(
         BroadcastMessage::NodeAnnouncement(_node_announcement) => {}
     }
     queries
+}
+
+async fn get_message_cursor<S: GossipMessageStore>(
+    message: BroadcastMessage,
+    store: &S,
+    chain: &ActorRef<CkbChainMessage>,
+) -> Result<Cursor, Error> {
+    let m = match message {
+        BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
+            let timestamp =
+                verify_channel_announcement(&channel_announcement, store, chain).await?;
+            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement)
+        }
+        BroadcastMessage::ChannelUpdate(channel_update) => {
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update)
+        }
+        BroadcastMessage::NodeAnnouncement(node_announcement) => {
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement)
+        }
+    };
+    Ok(m.cursor())
+}
+
+fn get_existing_broadcast_message<S: GossipMessageStore>(
+    message: &BroadcastMessage,
+    store: &S,
+) -> Option<BroadcastMessageWithTimestamp> {
+    match message {
+        BroadcastMessage::ChannelAnnouncement(channel_announcement) => store
+            .get_latest_channel_announcement(&channel_announcement.channel_outpoint)
+            .map(|(timestamp, channel_announcement)| {
+                BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement)
+            }),
+        BroadcastMessage::ChannelUpdate(channel_update) => store
+            .get_latest_channel_update(
+                &channel_update.channel_outpoint,
+                channel_update.is_update_of_node_1(),
+            )
+            .map(|store_channel_update| {
+                BroadcastMessageWithTimestamp::ChannelUpdate(store_channel_update)
+            }),
+        BroadcastMessage::NodeAnnouncement(node_announcement) => store
+            .get_latest_node_announcement(&node_announcement.node_id)
+            .map(|store_node_announcement| {
+                BroadcastMessageWithTimestamp::NodeAnnouncement(store_node_announcement)
+            }),
+    }
+}
+
+fn get_existing_newer_broadcast_message<S: GossipMessageStore>(
+    message: &BroadcastMessage,
+    store: &S,
+) -> Option<BroadcastMessageWithTimestamp> {
+    get_existing_broadcast_message(message, store).and_then(|existing_message| {
+        match message.cursor() {
+            Some(cursor) if cursor > existing_message.cursor() => None,
+            _ => Some(existing_message),
+        }
+    })
 }
 
 // Channel updates depends on channel announcements to obtain the node public keys.
