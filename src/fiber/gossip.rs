@@ -226,25 +226,36 @@ impl GossipMessageUpdates {
     }
 }
 
-// New messages will be added to the store every now and then.
-// These messages are not guaranteed to be saved to the store in order.
-// This trait provides a way to subscribe to the updates of the gossip message store.
-// The subscriber will receive a batch of messages that are added to the store since the last time
-// we sent messages to the subscriber.
+/// New messages will be added to the store every now and then.
+/// These messages are not guaranteed to be saved to the store in order.
+/// This trait provides a way to subscribe to the updates of the gossip message store.
+/// The subscriber will receive a batch of messages that are added to the store since the last time
+/// we sent messages to the subscriber.
 #[rasync_trait]
 pub trait SubscribableGossipMessageStore {
     type Subscription;
     type Error: std::error::Error;
 
-    // Initialize a subscription for gossip message updates, the receiver will receive a batch of
-    // messages that are added to the store since the last time we sent messages to the receiver.
-    // These messages are first processed by the converter. When it is unideal to send messages to
-    // the receiver the converter should return a None, otherwise it can return some message of type
-    // TReceiverMsg, which would then be sent to the receiver actor.
-    // The cursor here specifies the starting point of the subscription. If it is None, the subscription
-    // will start from the very latest message in the store.
-    // If there are already some messages in the store that are newer than the cursor, the receiver
-    // will receive these messages immediately after the subscription is created.
+    /// Initialize a subscription for gossip message updates, the receiver will receive a batch of
+    /// messages that are added to the store since the last time we sent messages to the receiver.
+    /// These messages are first processed by the converter. When it is unideal to send messages to
+    /// the receiver the converter should return a None, otherwise it can return some message of type
+    /// TReceiverMsg, which would then be sent to the receiver actor.
+    /// The cursor here specifies the starting point of the subscription. If it is None, the subscription
+    /// will start from the very latest message in the store.
+    /// If there are already some messages in the store that are newer than the cursor, the receiver
+    /// will receive these messages immediately after the subscription is created.
+    /// Note that the messages are not guaranteed to be sent in ascending order of timestamp,
+    /// or in the order of logic dependency (e.g. ChannelAnnouncement is sent before ChannelUpdate).
+    /// But we guarantee that the dependencies of the messages will eventually be sent out.
+    /// Or if an message is sent to the receiver, all its dependencies are already saved to the store.
+    /// We only make this weak guarantee because it simplifies the implementation a lot.
+    /// The above weak guarantee is enough for two of the use cases of this subscription:
+    /// 1. Sending newer gossip messages to peers via BroadcastMessageFilterResult.
+    /// 2. Updating graph data structures (e.g. ChannelManager) with the latest gossip messages.
+    /// For the first use case, all the messages are cached first, so we won't directly save a
+    /// message without unmet dependencies to the store. For the second use case, we can always
+    /// read their dependencies from the store.
     async fn subscribe<
         TReceiverMsg: ractor::Message,
         F: Fn(GossipMessageUpdates) -> Option<TReceiverMsg> + Send + 'static,
@@ -255,9 +266,9 @@ pub trait SubscribableGossipMessageStore {
         converter: F,
     ) -> Result<Self::Subscription, Self::Error>;
 
-    // Unsubscribe from the gossip message store updates. The subscription parameter is the return value
-    // of the subscribe function. The new cursor will be used to determine the starting point of the
-    // next batch of messages that will be sent to the receiver.
+    /// Unsubscribe from the gossip message store updates. The subscription parameter is the return value
+    /// of the subscribe function. The new cursor will be used to determine the starting point of the
+    /// next batch of messages that will be sent to the receiver.
     async fn update_subscription(
         &self,
         subscription: &Self::Subscription,
@@ -944,6 +955,10 @@ impl BroadcastMessageOutput {
     }
 }
 
+// This is the error type for processing the gossip messages.
+// Sometimes we can't be very sure of if a gossip message is valid on a first sight.
+// For example, a ChannelUpdate message may be signed with a different node's key,
+// but we won't be able to find this out until we have the corresponding ChannelAnnouncement.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum GossipMessageProcessingError {
     #[error("Failed to process the message: {0}")]
@@ -1173,6 +1188,12 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                             "Loading messages from store for subscriber {}: subscription cursor {:?}, store cursor {:?}",
                             id, cursor, store_last_cursor_while_starting
                         );
+                        // Since the handling of LoadMessagesFromStore interleaves with the handling of Tick,
+                        // we may send the messages in an order that is different from both the dependency order
+                        // and the timestamp order. This means that we may send a ChannelUpdate while handling
+                        // Tick and later we will send the corresponding ChannelAnnouncement.
+                        // So the downstream consumer need to either cache some of the messages and wait for the
+                        // dependent messages to arrive or read the messages from the store directly.
                         myself.send_message(
                             ExtendedGossipMessageStoreMessage::LoadMessagesFromStore(
                                 id,
