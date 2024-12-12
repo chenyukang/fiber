@@ -1779,18 +1779,6 @@ pub struct NetworkActorState<S> {
     gossip_actor: ActorRef<GossipActorMessage>,
     // Whether to announce private address to the network.
     announce_private_addr: bool,
-    // A hashset to store the list of all broadcasted messages.
-    // This is used to avoid re-broadcasting the same message over and over again
-    // TODO: some more intelligent way to manage broadcasting.
-    // 1) The hashset is not a constant size, so we may need to remove old messages.
-    // We can use bloom filter to efficiently check if a message is already broadcasted.
-    // But there is a possibility of false positives. In that case, we can use different
-    // hash functions to make different nodes have different false positives.
-    // 2) The broadcast message NodeAnnouncement and ChannelUpdate have a timestamp field.
-    // We can use this field to determine if a message is too old to be broadcasted.
-    // We didn't check the timestamp field here but all nodes should only save the latest
-    // message of the same type.
-    broadcasted_messages: HashSet<Hash256>,
     channel_subscribers: ChannelSubscribers,
     max_inbound_peers: usize,
     min_outbound_peers: usize,
@@ -1927,10 +1915,6 @@ where
         self.last_node_announcement_message
             .clone()
             .expect("last node announcement message is present")
-    }
-
-    pub fn should_message_be_broadcasted(&mut self, message: &BroadcastMessage) -> bool {
-        self.broadcasted_messages.insert(message.id())
     }
 
     pub fn get_public_key(&self) -> Pubkey {
@@ -3010,7 +2994,6 @@ where
             tlc_fee_proportional_millionths: config.tlc_fee_proportional_millionths(),
             gossip_actor,
             announce_private_addr: config.announce_private_addr.unwrap_or_default(),
-            broadcasted_messages: Default::default(),
             channel_subscribers,
             max_inbound_peers: config.max_inbound_peers(),
             min_outbound_peers: config.min_outbound_peers(),
