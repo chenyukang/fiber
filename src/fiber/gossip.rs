@@ -178,7 +178,7 @@ pub trait GossipMessageStore {
             .and_then(|timestamp| {
                  self.get_broadcast_message_with_cursor(&Cursor::new(
                     timestamp,
-                    BroadcastMessageID::ChannelUpdate(outpoint.clone(), is_node1),
+                    BroadcastMessageID::ChannelUpdate(outpoint.clone()),
                 )).and_then(|message| match message {
                     BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => Some(channel_update),
                     _ => panic!("get_latest_channel_update returned non-ChannelUpdate message from db: channel outpoint {:?}, is_node1 {:?}, message {:?}", outpoint, is_node1, message),

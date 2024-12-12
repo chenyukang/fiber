@@ -6,17 +6,16 @@ array SchnorrSignature [byte; 64];
 array SchnorrXOnlyPubkey [byte; 32];
 
 // A cursor for the broadcast message. Consists of the following data
-// timestamp (8 bytes in big-endian), union id (1 byte), message id (37 bytes)
+// timestamp (8 bytes in big-endian), union id (1 byte), message id (36 bytes)
 // where message ID is defined as
-// ChannelAnnouncement (union ID 0): channel_outpoint, 36 bytes padded 1 zero bytes.
-// ChannelUpdate (union ID 1): channel_outpoint, 36 bytes + 1 byte for update direction,
-// 0 is for channel update of node 1, while 1 is for channel update of node 2. 
-// NodeAnnouncement (union ID 2): node_id 33 bytes padded 4 zero bytes.
+// ChannelAnnouncement (union ID 0): channel_outpoint, 36 bytes
+// ChannelUpdate (union ID 1): channel_outpoint, 36 bytes
+// NodeAnnouncement (union ID 2): node_id 33 bytes padding 3 zero bytes
 // All broadcast messages are sorted by Cursor in dictionary order,
 // so whenever we pass a `after_cursor` parameter below, we want data that
 // come after the `after_cursor` in dictionary order, which basically means that we
 // need data after certain timestamp.
-array Cursor [byte; 46];
+array Cursor [byte; 45];
 
 // BroadcastMessageQuery is a query sent to another peer to query
 // ChannelAnnouncement/ChannelUpdate/NodeAnnouncement messages related a channel outpoint.

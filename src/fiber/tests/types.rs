@@ -65,15 +65,10 @@ fn test_serde_cursor_channel_announcement() {
 fn test_serde_cursor_channel_update() {
     let now = 0u64;
     let channel_update_id = gen_random_channel_outpoint();
-    for b in vec![true, false] {
-        let cursor = Cursor::new(
-            now,
-            BroadcastMessageID::ChannelUpdate(channel_update_id.clone(), b),
-        );
-        let moleculed_cursor: gossip::Cursor = cursor.clone().into();
-        let unmoleculed_cursor: Cursor = moleculed_cursor.try_into().expect("decode");
-        assert_eq!(cursor, unmoleculed_cursor);
-    }
+    let cursor = Cursor::new(now, BroadcastMessageID::ChannelUpdate(channel_update_id));
+    let moleculed_cursor: gossip::Cursor = cursor.clone().into();
+    let unmoleculed_cursor: Cursor = moleculed_cursor.try_into().expect("decode");
+    assert_eq!(cursor, unmoleculed_cursor);
 }
 
 #[test]
@@ -102,22 +97,13 @@ fn test_cursor_types() {
             BroadcastMessageID::ChannelAnnouncement(channel_outpoint.clone())
         ) < Cursor::new(
             0,
-            BroadcastMessageID::ChannelUpdate(channel_outpoint.clone(), true)
+            BroadcastMessageID::ChannelUpdate(channel_outpoint.clone())
         )
     );
     assert!(
         Cursor::new(
             0,
-            BroadcastMessageID::ChannelUpdate(channel_outpoint.clone(), true)
-        ) < Cursor::new(
-            0,
-            BroadcastMessageID::ChannelUpdate(channel_outpoint.clone(), false)
-        )
-    );
-    assert!(
-        Cursor::new(
-            0,
-            BroadcastMessageID::ChannelUpdate(channel_outpoint.clone(), false)
+            BroadcastMessageID::ChannelUpdate(channel_outpoint.clone())
         ) < Cursor::new(0, BroadcastMessageID::NodeAnnouncement(node_id.clone()))
     );
 }

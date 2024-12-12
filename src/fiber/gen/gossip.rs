@@ -2021,13 +2021,13 @@ impl ::core::default::Default for Cursor {
     }
 }
 impl Cursor {
-    const DEFAULT_VALUE: [u8; 46] = [
+    const DEFAULT_VALUE: [u8; 45] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    pub const TOTAL_SIZE: usize = 46;
+    pub const TOTAL_SIZE: usize = 45;
     pub const ITEM_SIZE: usize = 1;
-    pub const ITEM_COUNT: usize = 46;
+    pub const ITEM_COUNT: usize = 45;
     pub fn nth0(&self) -> Byte {
         Byte::new_unchecked(self.0.slice(0..1))
     }
@@ -2163,9 +2163,6 @@ impl Cursor {
     pub fn nth44(&self) -> Byte {
         Byte::new_unchecked(self.0.slice(44..45))
     }
-    pub fn nth45(&self) -> Byte {
-        Byte::new_unchecked(self.0.slice(45..46))
-    }
     pub fn raw_data(&self) -> molecule::bytes::Bytes {
         self.as_bytes()
     }
@@ -2241,7 +2238,6 @@ impl molecule::prelude::Entity for Cursor {
             self.nth42(),
             self.nth43(),
             self.nth44(),
-            self.nth45(),
         ])
     }
 }
@@ -2269,9 +2265,9 @@ impl<'r> ::core::fmt::Display for CursorReader<'r> {
     }
 }
 impl<'r> CursorReader<'r> {
-    pub const TOTAL_SIZE: usize = 46;
+    pub const TOTAL_SIZE: usize = 45;
     pub const ITEM_SIZE: usize = 1;
-    pub const ITEM_COUNT: usize = 46;
+    pub const ITEM_COUNT: usize = 45;
     pub fn nth0(&self) -> ByteReader<'r> {
         ByteReader::new_unchecked(&self.as_slice()[0..1])
     }
@@ -2407,9 +2403,6 @@ impl<'r> CursorReader<'r> {
     pub fn nth44(&self) -> ByteReader<'r> {
         ByteReader::new_unchecked(&self.as_slice()[44..45])
     }
-    pub fn nth45(&self) -> ByteReader<'r> {
-        ByteReader::new_unchecked(&self.as_slice()[45..46])
-    }
     pub fn raw_data(&self) -> &'r [u8] {
         self.as_slice()
     }
@@ -2436,7 +2429,7 @@ impl<'r> molecule::prelude::Reader<'r> for CursorReader<'r> {
     }
 }
 #[derive(Clone)]
-pub struct CursorBuilder(pub(crate) [Byte; 46]);
+pub struct CursorBuilder(pub(crate) [Byte; 45]);
 impl ::core::fmt::Debug for CursorBuilder {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{}({:?})", Self::NAME, &self.0[..])
@@ -2490,15 +2483,14 @@ impl ::core::default::Default for CursorBuilder {
             Byte::default(),
             Byte::default(),
             Byte::default(),
-            Byte::default(),
         ])
     }
 }
 impl CursorBuilder {
-    pub const TOTAL_SIZE: usize = 46;
+    pub const TOTAL_SIZE: usize = 45;
     pub const ITEM_SIZE: usize = 1;
-    pub const ITEM_COUNT: usize = 46;
-    pub fn set(mut self, v: [Byte; 46]) -> Self {
+    pub const ITEM_COUNT: usize = 45;
+    pub fn set(mut self, v: [Byte; 45]) -> Self {
         self.0 = v;
         self
     }
@@ -2682,10 +2674,6 @@ impl CursorBuilder {
         self.0[44] = v;
         self
     }
-    pub fn nth45(mut self, v: Byte) -> Self {
-        self.0[45] = v;
-        self
-    }
 }
 impl molecule::prelude::Builder for CursorBuilder {
     type Entity = Cursor;
@@ -2739,7 +2727,6 @@ impl molecule::prelude::Builder for CursorBuilder {
         writer.write_all(self.0[42].as_slice())?;
         writer.write_all(self.0[43].as_slice())?;
         writer.write_all(self.0[44].as_slice())?;
-        writer.write_all(self.0[45].as_slice())?;
         Ok(())
     }
     fn build(&self) -> Self::Entity {
@@ -2749,8 +2736,8 @@ impl molecule::prelude::Builder for CursorBuilder {
         Cursor::new_unchecked(inner.into())
     }
 }
-impl From<[Byte; 46usize]> for Cursor {
-    fn from(value: [Byte; 46usize]) -> Self {
+impl From<[Byte; 45usize]> for Cursor {
+    fn from(value: [Byte; 45usize]) -> Self {
         Self::new_builder().set(value).build()
     }
 }
@@ -2758,11 +2745,11 @@ impl ::core::convert::TryFrom<&[Byte]> for Cursor {
     type Error = ::core::array::TryFromSliceError;
     fn try_from(value: &[Byte]) -> Result<Self, ::core::array::TryFromSliceError> {
         Ok(Self::new_builder()
-            .set(<&[Byte; 46usize]>::try_from(value)?.clone())
+            .set(<&[Byte; 45usize]>::try_from(value)?.clone())
             .build())
     }
 }
-impl From<Cursor> for [Byte; 46usize] {
+impl From<Cursor> for [Byte; 45usize] {
     #[track_caller]
     fn from(value: Cursor) -> Self {
         [
@@ -2811,34 +2798,33 @@ impl From<Cursor> for [Byte; 46usize] {
             value.nth42(),
             value.nth43(),
             value.nth44(),
-            value.nth45(),
         ]
     }
 }
-impl From<[u8; 46usize]> for Cursor {
-    fn from(value: [u8; 46usize]) -> Self {
+impl From<[u8; 45usize]> for Cursor {
+    fn from(value: [u8; 45usize]) -> Self {
         CursorReader::new_unchecked(&value).to_entity()
     }
 }
 impl ::core::convert::TryFrom<&[u8]> for Cursor {
     type Error = ::core::array::TryFromSliceError;
     fn try_from(value: &[u8]) -> Result<Self, ::core::array::TryFromSliceError> {
-        Ok(<[u8; 46usize]>::try_from(value)?.into())
+        Ok(<[u8; 45usize]>::try_from(value)?.into())
     }
 }
-impl From<Cursor> for [u8; 46usize] {
+impl From<Cursor> for [u8; 45usize] {
     #[track_caller]
     fn from(value: Cursor) -> Self {
         ::core::convert::TryFrom::try_from(value.as_slice()).unwrap()
     }
 }
-impl<'a> From<CursorReader<'a>> for &'a [u8; 46usize] {
+impl<'a> From<CursorReader<'a>> for &'a [u8; 45usize] {
     #[track_caller]
     fn from(value: CursorReader<'a>) -> Self {
         ::core::convert::TryFrom::try_from(value.as_slice()).unwrap()
     }
 }
-impl<'a> From<&'a CursorReader<'a>> for &'a [u8; 46usize] {
+impl<'a> From<&'a CursorReader<'a>> for &'a [u8; 45usize] {
     #[track_caller]
     fn from(value: &'a CursorReader<'a>) -> Self {
         ::core::convert::TryFrom::try_from(value.as_slice()).unwrap()
@@ -5735,19 +5721,19 @@ impl ::core::default::Default for BroadcastMessagesFilter {
     }
 }
 impl BroadcastMessagesFilter {
-    const DEFAULT_VALUE: [u8; 78] = [
+    const DEFAULT_VALUE: [u8; 77] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    pub const TOTAL_SIZE: usize = 78;
-    pub const FIELD_SIZES: [usize; 2] = [32, 46];
+    pub const TOTAL_SIZE: usize = 77;
+    pub const FIELD_SIZES: [usize; 2] = [32, 45];
     pub const FIELD_COUNT: usize = 2;
     pub fn chain_hash(&self) -> Byte32 {
         Byte32::new_unchecked(self.0.slice(0..32))
     }
     pub fn after_cursor(&self) -> Cursor {
-        Cursor::new_unchecked(self.0.slice(32..78))
+        Cursor::new_unchecked(self.0.slice(32..77))
     }
     pub fn as_reader<'r>(&'r self) -> BroadcastMessagesFilterReader<'r> {
         BroadcastMessagesFilterReader::new_unchecked(self.as_slice())
@@ -5805,14 +5791,14 @@ impl<'r> ::core::fmt::Display for BroadcastMessagesFilterReader<'r> {
     }
 }
 impl<'r> BroadcastMessagesFilterReader<'r> {
-    pub const TOTAL_SIZE: usize = 78;
-    pub const FIELD_SIZES: [usize; 2] = [32, 46];
+    pub const TOTAL_SIZE: usize = 77;
+    pub const FIELD_SIZES: [usize; 2] = [32, 45];
     pub const FIELD_COUNT: usize = 2;
     pub fn chain_hash(&self) -> Byte32Reader<'r> {
         Byte32Reader::new_unchecked(&self.as_slice()[0..32])
     }
     pub fn after_cursor(&self) -> CursorReader<'r> {
-        CursorReader::new_unchecked(&self.as_slice()[32..78])
+        CursorReader::new_unchecked(&self.as_slice()[32..77])
     }
 }
 impl<'r> molecule::prelude::Reader<'r> for BroadcastMessagesFilterReader<'r> {
@@ -5842,8 +5828,8 @@ pub struct BroadcastMessagesFilterBuilder {
     pub(crate) after_cursor: Cursor,
 }
 impl BroadcastMessagesFilterBuilder {
-    pub const TOTAL_SIZE: usize = 78;
-    pub const FIELD_SIZES: [usize; 2] = [32, 46];
+    pub const TOTAL_SIZE: usize = 77;
+    pub const FIELD_SIZES: [usize; 2] = [32, 45];
     pub const FIELD_COUNT: usize = 2;
     pub fn chain_hash(mut self, v: Byte32) -> Self {
         self.chain_hash = v;
@@ -5905,13 +5891,13 @@ impl ::core::default::Default for GetBroadcastMessages {
     }
 }
 impl GetBroadcastMessages {
-    const DEFAULT_VALUE: [u8; 88] = [
+    const DEFAULT_VALUE: [u8; 87] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    pub const TOTAL_SIZE: usize = 88;
-    pub const FIELD_SIZES: [usize; 4] = [8, 32, 46, 2];
+    pub const TOTAL_SIZE: usize = 87;
+    pub const FIELD_SIZES: [usize; 4] = [8, 32, 45, 2];
     pub const FIELD_COUNT: usize = 4;
     pub fn id(&self) -> Uint64 {
         Uint64::new_unchecked(self.0.slice(0..8))
@@ -5920,10 +5906,10 @@ impl GetBroadcastMessages {
         Byte32::new_unchecked(self.0.slice(8..40))
     }
     pub fn after_cursor(&self) -> Cursor {
-        Cursor::new_unchecked(self.0.slice(40..86))
+        Cursor::new_unchecked(self.0.slice(40..85))
     }
     pub fn count(&self) -> Uint16 {
-        Uint16::new_unchecked(self.0.slice(86..88))
+        Uint16::new_unchecked(self.0.slice(85..87))
     }
     pub fn as_reader<'r>(&'r self) -> GetBroadcastMessagesReader<'r> {
         GetBroadcastMessagesReader::new_unchecked(self.as_slice())
@@ -5985,8 +5971,8 @@ impl<'r> ::core::fmt::Display for GetBroadcastMessagesReader<'r> {
     }
 }
 impl<'r> GetBroadcastMessagesReader<'r> {
-    pub const TOTAL_SIZE: usize = 88;
-    pub const FIELD_SIZES: [usize; 4] = [8, 32, 46, 2];
+    pub const TOTAL_SIZE: usize = 87;
+    pub const FIELD_SIZES: [usize; 4] = [8, 32, 45, 2];
     pub const FIELD_COUNT: usize = 4;
     pub fn id(&self) -> Uint64Reader<'r> {
         Uint64Reader::new_unchecked(&self.as_slice()[0..8])
@@ -5995,10 +5981,10 @@ impl<'r> GetBroadcastMessagesReader<'r> {
         Byte32Reader::new_unchecked(&self.as_slice()[8..40])
     }
     pub fn after_cursor(&self) -> CursorReader<'r> {
-        CursorReader::new_unchecked(&self.as_slice()[40..86])
+        CursorReader::new_unchecked(&self.as_slice()[40..85])
     }
     pub fn count(&self) -> Uint16Reader<'r> {
-        Uint16Reader::new_unchecked(&self.as_slice()[86..88])
+        Uint16Reader::new_unchecked(&self.as_slice()[85..87])
     }
 }
 impl<'r> molecule::prelude::Reader<'r> for GetBroadcastMessagesReader<'r> {
@@ -6030,8 +6016,8 @@ pub struct GetBroadcastMessagesBuilder {
     pub(crate) count: Uint16,
 }
 impl GetBroadcastMessagesBuilder {
-    pub const TOTAL_SIZE: usize = 88;
-    pub const FIELD_SIZES: [usize; 4] = [8, 32, 46, 2];
+    pub const TOTAL_SIZE: usize = 87;
+    pub const FIELD_SIZES: [usize; 4] = [8, 32, 45, 2];
     pub const FIELD_COUNT: usize = 4;
     pub fn id(mut self, v: Uint64) -> Self {
         self.id = v;
@@ -7173,10 +7159,10 @@ impl ::core::default::Default for GossipMessage {
     }
 }
 impl GossipMessage {
-    const DEFAULT_VALUE: [u8; 82] = [
+    const DEFAULT_VALUE: [u8; 81] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     pub const ITEMS_COUNT: usize = 6;
     pub fn item_id(&self) -> molecule::Number {

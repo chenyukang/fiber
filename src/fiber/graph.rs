@@ -437,10 +437,7 @@ where
             _ => {
                 let cursor = Cursor::new(
                     channel_update.timestamp,
-                    BroadcastMessageID::ChannelUpdate(
-                        channel_update.channel_outpoint.clone(),
-                        channel_update.is_update_of_node_1(),
-                    ),
+                    BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone()),
                 );
                 *update_info = Some(ChannelUpdateInfo::from(channel_update));
                 return Some(cursor);
