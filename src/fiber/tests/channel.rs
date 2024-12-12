@@ -1320,7 +1320,7 @@ async fn test_send_payment_with_max_nodes() {
         node.network_actor
             .send_message(NetworkActorMessage::new_command(
                 NetworkActorCommand::GossipActorMessage(
-                    GossipActorMessage::RotatePassiveSyncingPeers,
+                    GossipActorMessage::RotateOutboundPassiveSyncingPeers,
                 ),
             ))
             .expect("node_a alive");
