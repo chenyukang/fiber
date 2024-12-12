@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::u64;
 use tentacle::multiaddr::{MultiAddr, Protocol};
+use tentacle::service::SessionType;
 use tentacle::utils::{extract_peer_id, is_reachable, multiaddr_to_socketaddr};
 use tentacle::{
     async_trait,
@@ -99,10 +100,6 @@ const ASSUME_CHAIN_ACTOR_ALWAYS_ALIVE_FOR_NOW: &str =
     "We currently assume that chain actor is always alive, but it failed. This is a known issue.";
 
 const ASSUME_NETWORK_MYSELF_ALIVE: &str = "network actor myself alive";
-
-// This is the default approximate number of peers that we need to keep connection to to make the
-// network operating normally.
-const NUM_PEER_CONNECTIONS: usize = 40;
 
 // The duration for which we will try to maintain the number of peers in connection.
 const MAINTAINING_CONNECTIONS_INTERVAL: Duration = Duration::from_secs(3600);
@@ -198,7 +195,7 @@ pub enum NetworkActorCommand {
     // multiaddr with the peer id.
     SavePeerAddress(Multiaddr),
     // We need to maintain a certain number of peers connections to keep the network running.
-    MaintainConnections(usize),
+    MaintainConnections,
     // For internal use and debugging only. Most of the messages requires some
     // changes to local state. Even if we can send a message to a peer, some
     // part of the local state is not changed.
@@ -977,21 +974,52 @@ where
                 }
             },
 
-            NetworkActorCommand::MaintainConnections(num_peers) => {
-                debug!("Maintaining connections to {} peers", num_peers);
+            NetworkActorCommand::MaintainConnections => {
+                let mut inbound_peer_sessions = state.inbound_peer_sessions();
+                let num_inbound_peers = inbound_peer_sessions.len();
+                let num_outbound_peers = state.num_of_outbound_peers();
 
-                let num_connected_peers = state.peer_session_map.len();
-                if num_connected_peers >= num_peers {
+                debug!("Maintaining network connections ticked: current num inbound peers {}, current num outbound peers {}", num_inbound_peers, num_outbound_peers);
+
+                if num_inbound_peers > state.max_inbound_peers {
                     debug!(
-                        "Already connected to {} peers, skipping connecting to more peers",
-                        num_connected_peers,
+                        "Already connected to {} inbound peers, only wants {} peers, disconnecting some",
+                        num_inbound_peers, state.max_inbound_peers
+                    );
+                    inbound_peer_sessions.retain(|k| !state.session_channels_map.contains_key(k));
+                    let sessions_to_disconnect = if inbound_peer_sessions.len()
+                        < num_inbound_peers - state.max_inbound_peers
+                    {
+                        warn!(
+                            "Wants to disconnect more {} inbound peers, but all peers except {:?} have channels, will not disconnect any peer with channels",
+                            num_inbound_peers - state.max_inbound_peers, &inbound_peer_sessions
+                        );
+                        &inbound_peer_sessions[..]
+                    } else {
+                        &inbound_peer_sessions[..num_inbound_peers - state.max_inbound_peers]
+                    };
+                    debug!(
+                        "Disconnecting inbound peer sessions {:?}",
+                        sessions_to_disconnect
+                    );
+                    for session in sessions_to_disconnect {
+                        if let Err(err) = state.control.disconnect(*session).await {
+                            error!("Failed to disconnect session: {}", err);
+                        }
+                    }
+                }
+
+                if num_outbound_peers >= state.min_outbound_peers {
+                    debug!(
+                        "Already connected to {} outbound peers, wants a minimal of {} peers, skipping connecting to more peers",
+                        num_outbound_peers, state.min_outbound_peers
                     );
                     return Ok(());
                 }
 
                 let peers_to_connect = {
                     let graph = self.network_graph.read().await;
-                    let n_peers_to_connect = num_peers - num_connected_peers;
+                    let n_peers_to_connect = state.min_outbound_peers - num_outbound_peers;
                     let n_graph_nodes = graph.num_of_nodes();
                     let n_saved_peers = state.state_to_be_persisted.num_of_saved_nodes();
                     let n_all_saved_peers = n_graph_nodes + n_saved_peers;
@@ -1723,7 +1751,7 @@ pub struct NetworkActorState<S> {
     // This immutable attribute is placed here because we need to create it in
     // the pre_start function.
     control: ServiceAsyncControl,
-    peer_session_map: HashMap<PeerId, SessionId>,
+    peer_session_map: HashMap<PeerId, (SessionId, SessionType)>,
     session_channels_map: HashMap<SessionId, HashSet<Hash256>>,
     channels: HashMap<Hash256, ActorRef<ChannelActorMessage>>,
     // Outpoint to channel id mapping, only contains channels with state of Ready.
@@ -1764,6 +1792,8 @@ pub struct NetworkActorState<S> {
     // message of the same type.
     broadcasted_messages: HashSet<Hash256>,
     channel_subscribers: ChannelSubscribers,
+    max_inbound_peers: usize,
+    min_outbound_peers: usize,
 }
 
 #[serde_as]
@@ -2139,7 +2169,21 @@ where
     }
 
     fn get_peer_session(&self, peer_id: &PeerId) -> Option<SessionId> {
-        self.peer_session_map.get(peer_id).cloned()
+        self.peer_session_map.get(peer_id).map(|s| s.0)
+    }
+
+    fn inbound_peer_sessions(&self) -> Vec<SessionId> {
+        self.peer_session_map
+            .values()
+            .filter_map(|s| (s.1 == SessionType::Inbound).then_some(s.0))
+            .collect()
+    }
+
+    fn num_of_outbound_peers(&self) -> usize {
+        self.peer_session_map
+            .values()
+            .filter(|s| s.1 == SessionType::Outbound)
+            .count()
     }
 
     fn is_connected(&self, peer_id: &PeerId) -> bool {
@@ -2156,10 +2200,15 @@ where
     }
 
     pub fn get_n_peer_sessions(&self, n: usize) -> Vec<SessionId> {
-        self.peer_session_map.values().take(n).cloned().collect()
+        self.peer_session_map
+            .values()
+            .take(n)
+            .map(|s| s.0)
+            .collect()
     }
 
     fn get_peer_pubkey(&self, peer_id: &PeerId) -> Option<Pubkey> {
+        debug!("Get pubkey for peer {:?}", peer_id);
         self.state_to_be_persisted.get_peer_pubkey(peer_id)
     }
 
@@ -2374,7 +2423,7 @@ where
     ) {
         let store = self.store.clone();
         self.peer_session_map
-            .insert(remote_peer_id.clone(), session.id);
+            .insert(remote_peer_id.clone(), (session.id, session.ty));
         if self
             .state_to_be_persisted
             .save_peer_pubkey(remote_peer_id.clone(), remote_pubkey)
@@ -2416,7 +2465,7 @@ where
     fn on_peer_disconnected(&mut self, id: &PeerId) {
         info!("Peer {:?} disconnected from us ({:?})", id, &self.peer_id);
         if let Some(session) = self.peer_session_map.remove(id) {
-            if let Some(channel_ids) = self.session_channels_map.remove(&session) {
+            if let Some(channel_ids) = self.session_channels_map.remove(&session.0) {
                 for channel_id in channel_ids {
                     if let Some(channel) = self.remove_channel(&channel_id) {
                         let _ = channel.send_message(ChannelActorMessage::Event(
@@ -2963,6 +3012,8 @@ where
             announce_private_addr: config.announce_private_addr.unwrap_or_default(),
             broadcasted_messages: Default::default(),
             channel_subscribers,
+            max_inbound_peers: config.max_inbound_peers(),
+            min_outbound_peers: config.min_outbound_peers(),
         };
 
         // Save our own NodeInfo to the network graph.
@@ -3012,13 +3063,11 @@ where
 
         myself
             .send_message(NetworkActorMessage::new_command(
-                NetworkActorCommand::MaintainConnections(NUM_PEER_CONNECTIONS),
+                NetworkActorCommand::MaintainConnections,
             ))
             .expect(ASSUME_NETWORK_MYSELF_ALIVE);
         myself.send_interval(MAINTAINING_CONNECTIONS_INTERVAL, || {
-            NetworkActorMessage::new_command(NetworkActorCommand::MaintainConnections(
-                NUM_PEER_CONNECTIONS,
-            ))
+            NetworkActorMessage::new_command(NetworkActorCommand::MaintainConnections)
         });
         Ok(())
     }
