@@ -3097,7 +3097,7 @@ impl TryFrom<molecule_gossip::QueryBroadcastMessagesResult> for QueryBroadcastMe
             missing_queries: query_broadcast_messages_result
                 .missing_queries()
                 .into_iter()
-                .map(|x| x.into())
+                .map(|x| u16::from(x))
                 .collect(),
         })
     }
