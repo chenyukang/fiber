@@ -124,39 +124,37 @@ impl MockNetworkGraph {
                 features: 0,
             },
         );
-        self.store.save_channel_update(ChannelUpdate {
-            signature: None,
-            chain_hash: get_chain_hash(),
-            timestamp: now_timestamp_as_millis_u64(),
-            message_flags: if node_a_is_node1 {
+        self.store.save_channel_update(ChannelUpdate::new_unsigned(
+            get_chain_hash(),
+            channel_outpoint.clone(),
+            now_timestamp_as_millis_u64(),
+            if node_a_is_node1 {
                 MESSAGE_OF_NODE2_FLAG
             } else {
                 MESSAGE_OF_NODE1_FLAG
             },
-            channel_flags: 0,
-            tlc_expiry_delta: 11,
-            tlc_fee_proportional_millionths: fee_rate.unwrap_or(0),
-            tlc_maximum_value: max_htlc_value.unwrap_or(10000),
-            tlc_minimum_value: min_htlc_value.unwrap_or(0),
-            channel_outpoint: channel_outpoint.clone(),
-        });
+            0,
+            11,
+            min_htlc_value.unwrap_or(0),
+            max_htlc_value.unwrap_or(10000),
+            fee_rate.unwrap_or(0),
+        ));
         if let Some(fee_rate) = other_fee_rate {
-            self.store.save_channel_update(ChannelUpdate {
-                signature: None,
-                chain_hash: get_chain_hash(),
-                timestamp: now_timestamp_as_millis_u64(),
-                message_flags: if node_a_is_node1 {
+            self.store.save_channel_update(ChannelUpdate::new_unsigned(
+                get_chain_hash(),
+                channel_outpoint.clone(),
+                now_timestamp_as_millis_u64(),
+                if node_a_is_node1 {
                     MESSAGE_OF_NODE1_FLAG
                 } else {
                     MESSAGE_OF_NODE2_FLAG
                 },
-                channel_flags: 0,
-                tlc_expiry_delta: 22,
-                tlc_fee_proportional_millionths: fee_rate,
-                tlc_maximum_value: max_htlc_value.unwrap_or(10000),
-                tlc_minimum_value: min_htlc_value.unwrap_or(0),
-                channel_outpoint: channel_outpoint.clone(),
-            });
+                0,
+                22,
+                min_htlc_value.unwrap_or(0),
+                max_htlc_value.unwrap_or(10000),
+                fee_rate,
+            ));
         }
         self.graph.reload_from_store();
     }

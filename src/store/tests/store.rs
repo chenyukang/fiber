@@ -182,7 +182,7 @@ fn test_store_save_channel_update() {
             .tx_hash(gen_sha256_hash().into())
             .index(0u32.pack())
             .build(),
-        1,
+        now_timestamp_as_millis_u64(),
         flags_for_update_of_node1,
         0,
         0,

@@ -2001,6 +2001,13 @@ impl ChannelUpdate {
         tlc_maximum_value: u128,
         tlc_fee_proportional_millionths: u128,
     ) -> Self {
+        // To avoid having the same timestamp for both channel updates, we will use an even
+        // timestamp number for node1 and an odd timestamp number for node2.
+        let timestamp = if message_flags & MESSAGE_OF_NODE2_FLAG == MESSAGE_OF_NODE2_FLAG {
+            timestamp | 1u64
+        } else {
+            timestamp & !1u64
+        };
         Self {
             signature: None,
             chain_hash,
