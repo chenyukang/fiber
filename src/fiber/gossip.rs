@@ -2545,34 +2545,39 @@ where
                             return Ok(());
                         }
                         match state.peer_states.get_mut(&peer_id) {
-                            Some(peer_state) => match peer_state.filter_processor.as_mut() {
-                                Some(filter_processor) => {
-                                    debug!(
+                            Some(peer_state) => {
+                                match peer_state.filter_processor.as_mut() {
+                                    Some(filter_processor) => {
+                                        debug!(
                                         "Updating filter processor for peer {:?}: from {:?} {:?}",
                                         &peer_id,
                                         filter_processor.get_filter(),
                                         &after_cursor
                                     );
-                                    filter_processor.update_filter(&after_cursor);
-                                    return Ok(());
+                                        filter_processor.update_filter(&after_cursor);
+                                        return Ok(());
+                                    }
+                                    _ => {
+                                        debug!(
+                                            "Creating filter processor for peer {:?}: {:?}",
+                                            &peer_id, &after_cursor
+                                        );
+                                        peer_state.filter_processor = Some(
+                                            PeerFilterProcessor::new(
+                                                state.store.clone(),
+                                                peer_id.clone(),
+                                                after_cursor.clone(),
+                                                myself,
+                                            )
+                                            .await,
+                                        );
+                                    }
+                                };
+                                // Also start passive syncer to peer so that we have less silos.
+                                if peer_state.sync_status.can_start_passive_syncing() {
+                                    state.start_passive_syncer(&peer_id).await;
                                 }
-                                _ => {
-                                    debug!(
-                                        "Creating filter processor for peer {:?}: {:?}",
-                                        &peer_id, &after_cursor
-                                    );
-                                    peer_state.filter_processor = Some(
-                                        PeerFilterProcessor::new(
-                                            state.store.clone(),
-                                            peer_id,
-                                            after_cursor.clone(),
-                                            myself,
-                                        )
-                                        .await,
-                                    );
-                                    peer_state
-                                }
-                            },
+                            }
                             None => {
                                 warn!(
                                     "Received BroadcastMessagesFilter from unknown peer: {:?}",
