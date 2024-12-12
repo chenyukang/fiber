@@ -2046,7 +2046,10 @@ impl ChannelUpdate {
     pub fn cursor(&self) -> Cursor {
         Cursor::new(
             self.timestamp,
-            BroadcastMessageID::ChannelUpdate(self.channel_outpoint.clone()),
+            BroadcastMessageID::ChannelUpdate(
+                self.channel_outpoint.clone(),
+                self.is_update_of_node_1(),
+            ),
         )
     }
 }
@@ -2407,7 +2410,10 @@ impl BroadcastMessageWithTimestamp {
             }
             BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => Cursor::new(
                 channel_update.timestamp,
-                BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone()),
+                BroadcastMessageID::ChannelUpdate(
+                    channel_update.channel_outpoint.clone(),
+                    channel_update.is_update_of_node_1(),
+                ),
             ),
         }
     }
@@ -2435,7 +2441,10 @@ impl BroadcastMessageWithTimestamp {
                 )
             }
             BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
-                BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone())
+                BroadcastMessageID::ChannelUpdate(
+                    channel_update.channel_outpoint.clone(),
+                    channel_update.is_update_of_node_1(),
+                )
             }
         }
     }
@@ -2628,12 +2637,13 @@ impl TryFrom<molecule_gossip::BroadcastMessageQuery> for BroadcastMessageQuery {
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum BroadcastMessageID {
     ChannelAnnouncement(OutPoint),
-    ChannelUpdate(OutPoint),
+    ChannelUpdate(OutPoint, bool),
     NodeAnnouncement(Pubkey),
 }
 
-// 1 byte for message type, 36 bytes for message id
-const MESSAGE_ID_SIZE: usize = 1 + 36;
+const CHANNEL_OUTPOINT_SIZE: usize = 36;
+// 1 byte for message type, 36 bytes for channel outpoint size, 1 byte for is_update_of_node1
+const MESSAGE_ID_SIZE: usize = 1 + CHANNEL_OUTPOINT_SIZE + 1;
 // 8 bytes for timestamp, MESSAGE_ID_SIZE bytes for message id
 pub(crate) const CURSOR_SIZE: usize = 8 + MESSAGE_ID_SIZE;
 
@@ -2643,11 +2653,14 @@ impl BroadcastMessageID {
         match self {
             BroadcastMessageID::ChannelAnnouncement(channel_outpoint) => {
                 result[0] = 0;
-                result[1..].copy_from_slice(&channel_outpoint.as_bytes());
+                let channel_outpoint = channel_outpoint.as_slice();
+                result[1..1 + channel_outpoint.len()].copy_from_slice(channel_outpoint);
             }
-            BroadcastMessageID::ChannelUpdate(channel_outpoint) => {
+            BroadcastMessageID::ChannelUpdate(channel_outpoint, is_update_of_node1) => {
                 result[0] = 1;
-                result[1..].copy_from_slice(&channel_outpoint.as_bytes());
+                let channel_outpoint = channel_outpoint.as_slice();
+                result[1..1 + channel_outpoint.len()].copy_from_slice(channel_outpoint);
+                result[MESSAGE_ID_SIZE - 1] = if *is_update_of_node1 { 0 } else { 1 };
             }
             BroadcastMessageID::NodeAnnouncement(node_id) => {
                 result[0] = 2;
@@ -2667,11 +2680,12 @@ impl BroadcastMessageID {
         }
         match bytes[0] {
             0 => Ok(BroadcastMessageID::ChannelAnnouncement(
-                OutPoint::from_slice(&bytes[1..])?,
+                OutPoint::from_slice(&bytes[1..1 + CHANNEL_OUTPOINT_SIZE])?,
             )),
-            1 => Ok(BroadcastMessageID::ChannelUpdate(OutPoint::from_slice(
-                &bytes[1..],
-            )?)),
+            1 => Ok(BroadcastMessageID::ChannelUpdate(
+                OutPoint::from_slice(&bytes[1..1 + CHANNEL_OUTPOINT_SIZE])?,
+                bytes[MESSAGE_ID_SIZE - 1] == 0,
+            )),
             2 => Ok(BroadcastMessageID::NodeAnnouncement(Pubkey::from_slice(
                 &bytes[1..1 + Pubkey::serialization_len()],
             )?)),
@@ -2716,7 +2730,7 @@ impl Cursor {
         }
     }
 
-    pub fn to_bytes(&self) -> [u8; 45] {
+    pub fn to_bytes(&self) -> [u8; CURSOR_SIZE] {
         self.timestamp
             .to_be_bytes()
             .into_iter()

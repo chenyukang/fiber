@@ -548,7 +548,7 @@ impl GossipMessageStore for Store {
         self.get(
             &[
                 [BROADCAST_MESSAGE_TIMESTAMP_PREFIX].as_slice(),
-                BroadcastMessageID::ChannelUpdate(outpoint.clone())
+                BroadcastMessageID::ChannelUpdate(outpoint.clone(), is_node1)
                     .to_bytes()
                     .as_slice(),
             ]
@@ -624,7 +624,10 @@ impl GossipMessageStore for Store {
 
     fn save_channel_update(&self, channel_update: crate::fiber::types::ChannelUpdate) {
         let mut batch = self.batch();
-        let message_id = BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone());
+        let message_id = BroadcastMessageID::ChannelUpdate(
+            channel_update.channel_outpoint.clone(),
+            channel_update.is_update_of_node_1(),
+        );
 
         // Remove old channel update if exists
         if let Some(old_timestamp) = self.get_latest_channel_update_timestamp(
