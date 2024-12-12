@@ -3371,7 +3371,7 @@ impl ChannelActorState {
                     Some(max_value),
                     Some(fee_proportional_millionths),
                 ) => Some(ChannelUpdate::new_unsigned(
-                    Default::default(),
+                    get_chain_hash(),
                     self.must_get_funding_transaction_outpoint(),
                     now_timestamp_as_millis_u64(),
                     message_flags,
