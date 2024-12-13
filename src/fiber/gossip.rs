@@ -830,10 +830,10 @@ pub struct ExtendedGossipMessageStore<S> {
     // Be careful while saving messages to the store. We should send SaveMessage message to the actor
     // because we must ask the actor do some bookkeeping work (e.g. check if the dependencies of
     // the message are already saved).
-    store: S,
+    pub(crate) store: S,
     // The actor that is responsible for book-keep the messages to be saved to the store,
     // and send messages to the subscribers.
-    actor: ActorRef<ExtendedGossipMessageStoreMessage>,
+    pub(crate) actor: ActorRef<ExtendedGossipMessageStoreMessage>,
 }
 
 impl<S> ExtendedGossipMessageStore<S> {

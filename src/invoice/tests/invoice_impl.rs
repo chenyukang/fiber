@@ -13,12 +13,12 @@ use crate::{
     },
 };
 use crate::{
-    gen_rand_fiber_public_key, gen_rand_secp256k1_keypair, gen_rand_secp256k1_private_key,
+    gen_rand_fiber_public_key, gen_rand_secp256k1_keypair_tuple, gen_rand_secp256k1_private_key,
     gen_rand_sha256_hash,
 };
 
 fn mock_invoice() -> CkbInvoice {
-    let (private_key, public_key) = gen_rand_secp256k1_keypair();
+    let (private_key, public_key) = gen_rand_secp256k1_keypair_tuple();
     let mut invoice = CkbInvoice {
         currency: Currency::Fibb,
         amount: Some(1280),
@@ -176,7 +176,7 @@ fn test_compress() {
 #[test]
 fn test_invoice_builder() {
     let gen_payment_hash = gen_rand_sha256_hash();
-    let (private_key, public_key) = gen_rand_secp256k1_keypair();
+    let (private_key, public_key) = gen_rand_secp256k1_keypair_tuple();
 
     let invoice = InvoiceBuilder::new(Currency::Fibb)
         .amount(Some(1280))
@@ -205,7 +205,7 @@ fn test_invoice_builder() {
 #[test]
 fn test_invoice_check_signature() {
     let gen_payment_hash = gen_rand_sha256_hash();
-    let (private_key, public_key) = gen_rand_secp256k1_keypair();
+    let (private_key, public_key) = gen_rand_secp256k1_keypair_tuple();
 
     let invoice = InvoiceBuilder::new(Currency::Fibb)
         .amount(Some(1280))
@@ -261,7 +261,7 @@ fn test_invoice_check_signature() {
 #[test]
 fn test_invoice_signature_check() {
     let gen_payment_hash = gen_rand_sha256_hash();
-    let (private_key, _) = gen_rand_secp256k1_keypair();
+    let (private_key, _) = gen_rand_secp256k1_keypair_tuple();
     let public_key = gen_rand_fiber_public_key();
 
     let invoice = InvoiceBuilder::new(Currency::Fibb)

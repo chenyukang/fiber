@@ -18,12 +18,12 @@ use ckb_types::{
 };
 use secp256k1::{PublicKey, SecretKey, XOnlyPublicKey};
 
-use crate::gen_rand_secp256k1_keypair;
+use crate::gen_rand_secp256k1_keypair_tuple;
 
 fn generate_key_pairs(num: usize) -> Vec<(SecretKey, PublicKey)> {
     let mut keys = vec![];
     for _ in 0..num {
-        keys.push(gen_rand_secp256k1_keypair());
+        keys.push(gen_rand_secp256k1_keypair_tuple());
     }
     keys
 }
