@@ -1265,7 +1265,6 @@ impl TlcErrPacket {
     /// Erring node creates the error packet using the shared secret used in forwarding onion packet.
     /// Use all zeros for the origin node.
     pub fn new(tlc_fail: TlcErr, _shared_secret: &[u8; 32]) -> Self {
-        dbg!(&tlc_fail);
         let payload = tlc_fail.serialize();
 
         let onion_packet =
@@ -1278,7 +1277,6 @@ impl TlcErrPacket {
     // upgrades without breaking the network protocol.
     #[cfg(test)]
     pub fn new_with_encryption(tlc_fail: TlcErr, shared_secret: &[u8; 32]) -> Self {
-        dbg!(&tlc_fail);
         let payload = tlc_fail.serialize();
 
         let onion_packet = (if shared_secret != &NO_SHARED_SECRET {

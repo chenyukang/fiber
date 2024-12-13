@@ -912,9 +912,6 @@ where
                 let mut graph = self.network_graph.write().await;
                 graph.update_for_messages(gossip_message_updates.messages);
             }
-            NetworkActorEvent::RetrySendPayment(payment_hash) => {
-                let _ = self.try_payment_session(myself, state, payment_hash).await;
-            }
         }
         Ok(())
     }
