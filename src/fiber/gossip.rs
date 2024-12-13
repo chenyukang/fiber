@@ -1024,7 +1024,7 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
         let complete_messages = self
             .messages_to_be_saved
             .iter()
-            .filter(|m| self.has_transitive_dependencies(m, false))
+            .filter(|m| self.has_dependencies_available(m, false))
             .cloned()
             .collect::<HashSet<_>>();
         self.messages_to_be_saved
@@ -1091,38 +1091,6 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
         }
 
         verified_sorted_messages
-    }
-
-    fn get_node_announcement(
-        &self,
-        node_id: &Pubkey,
-        only_in_store: bool,
-    ) -> Option<NodeAnnouncement> {
-        self.store
-            .get_latest_node_announcement(node_id)
-            .or_else(|| {
-                if only_in_store {
-                    None
-                } else {
-                    let result = self.get_node_announcement_in_memory(node_id);
-                    debug!(
-                        "Getting node announcement in memory for node_id {:?}: {:?}",
-                        node_id, result
-                    );
-                    result
-                }
-            })
-    }
-
-    fn get_node_announcement_in_memory(&self, node_id: &Pubkey) -> Option<NodeAnnouncement> {
-        self.messages_to_be_saved.iter().find_map(|m| match m {
-            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement)
-                if &node_announcement.node_id == node_id =>
-            {
-                Some(node_announcement.clone())
-            }
-            _ => None,
-        })
     }
 
     fn get_channel_annnouncement(
@@ -1194,38 +1162,16 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
         Ok(message)
     }
 
-    fn has_transitive_dependencies(
+    fn has_dependencies_available(
         &self,
         message: &BroadcastMessageWithTimestamp,
         only_in_store: bool,
     ) -> bool {
-        debug!(
-            "Verifying message transitive dependencies exist: only in store {}, {:?}",
-            only_in_store, message
-        );
         match message {
-            BroadcastMessageWithTimestamp::ChannelAnnouncement(_, channel_announcement) => {
-                self.get_node_announcement(&channel_announcement.node1_id, only_in_store)
-                    .is_some()
-                    && self
-                        .get_node_announcement(&channel_announcement.node2_id, only_in_store)
-                        .is_some()
-            }
-            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
-                match self
-                    .get_channel_annnouncement(&channel_update.channel_outpoint, only_in_store)
-                {
-                    Some((timestamp, channel_announcement)) => self.has_transitive_dependencies(
-                        &BroadcastMessageWithTimestamp::ChannelAnnouncement(
-                            timestamp,
-                            channel_announcement,
-                        ),
-                        only_in_store,
-                    ),
-                    _ => false,
-                }
-            }
-            BroadcastMessageWithTimestamp::NodeAnnouncement(_) => true,
+            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => self
+                .get_channel_annnouncement(&channel_update.channel_outpoint, only_in_store)
+                .is_some(),
+            _ => true,
         }
     }
 }
