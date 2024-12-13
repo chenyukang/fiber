@@ -1,14 +1,35 @@
-mod store;
+use ckb_types::packed::OutPoint;
+use ckb_types::prelude::Entity;
+use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
 
-use once_cell::sync::OnceCell;
-use std::sync::atomic::AtomicU64;
+use crate::fiber::types::{Privkey, Pubkey};
 
-static INSTANCE: OnceCell<AtomicU64> = OnceCell::with_value(AtomicU64::new(0));
+pub fn gen_rand_fiber_public_key() -> Pubkey {
+    gen_rand_secp256k1_public_key().into()
+}
 
-// A test helper to get a timestamp which will always increment by 1 when called.
-// This guarantees that the timestamp is always increasing in tests.
-// now_timestamp may return two identical timestamps in consecutive calls.
-pub fn now_timestamp() -> u64 {
-    let count = INSTANCE.get().unwrap();
-    count.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+pub fn gen_rand_fiber_private_key() -> Privkey {
+    gen_rand_secp256k1_private_key().into()
+}
+
+pub fn gen_rand_secp256k1_private_key() -> SecretKey {
+    gen_rand_secp256k1_keypair().0
+}
+
+pub fn gen_rand_secp256k1_public_key() -> PublicKey {
+    gen_rand_secp256k1_keypair().1
+}
+
+pub fn gen_rand_secp256k1_keypair() -> (SecretKey, PublicKey) {
+    let secp = Secp256k1::new();
+    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
+    (
+        SecretKey::from_keypair(&key_pair),
+        PublicKey::from_keypair(&key_pair),
+    )
+}
+
+pub fn gen_rand_channel_outpoint() -> OutPoint {
+    let rand_slice = (0..36).map(|_| rand::random::<u8>()).collect::<Vec<u8>>();
+    OutPoint::from_slice(&rand_slice).unwrap()
 }

@@ -5,9 +5,7 @@ use ckb_types::{
 };
 use ractor::{call, Actor, ActorRef};
 use rand::rngs::OsRng;
-use rand::Rng;
-use secp256k1::Keypair;
-use secp256k1::{rand, Message, PublicKey, Secp256k1, SecretKey};
+use secp256k1::{Message, Secp256k1};
 use std::{
     env,
     ffi::OsStr,
@@ -113,31 +111,6 @@ pub async fn get_test_root_actor() -> ActorRef<RootActorMessage> {
     .await
     .expect("start test root actor")
     .0
-}
-
-pub fn generate_keypair() -> (SecretKey, PublicKey) {
-    let secp = Secp256k1::new();
-    let secret_key = SecretKey::new(&mut rand::thread_rng());
-    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
-    (secret_key, public_key)
-}
-
-pub fn generate_seckey() -> SecretKey {
-    SecretKey::new(&mut rand::thread_rng())
-}
-
-pub fn generate_pubkey() -> Pubkey {
-    let secp = Secp256k1::new();
-    let secret_key = SecretKey::new(&mut rand::thread_rng());
-    let public_key = PublicKey::from_secret_key(&secp, &secret_key);
-    public_key.into()
-}
-
-pub fn gen_sha256_hash() -> Hash256 {
-    let mut rng = rand::thread_rng();
-    let mut result = [0u8; 32];
-    rng.fill(&mut result[..]);
-    result.into()
 }
 
 pub fn get_fiber_config<P: AsRef<Path>>(base_dir: P, node_name: Option<&str>) -> FiberConfig {
@@ -787,34 +760,6 @@ impl NetworkNode {
         })
         .await
     }
-}
-
-pub(crate) fn rand_sha256_hash() -> Hash256 {
-    let mut rng = rand::thread_rng();
-    let mut result = [0u8; 32];
-    rng.fill(&mut result[..]);
-    result.into()
-}
-
-pub(crate) fn gen_rand_public_key() -> Pubkey {
-    let secp = Secp256k1::new();
-    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
-    PublicKey::from_keypair(&key_pair).into()
-}
-
-pub(crate) fn gen_rand_private_key() -> SecretKey {
-    let secp = Secp256k1::new();
-    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
-    SecretKey::from_keypair(&key_pair)
-}
-
-pub(crate) fn gen_rand_keypair() -> (PublicKey, SecretKey) {
-    let secp = Secp256k1::new();
-    let key_pair = Keypair::new(&secp, &mut rand::thread_rng());
-    (
-        PublicKey::from_keypair(&key_pair),
-        SecretKey::from_keypair(&key_pair),
-    )
 }
 
 #[tokio::test]

@@ -7,8 +7,7 @@ use crate::fiber::graph::PaymentSessionStatus;
 use crate::fiber::network::SendPaymentCommand;
 use crate::fiber::tests::test_utils::{
     create_3_nodes_with_established_channel, create_n_nodes_with_established_channel,
-    create_nodes_with_established_channel, gen_rand_public_key, gen_sha256_hash, generate_seckey,
-    NetworkNodeConfigBuilder,
+    create_nodes_with_established_channel, NetworkNodeConfigBuilder,
 };
 use crate::fiber::types::{
     Hash256, PaymentHopData, PeeledOnionPacket, TlcErrorCode, NO_SHARED_SECRET,
@@ -28,6 +27,7 @@ use crate::{
         types::{Privkey, RemoveTlcFulfill, RemoveTlcReason},
         NetworkActorCommand, NetworkActorMessage,
     },
+    gen_rand_fiber_private_key, gen_rand_fiber_public_key, gen_rand_sha256_hash,
     now_timestamp_as_millis_u64, NetworkServiceEvent,
 };
 use ckb_jsonrpc_types::Status;
@@ -69,8 +69,8 @@ fn test_pending_tlcs() {
     let mut tlc_state = TlcState::default();
     let add_tlc1 = AddTlcInfo {
         amount: 10000,
-        channel_id: gen_sha256_hash(),
-        payment_hash: gen_sha256_hash(),
+        channel_id: gen_rand_sha256_hash(),
+        payment_hash: gen_rand_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 1000,
         hash_algorithm: HashAlgorithm::Sha256,
         onion_packet: None,
@@ -82,8 +82,8 @@ fn test_pending_tlcs() {
     };
     let add_tlc2 = AddTlcInfo {
         amount: 20000,
-        channel_id: gen_sha256_hash(),
-        payment_hash: gen_sha256_hash(),
+        channel_id: gen_rand_sha256_hash(),
+        payment_hash: gen_rand_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 2000,
         hash_algorithm: HashAlgorithm::Sha256,
         onion_packet: None,
@@ -148,8 +148,8 @@ fn test_pending_tlcs_duplicated_tlcs() {
     let mut tlc_state = TlcState::default();
     let add_tlc1 = AddTlcInfo {
         amount: 10000,
-        channel_id: gen_sha256_hash(),
-        payment_hash: gen_sha256_hash(),
+        channel_id: gen_rand_sha256_hash(),
+        payment_hash: gen_rand_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 1000,
         hash_algorithm: HashAlgorithm::Sha256,
         onion_packet: None,
@@ -185,8 +185,8 @@ fn test_pending_tlcs_duplicated_tlcs() {
 
     let add_tlc2 = AddTlcInfo {
         amount: 20000,
-        channel_id: gen_sha256_hash(),
-        payment_hash: gen_sha256_hash(),
+        channel_id: gen_rand_sha256_hash(),
+        payment_hash: gen_rand_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 2000,
         hash_algorithm: HashAlgorithm::Sha256,
         onion_packet: None,
@@ -226,8 +226,8 @@ fn test_pending_tlcs_with_remove_tlc() {
     let mut tlc_state = TlcState::default();
     let add_tlc1 = AddTlcInfo {
         amount: 10000,
-        channel_id: gen_sha256_hash(),
-        payment_hash: gen_sha256_hash(),
+        channel_id: gen_rand_sha256_hash(),
+        payment_hash: gen_rand_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 1000,
         hash_algorithm: HashAlgorithm::Sha256,
         onion_packet: None,
@@ -239,8 +239,8 @@ fn test_pending_tlcs_with_remove_tlc() {
     };
     let add_tlc2 = AddTlcInfo {
         amount: 20000,
-        channel_id: gen_sha256_hash(),
-        payment_hash: gen_sha256_hash(),
+        channel_id: gen_rand_sha256_hash(),
+        payment_hash: gen_rand_sha256_hash(),
         expiry: now_timestamp_as_millis_u64() + 2000,
         hash_algorithm: HashAlgorithm::Sha256,
         onion_packet: None,
@@ -251,10 +251,10 @@ fn test_pending_tlcs_with_remove_tlc() {
         previous_tlc: None,
     };
     let remote_tlc = RemoveTlcInfo {
-        channel_id: gen_sha256_hash(),
+        channel_id: gen_rand_sha256_hash(),
         tlc_id: TLCId::Offered(0),
         reason: RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill {
-            payment_preimage: gen_sha256_hash(),
+            payment_preimage: gen_rand_sha256_hash(),
         }),
     };
 
@@ -841,7 +841,7 @@ async fn test_network_send_previous_tlc_error() {
     tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
 
     let secp = Secp256k1::new();
-    let keys: Vec<Privkey> = std::iter::repeat_with(|| generate_seckey().into())
+    let keys: Vec<Privkey> = std::iter::repeat_with(|| gen_rand_fiber_private_key().into())
         .take(1)
         .collect();
     let hops_infos = vec![
@@ -862,10 +862,10 @@ async fn test_network_send_previous_tlc_error() {
             payment_preimage: None,
         },
     ];
-    let generated_payment_hash = gen_sha256_hash();
+    let generated_payment_hash = gen_rand_sha256_hash();
 
     let packet = PeeledOnionPacket::create(
-        generate_seckey().into(),
+        gen_rand_fiber_private_key(),
         hops_infos.clone(),
         Some(generated_payment_hash.as_ref().to_vec()),
         &secp,
@@ -963,7 +963,7 @@ async fn test_network_send_payment_keysend_with_payment_hash() {
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     let node_b_pubkey = node_b.pubkey.clone();
-    let payment_hash = gen_sha256_hash();
+    let payment_hash = gen_rand_sha256_hash();
 
     // This payment request is without an invoice, the receiver will return an error `IncorrectOrUnknownPaymentDetails`
     let message = |rpc_reply| -> NetworkActorMessage {
@@ -1017,7 +1017,7 @@ async fn test_network_send_payment_final_incorrect_hash() {
     );
 
     let node_b_pubkey = node_b.pubkey.clone();
-    let payment_hash = gen_sha256_hash();
+    let payment_hash = gen_rand_sha256_hash();
 
     // This payment request is without an invoice, the receiver will return an error `IncorrectOrUnknownPaymentDetails`
     let message = |rpc_reply| -> NetworkActorMessage {
@@ -1089,13 +1089,13 @@ async fn test_network_send_payment_target_not_found() {
     // Wait for the channel announcement to be broadcasted
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
-    let node_b_pubkey = gen_rand_public_key().into();
+    let node_b_pubkey = gen_rand_fiber_public_key().into();
     let message = |rpc_reply| -> NetworkActorMessage {
         NetworkActorMessage::Command(NetworkActorCommand::SendPayment(
             SendPaymentCommand {
                 target_pubkey: Some(node_b_pubkey),
                 amount: Some(10000),
-                payment_hash: Some(gen_sha256_hash()),
+                payment_hash: Some(gen_rand_sha256_hash()),
                 final_tlc_expiry_delta: None,
                 tlc_expiry_limit: None,
                 invoice: None,
@@ -1135,7 +1135,7 @@ async fn test_network_send_payment_amount_is_too_large() {
             SendPaymentCommand {
                 target_pubkey: Some(node_b_pubkey),
                 amount: Some(100000000000 + 5),
-                payment_hash: Some(gen_sha256_hash()),
+                payment_hash: Some(gen_rand_sha256_hash()),
                 final_tlc_expiry_delta: None,
                 tlc_expiry_limit: None,
                 invoice: None,
@@ -1179,7 +1179,7 @@ async fn test_network_send_payment_with_dry_run() {
             SendPaymentCommand {
                 target_pubkey: Some(node_b_pubkey),
                 amount: Some(100000000000 + 5),
-                payment_hash: Some(gen_sha256_hash()),
+                payment_hash: Some(gen_rand_sha256_hash()),
                 final_tlc_expiry_delta: None,
                 invoice: None,
                 timeout: None,
@@ -1204,9 +1204,9 @@ async fn test_network_send_payment_with_dry_run() {
     let message = |rpc_reply| -> NetworkActorMessage {
         NetworkActorMessage::Command(NetworkActorCommand::SendPayment(
             SendPaymentCommand {
-                target_pubkey: Some(gen_rand_public_key()),
+                target_pubkey: Some(gen_rand_fiber_public_key()),
                 amount: Some(1000 + 5),
-                payment_hash: Some(gen_sha256_hash()),
+                payment_hash: Some(gen_rand_sha256_hash()),
                 final_tlc_expiry_delta: None,
                 invoice: None,
                 timeout: None,
@@ -1474,7 +1474,7 @@ async fn test_send_payment_fail_with_3_nodes_invalid_hash() {
             SendPaymentCommand {
                 target_pubkey: Some(node_c_pubkey),
                 amount: Some(1000000 + 5),
-                payment_hash: Some(gen_sha256_hash()), // this payment hash is not from node_c
+                payment_hash: Some(gen_rand_sha256_hash()), // this payment hash is not from node_c
                 final_tlc_expiry_delta: None,
                 invoice: None,
                 timeout: None,
@@ -1749,7 +1749,7 @@ async fn test_network_send_payment_dry_run_can_still_query() {
     // Wait for the channel announcement to be broadcasted
     tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
 
-    let payment_hash = gen_sha256_hash();
+    let payment_hash = gen_rand_sha256_hash();
     let node_b_pubkey = node_b.pubkey.clone();
     let message = |rpc_reply| -> NetworkActorMessage {
         NetworkActorMessage::Command(NetworkActorCommand::SendPayment(
@@ -1814,7 +1814,7 @@ async fn test_network_send_payment_dry_run_will_not_create_payment_session() {
     // Wait for the channel announcement to be broadcasted
     tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
 
-    let payment_hash = gen_sha256_hash();
+    let payment_hash = gen_rand_sha256_hash();
     let node_b_pubkey = node_b.pubkey.clone();
     let message = |rpc_reply| -> NetworkActorMessage {
         NetworkActorMessage::Command(NetworkActorCommand::SendPayment(
@@ -2308,7 +2308,7 @@ async fn do_test_add_tlc_waiting_ack() {
         let add_tlc_command = AddTlcCommand {
             amount: tlc_amount,
             hash_algorithm: HashAlgorithm::CkbHash,
-            payment_hash: gen_sha256_hash().into(),
+            payment_hash: gen_rand_sha256_hash().into(),
             expiry: now_timestamp_as_millis_u64() + 100000000,
             onion_packet: None,
             previous_tlc: None,
@@ -2362,7 +2362,7 @@ async fn do_test_add_tlc_number_limit() {
         let add_tlc_command = AddTlcCommand {
             amount: tlc_amount,
             hash_algorithm: HashAlgorithm::CkbHash,
-            payment_hash: gen_sha256_hash().into(),
+            payment_hash: gen_rand_sha256_hash().into(),
             expiry: now_timestamp_as_millis_u64() + 100000000,
             onion_packet: None,
             previous_tlc: None,
@@ -2417,7 +2417,7 @@ async fn do_test_add_tlc_value_limit() {
         let add_tlc_command = AddTlcCommand {
             amount: tlc_amount,
             hash_algorithm: HashAlgorithm::CkbHash,
-            payment_hash: gen_sha256_hash().into(),
+            payment_hash: gen_rand_sha256_hash().into(),
             expiry: now_timestamp_as_millis_u64() + 100000000,
             onion_packet: None,
             previous_tlc: None,

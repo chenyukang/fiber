@@ -9,6 +9,8 @@ use crate::fiber::history::TimedResult;
 use crate::fiber::network::SendPaymentData;
 use crate::fiber::tests::test_utils::*;
 use crate::fiber::types::*;
+use crate::gen_rand_fiber_public_key;
+use crate::gen_rand_sha256_hash;
 use crate::invoice::*;
 use crate::now_timestamp_as_millis_u64;
 use crate::store::Store;
@@ -53,7 +55,7 @@ fn mock_channel() -> ChannelAnnouncement {
     let sk2: Privkey = gen_rand_private_key().into();
     let keypair = gen_rand_key_pair();
     let (xonly, _parity) = keypair.x_only_public_key();
-    let rand_hash256 = gen_sha256_hash();
+    let rand_hash256 = gen_rand_sha256_hash();
     ChannelAnnouncement::new_unsigned(
         &sk1.pubkey(),
         &sk2.pubkey(),
@@ -74,7 +76,7 @@ fn test_store_invoice() {
     let path = dir.path().join("invoice_store");
     let store = Store::new(path).expect("created store failed");
 
-    let preimage = gen_sha256_hash();
+    let preimage = gen_rand_sha256_hash();
     let invoice = InvoiceBuilder::new(Currency::Fibb)
         .amount(Some(1280))
         .payment_preimage(preimage)
@@ -90,11 +92,11 @@ fn test_store_invoice() {
     assert_eq!(store.get_invoice(hash), Some(invoice.clone()));
     assert_eq!(store.get_invoice_preimage(hash), Some(preimage));
 
-    let invalid_hash = gen_sha256_hash();
+    let invalid_hash = gen_rand_sha256_hash();
     assert_eq!(store.get_invoice_preimage(&invalid_hash), None);
 
     assert_eq!(store.get_invoice_status(hash), Some(CkbInvoiceStatus::Open));
-    assert_eq!(store.get_invoice_status(&gen_sha256_hash()), None);
+    assert_eq!(store.get_invoice_status(&gen_rand_sha256_hash()), None);
 
     let status = CkbInvoiceStatus::Paid;
     store.update_invoice_status(hash, status).unwrap();
@@ -179,7 +181,7 @@ fn test_store_save_channel_update() {
     let channel_update_of_node1 = ChannelUpdate::new_unsigned(
         Hash256::default(),
         OutPoint::new_builder()
-            .tx_hash(gen_sha256_hash().into())
+            .tx_hash(gen_rand_sha256_hash().into())
             .index(0u32.pack())
             .build(),
         now_timestamp_as_millis_u64(),
@@ -235,7 +237,7 @@ fn test_store_wacthtower() {
     let path = dir.path().join("watchtower_store");
     let store = Store::new(path).expect("created store failed");
 
-    let channel_id = gen_sha256_hash();
+    let channel_id = gen_rand_sha256_hash();
     let funding_tx_lock = Script::default();
     store.insert_watch_channel(channel_id, funding_tx_lock.clone());
     assert_eq!(
@@ -323,8 +325,8 @@ fn test_channel_actor_state_store() {
             channel_announcement: None,
             channel_update: None,
         }),
-        local_pubkey: generate_pubkey().into(),
-        remote_pubkey: generate_pubkey().into(),
+        local_pubkey: gen_rand_fiber_public_key(),
+        remote_pubkey: gen_rand_fiber_public_key(),
         funding_tx: None,
         funding_tx_confirmed_at: Some((1.into(), 1)),
         is_acceptor: true,
@@ -334,23 +336,23 @@ fn test_channel_actor_state_store() {
         commitment_fee_rate: 100,
         commitment_delay_epoch: 100,
         funding_fee_rate: 100,
-        id: gen_sha256_hash(),
+        id: gen_rand_sha256_hash(),
         tlc_state: Default::default(),
         local_shutdown_script: Script::default(),
         local_channel_public_keys: ChannelBasePublicKeys {
-            funding_pubkey: generate_pubkey().into(),
-            tlc_base_key: generate_pubkey().into(),
+            funding_pubkey: gen_rand_fiber_public_key(),
+            tlc_base_key: gen_rand_fiber_public_key(),
         },
         signer,
         remote_channel_public_keys: Some(ChannelBasePublicKeys {
-            funding_pubkey: generate_pubkey().into(),
-            tlc_base_key: generate_pubkey().into(),
+            funding_pubkey: gen_rand_fiber_public_key(),
+            tlc_base_key: gen_rand_fiber_public_key(),
         }),
         commitment_numbers: Default::default(),
         remote_shutdown_script: Some(Script::default()),
         last_used_nonce_in_commitment_signed: None,
         remote_nonces: vec![pub_nonce.clone()],
-        remote_commitment_points: vec![generate_pubkey().into(), generate_pubkey().into()],
+        remote_commitment_points: vec![gen_rand_fiber_public_key(), gen_rand_fiber_public_key()],
         local_shutdown_info: None,
         remote_shutdown_info: None,
         local_reserved_ckb_amount: 100,
@@ -378,9 +380,9 @@ fn test_store_payment_session() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("payment_history_store");
     let store = Store::new(path).expect("created store failed");
-    let payment_hash = gen_sha256_hash();
+    let payment_hash = gen_rand_sha256_hash();
     let payment_data = SendPaymentData {
-        target_pubkey: gen_rand_public_key(),
+        target_pubkey: gen_rand_fiber_public_key(),
         amount: 100,
         payment_hash,
         invoice: None,
@@ -445,7 +447,7 @@ fn test_store_payment_history() {
     assert_eq!(r1, r2);
 
     let outpoint_3 = OutPoint::new_builder()
-        .tx_hash(gen_sha256_hash().into())
+        .tx_hash(gen_rand_sha256_hash().into())
         .index(1u32.pack())
         .build();
     let direction_3 = Direction::Forward;
