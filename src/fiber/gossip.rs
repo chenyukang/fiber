@@ -1418,10 +1418,8 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                     state.messages_to_be_saved
                 );
 
+                // These are the messages that have complete dependencies and can be sent to the subscribers.
                 let complete_messages = state.prune_messages_to_be_saved();
-
-                // We need to send the lagged complete messages to the subscribers. After doing this,
-                // we may remove the messages from the lagged_messages.
                 for subscription in state.output_ports.values() {
                     let messages_to_send = match subscription.filter {
                         Some(ref filter) => complete_messages
@@ -1432,13 +1430,10 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                         None => complete_messages.clone(),
                     };
                     debug!(
-                        "ExtendedGossipMessageActor sending lagged complete messages to subscriber: number of messages = {}",
+                        "ExtendedGossipMessageActor sending complete messages to subscriber: number of messages = {}",
                         messages_to_send.len()
                     );
                     for chunk in messages_to_send.chunks(MAX_NUM_OF_BROADCAST_MESSAGES as usize) {
-                        if chunk.is_empty() {
-                            break;
-                        }
                         subscription
                             .output_port
                             .send(GossipMessageUpdates::new(chunk.to_vec()));
