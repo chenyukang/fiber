@@ -6,8 +6,8 @@ use std::{
 };
 
 use ckb_hash::blake2b_256;
-use ckb_jsonrpc_types::{Status, TxStatus};
-use ckb_types::packed::OutPoint;
+use ckb_jsonrpc_types::{Status, TransactionView, TxStatus};
+use ckb_types::{packed::OutPoint, H256};
 use ractor::{
     async_trait as rasync_trait, call, call_t,
     concurrency::{timeout, JoinHandle},
@@ -1919,8 +1919,8 @@ async fn get_broadcast_message_with_timestamp<S: GossipMessageStore>(
 ) -> Result<BroadcastMessageWithTimestamp, Error> {
     match message {
         BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
-            let (timestamp, _) =
-                verify_channel_announcement(&channel_announcement, store, chain).await?;
+            let timestamp =
+                get_channel_timestamp(&channel_announcement.channel_outpoint, store, chain).await?;
             Ok(BroadcastMessageWithTimestamp::ChannelAnnouncement(
                 timestamp,
                 channel_announcement,
@@ -1950,9 +1950,7 @@ async fn verify_and_save_broadcast_message<S: GossipMessageStore>(
 ) -> Result<(), Error> {
     match message {
         BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement) => {
-            let (_, is_saved) =
-                verify_channel_announcement(channel_announcement, store, chain).await?;
-            if !is_saved {
+            if !verify_channel_announcement(channel_announcement, store, chain).await? {
                 store.save_channel_announcement(*timestamp, channel_announcement.clone());
             }
         }
@@ -1970,6 +1968,76 @@ async fn verify_and_save_broadcast_message<S: GossipMessageStore>(
     Ok(())
 }
 
+async fn get_channel_tx(
+    outpoint: &OutPoint,
+    chain: &ActorRef<CkbChainMessage>,
+) -> Result<(TransactionView, H256), Error> {
+    match call_t!(
+        chain,
+        CkbChainMessage::TraceTx,
+        DEFAULT_CHAIN_ACTOR_TIMEOUT,
+        TraceTxRequest {
+            tx_hash: outpoint.tx_hash(),
+            confirmations: 1,
+        }
+    ) {
+        Ok(TraceTxResponse {
+            tx: Some(tx),
+            status:
+                TxStatus {
+                    status: Status::Committed,
+                    block_hash: Some(block_hash),
+                    ..
+                },
+        }) => Ok((tx, block_hash)),
+        err => Err(Error::InvalidParameter(format!(
+            "Channel announcement transaction {:?} not found or not confirmed, result is: {:?}",
+            &outpoint.tx_hash(),
+            err
+        ))),
+    }
+}
+
+async fn get_channel_timestamp<S: GossipMessageStore>(
+    outpoint: &OutPoint,
+    store: &S,
+    chain: &ActorRef<CkbChainMessage>,
+) -> Result<u64, Error> {
+    if let Some((timestamp, _)) = store.get_latest_channel_announcement(&outpoint) {
+        return Ok(timestamp);
+    }
+
+    let (_, block_hash) = get_channel_tx(outpoint, chain).await?;
+    let timestamp: u64 = match call_t!(
+        chain,
+        CkbChainMessage::GetBlockTimestamp,
+        DEFAULT_CHAIN_ACTOR_TIMEOUT,
+        GetBlockTimestampRequest::from_block_hash(block_hash.clone())
+    ) {
+        Ok(Ok(Some(timestamp))) => timestamp,
+        Ok(Ok(None)) => {
+            return Err(Error::InternalError(anyhow::anyhow!(
+                "Unable to find block {:?} for channel outpoint {:?}",
+                &block_hash,
+                &outpoint
+            )));
+        }
+        Ok(Err(err)) => {
+            return Err(Error::CkbRpcError(err));
+        }
+        Err(err) => {
+            return Err(Error::InternalError(anyhow::Error::new(err).context(
+                format!(
+                    "Error while trying to obtain block {:?} for channel outpoint {:?}",
+                    block_hash, &outpoint
+                ),
+            )));
+        }
+    };
+
+    Ok(timestamp)
+}
+
 // Verify the channel announcement message. If any error occurs, return the error.
 // Otherwise, return the timestamp of the channel announcement and a bool value indicating if the
 // the channel announcement is already saved to the store. If it is already saved, the bool value
@@ -1978,16 +2046,16 @@ async fn verify_channel_announcement<S: GossipMessageStore>(
     channel_announcement: &ChannelAnnouncement,
     store: &S,
     chain: &ActorRef<CkbChainMessage>,
-) -> Result<(u64, bool), Error> {
+) -> Result<bool, Error> {
     debug!(
         "Verifying channel announcement message: {:?}",
         &channel_announcement
     );
-    if let Some((timestamp, announcement)) =
+    if let Some((_, announcement)) =
         store.get_latest_channel_announcement(&channel_announcement.channel_outpoint)
     {
         if announcement == *channel_announcement {
-            return Ok((timestamp, true));
+            return Ok(true);
         } else {
             return Err(Error::InvalidParameter(format!(
                 "Channel announcement message already exists but mismatched: {:?}, existing: {:?}",
@@ -2043,32 +2111,7 @@ async fn verify_channel_announcement<S: GossipMessageStore>(
         &channel_announcement
     );
 
-    let (tx, block_hash) = match call_t!(
-        chain,
-        CkbChainMessage::TraceTx,
-        DEFAULT_CHAIN_ACTOR_TIMEOUT,
-        TraceTxRequest {
-            tx_hash: channel_announcement.channel_outpoint.tx_hash(),
-            confirmations: 1,
-        }
-    ) {
-        Ok(TraceTxResponse {
-            tx: Some(tx),
-            status:
-                TxStatus {
-                    status: Status::Committed,
-                    block_hash: Some(block_hash),
-                    ..
-                },
-        }) => (tx, block_hash),
-        err => {
-            return Err(Error::InvalidParameter(format!(
-                "Channel announcement transaction {:?} not found or not confirmed, result is: {:?}",
-                &channel_announcement.channel_outpoint.tx_hash(),
-                err
-            )));
-        }
-    };
+    let (tx, _) = get_channel_tx(&channel_announcement.channel_outpoint, chain).await?;
 
     debug!("Channel announcement transaction found: {:?}", &tx);
 
@@ -2123,39 +2166,7 @@ async fn verify_channel_announcement<S: GossipMessageStore>(
         &channel_announcement
     );
 
-    let timestamp: u64 = match call_t!(
-        chain,
-        CkbChainMessage::GetBlockTimestamp,
-        DEFAULT_CHAIN_ACTOR_TIMEOUT,
-        GetBlockTimestampRequest::from_block_hash(block_hash.clone())
-    ) {
-        Ok(Ok(Some(timestamp))) => timestamp,
-        Ok(Ok(None)) => {
-            return Err(Error::InternalError(anyhow::anyhow!(
-                "Unable to find block {:?} for channel outpoint {:?}",
-                &block_hash,
-                &channel_announcement.channel_outpoint
-            )));
-        }
-        Ok(Err(err)) => {
-            return Err(Error::CkbRpcError(err));
-        }
-        Err(err) => {
-            return Err(Error::InternalError(anyhow::Error::new(err).context(
-                format!(
-                    "Error while trying to obtain block {:?} for channel outpoint {:?}",
-                    block_hash, channel_announcement.channel_outpoint
-                ),
-            )));
-        }
-    };
-
-    debug!(
-        "Obtained block timestamp for channel: outpoint {:?}, timestamp {}",
-        &channel_announcement.channel_outpoint, timestamp
-    );
-
-    Ok((timestamp, false))
+    Ok(false)
 }
 
 // Verify the signature of the channel update message. If there is any error, an error will be returned.
