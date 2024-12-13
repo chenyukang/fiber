@@ -1065,7 +1065,7 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
     // Saving all the messages whose transitive dependencies are already available.
     // We will also change the relevant state (e.g. update the latest cursor).
     // The returned list may be sent to the subscribers.
-    fn prune_messages_to_be_saved(&mut self) -> Vec<BroadcastMessageWithTimestamp> {
+    async fn prune_messages_to_be_saved(&mut self) -> Vec<BroadcastMessageWithTimestamp> {
         let complete_messages = self
             .messages_to_be_saved
             .iter()
@@ -1098,8 +1098,25 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
                 Some(latest_cursor) if latest_cursor > &message.cursor() => continue,
                 _ => {
                     message_latest_cursors.insert(key, message.cursor());
-                    sorted_messages.extend(self.get_dependent_messages_in_memory(&message));
-                    sorted_messages.push(message);
+                    let mut messages = self.get_dependent_messages_in_memory(&message);
+                    messages.push(message);
+                    for message in &messages {
+                        if let Err(error) = verify_and_save_broadcast_message(
+                            message,
+                            &self.store,
+                            &self.chain_actor,
+                        )
+                        .await
+                        {
+                            warn!(
+                                "Failed to verify and save message {:?}: {:?}",
+                                message, error
+                            );
+                            break;
+                        }
+                    }
+
+                    sorted_messages.extend(messages);
                 }
             }
         }
@@ -1363,23 +1380,12 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                     return Ok(());
                 }
 
-                let (message, _) = match partially_verify_broadcast_message(
+                let message = get_broadcast_message_with_timestamp(
                     message.clone(),
                     &state.store,
                     &state.chain_actor,
                 )
-                .await
-                {
-                    Err(error) => {
-                        error!(
-                            "Failed to verify broadcast message {:?}: {:?}",
-                            &message, &error
-                        );
-                        let _ = reply.send(Err(error));
-                        return Ok(());
-                    }
-                    Ok((verified_message, is_complete)) => (verified_message, is_complete),
-                };
+                .await?;
 
                 if message.timestamp()
                     > now_timestamp_as_millis_u64() + MAX_BROADCAST_MESSAGE_TIMESTAMP_DRIFT_MILLIS
@@ -1419,7 +1425,7 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 );
 
                 // These are the messages that have complete dependencies and can be sent to the subscribers.
-                let complete_messages = state.prune_messages_to_be_saved();
+                let complete_messages = state.prune_messages_to_be_saved().await;
                 for subscription in state.output_ports.values() {
                     let messages_to_send = match subscription.filter {
                         Some(ref filter) => complete_messages
@@ -1864,19 +1870,7 @@ async fn get_message_cursor<S: GossipMessageStore>(
     store: &S,
     chain: &ActorRef<CkbChainMessage>,
 ) -> Result<Cursor, Error> {
-    let m = match message {
-        BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
-            let timestamp =
-                verify_channel_announcement(&channel_announcement, store, chain).await?;
-            BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement)
-        }
-        BroadcastMessage::ChannelUpdate(channel_update) => {
-            BroadcastMessageWithTimestamp::ChannelUpdate(channel_update)
-        }
-        BroadcastMessage::NodeAnnouncement(node_announcement) => {
-            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement)
-        }
-    };
+    let m = get_broadcast_message_with_timestamp(message, store, chain).await?;
     Ok(m.cursor())
 }
 
@@ -1918,6 +1912,29 @@ fn get_existing_newer_broadcast_message<S: GossipMessageStore>(
     })
 }
 
+async fn get_broadcast_message_with_timestamp<S: GossipMessageStore>(
+    message: BroadcastMessage,
+    store: &S,
+    chain: &ActorRef<CkbChainMessage>,
+) -> Result<BroadcastMessageWithTimestamp, Error> {
+    match message {
+        BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
+            let (timestamp, _) =
+                verify_channel_announcement(&channel_announcement, store, chain).await?;
+            Ok(BroadcastMessageWithTimestamp::ChannelAnnouncement(
+                timestamp,
+                channel_announcement,
+            ))
+        }
+        BroadcastMessage::ChannelUpdate(channel_update) => {
+            Ok(BroadcastMessageWithTimestamp::ChannelUpdate(channel_update))
+        }
+        BroadcastMessage::NodeAnnouncement(node_announcement) => Ok(
+            BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement),
+        ),
+    }
+}
+
 // Channel updates depends on channel announcements to obtain the node public keys.
 // If a channel update is saved before the channel announcement, we can't reliably determine if
 // this channel update is valid. So we need to save the channel update to lagged_messages and
@@ -1926,48 +1943,42 @@ fn get_existing_newer_broadcast_message<S: GossipMessageStore>(
 // In the same vein, channel announcement contains references to node announcements. If a node
 // announcement is saved before the channel announcement, we need to temporarily save the channel
 // announcement to lagged_messages and wait for the node announcement to be saved.
-async fn partially_verify_broadcast_message<S: GossipMessageStore>(
-    message: BroadcastMessage,
+async fn verify_and_save_broadcast_message<S: GossipMessageStore>(
+    message: &BroadcastMessageWithTimestamp,
     store: &S,
     chain: &ActorRef<CkbChainMessage>,
-) -> Result<(BroadcastMessageWithTimestamp, bool), Error> {
+) -> Result<(), Error> {
     match message {
-        BroadcastMessage::ChannelAnnouncement(channel_announcement) => {
-            let timestamp =
-                verify_channel_announcement(&channel_announcement, store, chain).await?;
-            let has_node_announcements = store
-                .get_latest_node_announcement(&channel_announcement.node1_id)
-                .is_some()
-                && store
-                    .get_latest_node_announcement(&channel_announcement.node2_id)
-                    .is_some();
-            Ok((
-                BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement),
-                has_node_announcements,
-            ))
+        BroadcastMessageWithTimestamp::ChannelAnnouncement(timestamp, channel_announcement) => {
+            let (_, is_saved) =
+                verify_channel_announcement(channel_announcement, store, chain).await?;
+            if !is_saved {
+                store.save_channel_announcement(*timestamp, channel_announcement.clone());
+            }
         }
-        BroadcastMessage::ChannelUpdate(channel_update) => {
-            let fully_validated = partially_verify_channel_update(&channel_update, store)?;
-            Ok((
-                BroadcastMessageWithTimestamp::ChannelUpdate(channel_update),
-                fully_validated,
-            ))
+        BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+            if !verify_channel_update(channel_update, store)? {
+                store.save_channel_update(channel_update.clone());
+            }
         }
-        BroadcastMessage::NodeAnnouncement(node_announcement) => {
-            verify_node_announcement(&node_announcement, store)?;
-            Ok((
-                BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement),
-                true,
-            ))
+        BroadcastMessageWithTimestamp::NodeAnnouncement(node_announcement) => {
+            if !verify_node_announcement(node_announcement, store)? {
+                store.save_node_announcement(node_announcement.clone());
+            }
         }
     }
+    Ok(())
 }
 
+// Verify the channel announcement message. If any error occurs, return the error.
+// Otherwise, return the timestamp of the channel announcement and a bool value indicating if the
+// the channel announcement is already saved to the store. If it is already saved, the bool value
+// is true, otherwise it is false.
 async fn verify_channel_announcement<S: GossipMessageStore>(
     channel_announcement: &ChannelAnnouncement,
     store: &S,
     chain: &ActorRef<CkbChainMessage>,
-) -> Result<u64, Error> {
+) -> Result<(u64, bool), Error> {
     debug!(
         "Verifying channel announcement message: {:?}",
         &channel_announcement
@@ -1976,7 +1987,7 @@ async fn verify_channel_announcement<S: GossipMessageStore>(
         store.get_latest_channel_announcement(&channel_announcement.channel_outpoint)
     {
         if announcement == *channel_announcement {
-            return Ok(timestamp);
+            return Ok((timestamp, true));
         } else {
             return Err(Error::InvalidParameter(format!(
                 "Channel announcement message already exists but mismatched: {:?}, existing: {:?}",
@@ -2144,10 +2155,14 @@ async fn verify_channel_announcement<S: GossipMessageStore>(
         &channel_announcement.channel_outpoint, timestamp
     );
 
-    Ok(timestamp)
+    Ok((timestamp, false))
 }
 
-fn partially_verify_channel_update<S: GossipMessageStore>(
+// Verify the signature of the channel update message. If there is any error, an error will be returned.
+// Else if the channel update is already saved to the store, true will be returned.
+// Otherwise false will be returned. The caller may use this value to determine if the channel update
+// message should be saved to the store.
+fn verify_channel_update<S: GossipMessageStore>(
     channel_update: &ChannelUpdate,
     store: &S,
 ) -> Result<bool, Error> {
@@ -2191,26 +2206,33 @@ fn partially_verify_channel_update<S: GossipMessageStore>(
                     &channel_update
                 )));
             }
-            Ok(true)
+            Ok(false)
         }
         None => {
             // It is possible that the channel update message is received before the channel announcement message.
             // In this case, we should temporarily store the channel update message and verify it later
             // when the channel announcement message is received.
-            return Ok(false);
+            return Err(Error::InvalidParameter(format!(
+                "Channel announcement message not found for channel update message: {:?}",
+                &channel_update.channel_outpoint
+            )));
         }
     }
 }
 
+// Verify the signature of the node announcement message. If there is any error, an error will be returned.
+// Else if the node announcement is already saved to the store, true will be returned.
+// Otherwise false will be returned. The caller may use this value to determine if the node announcement
+// message should be saved to the store.
 fn verify_node_announcement<S: GossipMessageStore>(
     node_announcement: &NodeAnnouncement,
     store: &S,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     if let Some(BroadcastMessageWithTimestamp::NodeAnnouncement(announcement)) =
         store.get_broadcast_message_with_cursor(&node_announcement.cursor())
     {
         if announcement == *node_announcement {
-            return Ok(());
+            return Ok(true);
         } else {
             return Err(Error::InvalidParameter(format!(
                 "Node announcement message already exists but mismatched: {:?}, existing: {:?}",
@@ -2233,7 +2255,7 @@ fn verify_node_announcement<S: GossipMessageStore>(
             )));
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 impl GossipProtocolHandle {
