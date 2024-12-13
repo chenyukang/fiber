@@ -1777,8 +1777,6 @@ pub struct NetworkActorState<S> {
     tlc_fee_proportional_millionths: u128,
     // The gossip messages actor to process and send gossip messages.
     gossip_actor: ActorRef<GossipActorMessage>,
-    // Whether to announce private address to the network.
-    announce_private_addr: bool,
     channel_subscribers: ChannelSubscribers,
     max_inbound_peers: usize,
     min_outbound_peers: usize,
@@ -2993,7 +2991,6 @@ where
             tlc_max_value: config.tlc_max_value(),
             tlc_fee_proportional_millionths: config.tlc_fee_proportional_millionths(),
             gossip_actor,
-            announce_private_addr: config.announce_private_addr.unwrap_or_default(),
             channel_subscribers,
             max_inbound_peers: config.max_inbound_peers(),
             min_outbound_peers: config.min_outbound_peers(),
