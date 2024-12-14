@@ -36,7 +36,7 @@ use strum::{AsRefStr, EnumString};
 use tentacle::multiaddr::MultiAddr;
 use tentacle::secio::PeerId;
 use thiserror::Error;
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 
 pub fn secp256k1_instance() -> &'static Secp256k1<All> {
     static INSTANCE: OnceCell<Secp256k1<All>> = OnceCell::new();
@@ -562,7 +562,6 @@ pub struct OpenChannel {
     pub commitment_delay_epoch: u64,
     pub max_tlc_value_in_flight: u128,
     pub max_tlc_number_in_flight: u64,
-    pub min_tlc_value: u128,
     pub funding_pubkey: Pubkey,
     pub tlc_basepoint: Pubkey,
     pub first_per_commitment_point: Pubkey,
@@ -599,7 +598,6 @@ impl From<OpenChannel> for molecule_fiber::OpenChannel {
             .commitment_delay_epoch(open_channel.commitment_delay_epoch.pack())
             .max_tlc_value_in_flight(open_channel.max_tlc_value_in_flight.pack())
             .max_tlc_number_in_flight(open_channel.max_tlc_number_in_flight.pack())
-            .min_tlc_value(open_channel.min_tlc_value.pack())
             .shutdown_script(open_channel.shutdown_script)
             .funding_pubkey(open_channel.funding_pubkey.into())
             .tlc_basepoint(open_channel.tlc_basepoint.into())
@@ -632,7 +630,6 @@ impl TryFrom<molecule_fiber::OpenChannel> for OpenChannel {
             commitment_delay_epoch: open_channel.commitment_delay_epoch().unpack(),
             max_tlc_value_in_flight: open_channel.max_tlc_value_in_flight().unpack(),
             max_tlc_number_in_flight: open_channel.max_tlc_number_in_flight().unpack(),
-            min_tlc_value: open_channel.min_tlc_value().unpack(),
             funding_pubkey: open_channel.funding_pubkey().try_into()?,
             tlc_basepoint: open_channel.tlc_basepoint().try_into()?,
             first_per_commitment_point: open_channel.first_per_commitment_point().try_into()?,
@@ -661,7 +658,6 @@ pub struct AcceptChannel {
     pub reserved_ckb_amount: u64,
     pub max_tlc_value_in_flight: u128,
     pub max_tlc_number_in_flight: u64,
-    pub min_tlc_value: u128,
     pub funding_pubkey: Pubkey,
     pub shutdown_script: Script,
     pub tlc_basepoint: Pubkey,
@@ -680,7 +676,6 @@ impl From<AcceptChannel> for molecule_fiber::AcceptChannel {
             .max_tlc_value_in_flight(accept_channel.max_tlc_value_in_flight.pack())
             .max_tlc_number_in_flight(accept_channel.max_tlc_number_in_flight.pack())
             .shutdown_script(accept_channel.shutdown_script)
-            .min_tlc_value(accept_channel.min_tlc_value.pack())
             .funding_pubkey(accept_channel.funding_pubkey.into())
             .tlc_basepoint(accept_channel.tlc_basepoint.into())
             .first_per_commitment_point(accept_channel.first_per_commitment_point.into())
@@ -710,7 +705,6 @@ impl TryFrom<molecule_fiber::AcceptChannel> for AcceptChannel {
             reserved_ckb_amount: accept_channel.reserved_ckb_amount().unpack(),
             max_tlc_value_in_flight: accept_channel.max_tlc_value_in_flight().unpack(),
             max_tlc_number_in_flight: accept_channel.max_tlc_number_in_flight().unpack(),
-            min_tlc_value: accept_channel.min_tlc_value().unpack(),
             funding_pubkey: accept_channel.funding_pubkey().try_into()?,
             tlc_basepoint: accept_channel.tlc_basepoint().try_into()?,
             first_per_commitment_point: accept_channel.first_per_commitment_point().try_into()?,
@@ -1264,35 +1258,23 @@ const ERROR_DECODING_PASSES: usize = 27;
 impl TlcErrPacket {
     /// Erring node creates the error packet using the shared secret used in forwarding onion packet.
     /// Use all zeros for the origin node.
-    pub fn new(tlc_fail: TlcErr, _shared_secret: &[u8; 32]) -> Self {
+    pub fn new(tlc_fail: TlcErr, shared_secret: &[u8; 32]) -> Self {
         let payload = tlc_fail.serialize();
 
-        let onion_packet =
-            OnionErrorPacket::concat(NO_ERROR_PACKET_HMAC.clone(), payload).into_bytes();
-        return TlcErrPacket { onion_packet };
-    }
-
-    // TODO: Enable error encryption by replacing `new` with this method.
-    // The encryption has been disabled so we can split the PR into small pieces and apply future
-    // upgrades without breaking the network protocol.
-    #[cfg(test)]
-    pub fn new_with_encryption(tlc_fail: TlcErr, shared_secret: &[u8; 32]) -> Self {
-        let payload = tlc_fail.serialize();
-
-        let onion_packet = (if shared_secret != &NO_SHARED_SECRET {
+        let onion_packet = if shared_secret != &NO_SHARED_SECRET {
             OnionErrorPacket::create(shared_secret, payload)
         } else {
             OnionErrorPacket::concat(NO_ERROR_PACKET_HMAC.clone(), payload)
-        })
+        }
         .into_bytes();
-        return TlcErrPacket { onion_packet };
+        TlcErrPacket { onion_packet }
     }
 
     pub fn is_plaintext(&self) -> bool {
         self.onion_packet.len() >= 32 && self.onion_packet[0..32] == NO_ERROR_PACKET_HMAC
     }
 
-    /// Intermediate node forwards the error to the previous hop using the shared secret used in forwarding
+    /// Intermediate node backwards the error to the previous hop using the shared secret used in forwarding
     /// the onion packet.
     pub fn backward(self, shared_secret: &[u8; 32]) -> Self {
         if !self.is_plaintext() {
@@ -1314,8 +1296,11 @@ impl TlcErrPacket {
             }
         }
 
-        let hops_public_keys = hops_public_keys.iter().map(|k| k.0.clone()).collect();
-        let session_key = SecretKey::from_slice(session_key).ok()?;
+        let hops_public_keys: Vec<PublicKey> =
+            hops_public_keys.iter().map(|k| k.0.clone()).collect();
+        let session_key = SecretKey::from_slice(session_key).inspect_err(|err|
+            error!(target: "fnn::fiber::types::TlcErrPacket", "decode session_key error={} key={}", err, hex::encode(session_key))
+        ).ok()?;
         OnionErrorPacket::from_bytes(self.onion_packet.clone())
             .parse(hops_public_keys, session_key, TlcErr::deserialize)
             .map(|(error, hop_index)| {
@@ -1430,6 +1415,21 @@ impl TlcErrorCode {
 pub enum RemoveTlcReason {
     RemoveTlcFulfill(RemoveTlcFulfill),
     RemoveTlcFail(TlcErrPacket),
+}
+
+impl RemoveTlcReason {
+    /// Intermediate node backwards the error to the previous hop using the shared secret used in forwarding
+    /// the onion packet.
+    pub fn backward(self, shared_secret: &[u8; 32]) -> Self {
+        match self {
+            RemoveTlcReason::RemoveTlcFulfill(remove_tlc_fulfill) => {
+                RemoveTlcReason::RemoveTlcFulfill(remove_tlc_fulfill)
+            }
+            RemoveTlcReason::RemoveTlcFail(remove_tlc_fail) => {
+                RemoveTlcReason::RemoveTlcFail(remove_tlc_fail.backward(shared_secret))
+            }
+        }
+    }
 }
 
 impl From<RemoveTlcReason> for molecule_fiber::RemoveTlcReasonUnion {
@@ -1983,7 +1983,6 @@ pub struct ChannelUpdate {
     pub channel_flags: u32,
     pub tlc_expiry_delta: u64,
     pub tlc_minimum_value: u128,
-    pub tlc_maximum_value: u128,
     pub tlc_fee_proportional_millionths: u128,
 }
 
@@ -1996,7 +1995,6 @@ impl ChannelUpdate {
         channel_flags: u32,
         tlc_expiry_delta: u64,
         tlc_minimum_value: u128,
-        tlc_maximum_value: u128,
         tlc_fee_proportional_millionths: u128,
     ) -> Self {
         // To avoid having the same timestamp for both channel updates, we will use an even
@@ -2015,7 +2013,6 @@ impl ChannelUpdate {
             channel_flags,
             tlc_expiry_delta,
             tlc_minimum_value,
-            tlc_maximum_value,
             tlc_fee_proportional_millionths,
         }
     }
@@ -2030,7 +2027,6 @@ impl ChannelUpdate {
             channel_flags: self.channel_flags,
             tlc_expiry_delta: self.tlc_expiry_delta,
             tlc_minimum_value: self.tlc_minimum_value,
-            tlc_maximum_value: self.tlc_maximum_value,
             tlc_fee_proportional_millionths: self.tlc_fee_proportional_millionths,
         };
         deterministically_hash(&unsigned_update)
@@ -2072,7 +2068,6 @@ impl From<ChannelUpdate> for molecule_gossip::ChannelUpdate {
             .channel_flags(channel_update.channel_flags.pack())
             .tlc_expiry_delta(channel_update.tlc_expiry_delta.pack())
             .tlc_minimum_value(channel_update.tlc_minimum_value.pack())
-            .tlc_maximum_value(channel_update.tlc_maximum_value.pack())
             .tlc_fee_proportional_millionths(channel_update.tlc_fee_proportional_millionths.pack())
             .build()
     }
@@ -2091,7 +2086,6 @@ impl TryFrom<molecule_gossip::ChannelUpdate> for ChannelUpdate {
             channel_flags: channel_update.channel_flags().unpack(),
             tlc_expiry_delta: channel_update.tlc_expiry_delta().unpack(),
             tlc_minimum_value: channel_update.tlc_minimum_value().unpack(),
-            tlc_maximum_value: channel_update.tlc_maximum_value().unpack(),
             tlc_fee_proportional_millionths: channel_update
                 .tlc_fee_proportional_millionths()
                 .unpack(),
@@ -3364,6 +3358,11 @@ impl<T> OnionPacket<T> {
         }
     }
 
+    pub fn into_sphinx_onion_packet(self) -> Result<fiber_sphinx::OnionPacket, Error> {
+        fiber_sphinx::OnionPacket::from_bytes(self.data)
+            .map_err(|err| Error::OnionPacket(err.into()))
+    }
+
     pub fn into_bytes(self) -> Vec<u8> {
         self.data
     }
@@ -3385,8 +3384,7 @@ impl<T: HopData> OnionPacket<T> {
         assoc_data: Option<&[u8]>,
         secp_ctx: &Secp256k1<C>,
     ) -> Result<PeeledOnionPacket<T>, Error> {
-        let sphinx_packet = fiber_sphinx::OnionPacket::from_bytes(self.data)
-            .map_err(|err| Error::OnionPacket(err.into()))?;
+        let sphinx_packet = self.into_sphinx_onion_packet()?;
         let shared_secret = sphinx_packet.shared_secret(&privkey.0);
 
         let (new_current, new_next) = sphinx_packet

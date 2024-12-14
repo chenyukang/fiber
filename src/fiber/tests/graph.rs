@@ -92,8 +92,7 @@ impl MockNetworkGraph {
         node_b: usize,
         capacity: Option<u128>,
         fee_rate: Option<u128>,
-        min_htlc_value: Option<u128>,
-        max_htlc_value: Option<u128>,
+        min_tlc_value: Option<u128>,
         udt_type_script: Option<Script>,
         other_fee_rate: Option<u128>,
     ) {
@@ -135,8 +134,7 @@ impl MockNetworkGraph {
             },
             0,
             11,
-            min_htlc_value.unwrap_or(0),
-            max_htlc_value.unwrap_or(10000),
+            min_tlc_value.unwrap_or(0),
             fee_rate.unwrap_or(0),
         ));
         if let Some(fee_rate) = other_fee_rate {
@@ -151,8 +149,7 @@ impl MockNetworkGraph {
                 },
                 0,
                 22,
-                min_htlc_value.unwrap_or(0),
-                max_htlc_value.unwrap_or(10000),
+                min_tlc_value.unwrap_or(0),
                 fee_rate,
             ));
         }
@@ -166,16 +163,7 @@ impl MockNetworkGraph {
         capacity: Option<u128>,
         fee_rate: Option<u128>,
     ) {
-        self.add_edge_with_config(
-            node_a,
-            node_b,
-            capacity,
-            fee_rate,
-            Some(0),
-            Some(10000),
-            None,
-            None,
-        );
+        self.add_edge_with_config(node_a, node_b, capacity, fee_rate, Some(0), None, None);
     }
 
     pub fn add_edge_udt(
@@ -192,7 +180,6 @@ impl MockNetworkGraph {
             capacity,
             fee_rate,
             Some(0),
-            Some(10000),
             Some(udt_type_script),
             None,
         );
@@ -749,45 +736,17 @@ fn test_graph_build_route_three_nodes() {
 }
 
 #[test]
-fn test_graph_build_route_exceed_max_htlc_value() {
+fn test_graph_build_route_below_min_tlc_value() {
     let mut network = MockNetworkGraph::new(3);
-    // Add edges with max_htlc_value set to 50
-    network.add_edge_with_config(0, 2, Some(500), Some(2), None, Some(50), None, None);
-    network.add_edge_with_config(2, 3, Some(500), Some(2), None, Some(50), None, None);
+    // Add edges with min_tlc_value set to 50
+    network.add_edge_with_config(0, 2, Some(500), Some(2), Some(50), None, None);
+    network.add_edge_with_config(2, 3, Some(500), Some(2), Some(50), None, None);
     let node3 = network.keys[3];
 
-    // Test build route from node1 to node3 with amount exceeding max_htlc_value
+    // Test build route from node1 to node3 with amount below min_tlc_value
     let route = network.graph.build_route(SendPaymentData {
         target_pubkey: node3.into(),
-        amount: 100, // Exceeds max_htlc_value of 50
-        payment_hash: Hash256::default(),
-        invoice: None,
-        final_tlc_expiry_delta: DEFAULT_TLC_EXPIRY_DELTA,
-        tlc_expiry_limit: MAX_PAYMENT_TLC_EXPIRY_LIMIT,
-        timeout: Some(10),
-        max_fee_amount: Some(1000),
-        max_parts: None,
-        keysend: false,
-        udt_type_script: None,
-        preimage: None,
-        allow_self_payment: false,
-        dry_run: false,
-    });
-    assert!(route.is_err());
-}
-
-#[test]
-fn test_graph_build_route_below_min_htlc_value() {
-    let mut network = MockNetworkGraph::new(3);
-    // Add edges with min_htlc_value set to 50
-    network.add_edge_with_config(0, 2, Some(500), Some(2), Some(50), None, None, None);
-    network.add_edge_with_config(2, 3, Some(500), Some(2), Some(50), None, None, None);
-    let node3 = network.keys[3];
-
-    // Test build route from node1 to node3 with amount below min_htlc_value
-    let route = network.graph.build_route(SendPaymentData {
-        target_pubkey: node3.into(),
-        amount: 10, // Below min_htlc_value of 50
+        amount: 10, // Below min_tlc_value of 50
         payment_hash: Hash256::default(),
         invoice: None,
         final_tlc_expiry_delta: DEFAULT_TLC_EXPIRY_DELTA,
@@ -1110,29 +1069,11 @@ fn test_graph_payment_pay_self_with_one_node() {
 #[test]
 fn test_graph_build_route_with_double_edge_node() {
     let mut network = MockNetworkGraph::new(3);
-    // Add edges with min_htlc_value set to 50
+    // Add edges with min_tlc_value set to 50
     // A <-> B, A is initiator, and A -> B with fee rate 5000, B -> A with fee rate 600000
-    network.add_edge_with_config(
-        0,
-        2,
-        Some(500),
-        Some(5000),
-        Some(50),
-        None,
-        None,
-        Some(600000),
-    );
+    network.add_edge_with_config(0, 2, Some(500), Some(5000), Some(50), None, Some(600000));
     // A -> B, B is initiator, B -> A with fee rate 100000, A -> B with fee rate 200
-    network.add_edge_with_config(
-        2,
-        0,
-        Some(500),
-        Some(100000),
-        Some(50),
-        None,
-        None,
-        Some(200),
-    );
+    network.add_edge_with_config(2, 0, Some(500), Some(100000), Some(50), None, Some(200));
 
     // node0 is the source node
     let command = SendPaymentCommand {
@@ -1158,31 +1099,13 @@ fn test_graph_build_route_with_double_edge_node() {
 #[test]
 fn test_graph_build_route_with_other_node_maybe_better() {
     let mut network = MockNetworkGraph::new(3);
-    // Add edges with min_htlc_value set to 50
+    // Add edges with min_tlc_value set to 50
     // A <-> B, A is initiator, and A -> B with fee rate 5000, B -> A with fee rate 600000
-    network.add_edge_with_config(
-        0,
-        2,
-        Some(500),
-        Some(600000),
-        Some(50),
-        None,
-        None,
-        Some(600000),
-    );
+    network.add_edge_with_config(0, 2, Some(500), Some(600000), Some(50), None, Some(600000));
     // A -> B, B is initiator, B -> A with fee rate 100000, A -> B with fee rate 200
-    network.add_edge_with_config(
-        2,
-        0,
-        Some(500),
-        Some(100000),
-        Some(50),
-        None,
-        None,
-        Some(600000),
-    );
+    network.add_edge_with_config(2, 0, Some(500), Some(100000), Some(50), None, Some(600000));
     // B <-> C, B is initiator
-    network.add_edge_with_config(2, 3, Some(500), Some(2), Some(50), None, None, Some(1));
+    network.add_edge_with_config(2, 3, Some(500), Some(2), Some(50), None, Some(1));
 
     let node0 = network.keys[0];
     let node1 = network.keys[2];
@@ -1260,7 +1183,7 @@ fn test_graph_payment_pay_self_will_ok() {
 #[test]
 fn test_graph_build_route_with_path_limits() {
     let mut network = MockNetworkGraph::new(100);
-    // Add edges with min_htlc_value set to 50
+    // Add edges with min_tlc_value set to 50
     let mut fee_rate = 100000;
     for i in 0..99 {
         fee_rate -= 1000;
@@ -1270,7 +1193,6 @@ fn test_graph_build_route_with_path_limits() {
             Some(5000000),
             Some(fee_rate),
             Some(50),
-            Some(10000000),
             None,
             Some(100),
         );
@@ -1312,7 +1234,7 @@ fn test_graph_build_route_with_path_limits() {
 #[test]
 fn test_graph_build_route_with_path_limit_fail_with_fee_not_enough() {
     let mut network = MockNetworkGraph::new(100);
-    // Add edges with min_htlc_value set to 50
+    // Add edges with min_tlc_value set to 50
     for i in 0..99 {
         network.add_edge_with_config(
             i,
@@ -1320,7 +1242,6 @@ fn test_graph_build_route_with_path_limit_fail_with_fee_not_enough() {
             Some(100), // the capacity can not provide the fee with long path
             Some(500),
             Some(50),
-            None,
             None,
             Some(100),
         );
@@ -1376,6 +1297,7 @@ fn test_graph_payment_expiry_is_in_right_order() {
     let payment_data = SendPaymentData::new(command);
     assert!(payment_data.is_ok());
 
+    let current_time = now_timestamp_as_millis_u64();
     let route = network.graph.build_route(payment_data.unwrap());
     assert!(route.is_ok());
     let route = route.unwrap();
@@ -1384,7 +1306,35 @@ fn test_graph_payment_expiry_is_in_right_order() {
     assert_eq!(expiries.len(), 4);
     assert_eq!(expiries[0] - expiries[1], 11);
     assert_eq!(expiries[1] - expiries[2], 11);
-    assert_eq!(expiries[3], 0);
-    let expected_timestamp = now_timestamp_as_millis_u64() + DEFAULT_TLC_EXPIRY_DELTA;
-    assert!(expiries[2] <= expected_timestamp);
+    assert_eq!(expiries[2], expiries[3]);
+    assert!(expiries[3] >= current_time + DEFAULT_TLC_EXPIRY_DELTA);
+
+    let final_tlc_expiry_delta = 987654;
+    let command = SendPaymentCommand {
+        target_pubkey: Some(node3.into()),
+        amount: Some(100),
+        payment_hash: Some(Hash256::default()),
+        final_tlc_expiry_delta: Some(final_tlc_expiry_delta),
+        tlc_expiry_limit: None,
+        invoice: None,
+        timeout: Some(10),
+        max_fee_amount: Some(1000),
+        max_parts: None,
+        keysend: Some(false),
+        udt_type_script: None,
+        allow_self_payment: false,
+        dry_run: false,
+    };
+    let payment_data = SendPaymentData::new(command);
+    eprintln!("{:?}", payment_data);
+    assert!(payment_data.is_ok());
+
+    let current_time = now_timestamp_as_millis_u64();
+    let route = network.graph.build_route(payment_data.unwrap());
+    assert!(route.is_ok());
+    let route = route.unwrap();
+    let expiries = route.iter().map(|e| e.expiry).collect::<Vec<_>>();
+    // we set 11 as tlc expiry delta in the test
+    assert_eq!(expiries.len(), 4);
+    assert!(expiries[3] >= current_time + final_tlc_expiry_delta);
 }

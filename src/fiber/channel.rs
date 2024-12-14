@@ -1,8 +1,10 @@
 use bitflags::bitflags;
 use ckb_jsonrpc_types::BlockNumber;
+use futures::future::OptionFuture;
 use secp256k1::XOnlyPublicKey;
 use tracing::{debug, error, info, trace, warn};
 
+use crate::fiber::serde_utils::U64Hex;
 use crate::{
     fiber::{
         fee::calculate_tlc_forward_fee,
@@ -51,6 +53,7 @@ use std::{
     fmt::Debug,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
+    u128,
 };
 
 use crate::{
@@ -157,6 +160,11 @@ pub struct AddTlcCommand {
     pub hash_algorithm: HashAlgorithm,
     /// Onion packet for the next node
     pub onion_packet: Option<PaymentOnionPacket>,
+    /// Shared secret used in forwarding.
+    ///
+    /// Save it for outbound (offered) TLC to backward errors.
+    /// Use all zeros when no shared secrets are available.
+    pub shared_secret: [u8; 32],
     pub previous_tlc: Option<(Hash256, u64)>,
 }
 
@@ -178,7 +186,6 @@ pub struct UpdateCommand {
     pub enabled: Option<bool>,
     pub tlc_expiry_delta: Option<u64>,
     pub tlc_minimum_value: Option<u128>,
-    pub tlc_maximum_value: Option<u128>,
     pub tlc_fee_proportional_millionths: Option<u128>,
 }
 
@@ -198,8 +205,9 @@ pub const MIN_COMMITMENT_DELAY_EPOCHS: u64 = 1;
 pub const MAX_COMMITMENT_DELAY_EPOCHS: u64 = 84;
 pub const DEFAULT_MAX_TLC_VALUE_IN_FLIGHT: u128 = u128::MAX;
 pub const DEFAULT_MAX_TLC_NUMBER_IN_FLIGHT: u64 = 30;
-pub const SYS_MAX_TLC_NUMBER_IN_FLIGHT: u64 = 253;
 pub const DEFAULT_MIN_TLC_VALUE: u128 = 0;
+pub const SYS_MAX_TLC_NUMBER_IN_FLIGHT: u64 = 253;
+pub const MAX_TLC_NUMBER_IN_FLIGHT: u64 = 125;
 
 #[derive(Debug)]
 pub struct TxUpdateCommand {
@@ -216,8 +224,8 @@ pub struct OpenChannelParameter {
     pub commitment_fee_rate: Option<u64>,
     pub commitment_delay_epoch: Option<EpochNumberWithFraction>,
     pub funding_fee_rate: Option<u64>,
-    pub max_tlc_value_in_flight: Option<u128>,
-    pub max_tlc_number_in_flight: Option<u64>,
+    pub max_tlc_value_in_flight: u128,
+    pub max_tlc_number_in_flight: u64,
 }
 
 pub struct AcceptChannelParameter {
@@ -228,6 +236,8 @@ pub struct AcceptChannelParameter {
     pub open_channel: OpenChannel,
     pub shutdown_script: Script,
     pub channel_id_sender: Option<oneshot::Sender<Hash256>>,
+    pub max_tlc_value_in_flight: u128,
+    pub max_tlc_number_in_flight: u64,
 }
 
 pub enum ChannelInitializationParameter {
@@ -434,7 +444,7 @@ where
                 Ok(())
             }
             FiberChannelMessage::RevokeAndAck(revoke_and_ack) => {
-                state.handle_revoke_and_ack_message(&self.network, revoke_and_ack)?;
+                state.handle_revoke_and_ack_peer_message(&self.network, revoke_and_ack)?;
                 Ok(())
             }
             FiberChannelMessage::ChannelReady(_channel_ready) => {
@@ -589,21 +599,30 @@ where
             ProcessingChannelError::FinalIncorrectHTLCAmount => {
                 TlcErrorCode::FinalIncorrectTlcAmount
             }
+            ProcessingChannelError::IncorrectTlcExpiry => TlcErrorCode::IncorrectTlcExpiry,
+            ProcessingChannelError::IncorrectFinalTlcExpiry => {
+                TlcErrorCode::FinalIncorrectExpiryDelta
+            }
             ProcessingChannelError::TlcAmountIsTooLow => TlcErrorCode::AmountBelowMinimum,
             ProcessingChannelError::TlcNumberExceedLimit
+            | ProcessingChannelError::TlcAmountExceedLimit
             | ProcessingChannelError::TlcValueInflightExceedLimit
             | ProcessingChannelError::WaitingTlcAck => TlcErrorCode::TemporaryChannelFailure,
-            ProcessingChannelError::InvalidState(_) => match state.state {
+            ProcessingChannelError::InvalidState(error) => match state.state {
                 // we can not revert back up `ChannelReady` after `ShuttingDown`
                 ChannelState::Closed(_) | ChannelState::ShuttingDown(_) => {
                     TlcErrorCode::PermanentChannelFailure
                 }
                 ChannelState::ChannelReady() => {
-                    // we expect `ChannelReady` will be both OK for tlc forwarding,
-                    // so here are the unreachable point in normal workflow,
-                    // set `TemporaryNodeFailure` for general temporary failure of the processing node here
-                    assert!(false, "unreachable point in normal workflow");
-                    TlcErrorCode::TemporaryNodeFailure
+                    if error.contains("channel is not public or disabled") {
+                        TlcErrorCode::TemporaryChannelFailure
+                    } else {
+                        // we expect `ChannelReady` will be both OK for tlc forwarding,
+                        // so here are the unreachable point in normal workflow,
+                        // set `TemporaryNodeFailure` for general temporary failure of the processing node here
+                        assert!(false, "unreachable point in normal workflow");
+                        TlcErrorCode::TemporaryNodeFailure
+                    }
                 }
                 // otherwise, channel maybe not ready
                 _ => TlcErrorCode::TemporaryChannelFailure,
@@ -637,7 +656,7 @@ where
         commitment_signed: CommitmentSigned,
     ) -> Result<(), ProcessingChannelError> {
         // build commitment tx and verify signature from remote, if passed send ACK for partner
-        state.handle_commitment_signed_message(commitment_signed, &self.network)?;
+        state.verify_commitment_signed_and_send_ack(commitment_signed, &self.network)?;
         self.flush_staging_tlc_operations(myself, state).await;
         Ok(())
     }
@@ -651,31 +670,30 @@ where
         for tlc_info in pending_apply_tlcs {
             match tlc_info {
                 TlcKind::AddTlc(add_tlc) => {
-                    if add_tlc.is_received() {
-                        if let Err(e) = self.apply_add_tlc_operation(myself, state, &add_tlc).await
-                        {
-                            let error_detail = self.get_tlc_detail_error(state, &e).await;
-                            self.register_retryable_tlc_remove(
-                                myself,
-                                state,
-                                add_tlc.tlc_id,
-                                RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
-                                    error_detail.clone(),
-                                    &NO_SHARED_SECRET,
-                                )),
-                            )
-                            .await;
-                            self.network
-                                .clone()
-                                .send_message(NetworkActorMessage::new_notification(
-                                    NetworkServiceEvent::AddTlcFailed(
-                                        state.get_local_peer_id(),
-                                        add_tlc.payment_hash,
-                                        error_detail,
-                                    ),
-                                ))
-                                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                        }
+                    assert!(add_tlc.is_received());
+                    if let Err(e) = self.apply_add_tlc_operation(myself, state, &add_tlc).await {
+                        let error_detail = self.get_tlc_detail_error(state, &e.source).await;
+                        self.register_retryable_tlc_remove(
+                            myself,
+                            state,
+                            add_tlc.tlc_id,
+                            RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
+                                error_detail.clone(),
+                                // There's no shared secret stored in the received TLC, use the one found in the peeled onion packet.
+                                &e.shared_secret,
+                            )),
+                        )
+                        .await;
+                        self.network
+                            .clone()
+                            .send_message(NetworkActorMessage::new_notification(
+                                NetworkServiceEvent::AddTlcFailed(
+                                    state.get_local_peer_id(),
+                                    add_tlc.payment_hash,
+                                    error_detail,
+                                ),
+                            ))
+                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                     }
                 }
                 TlcKind::RemoveTlc(remove_tlc) => {
@@ -695,27 +713,24 @@ where
         &self,
         myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
-        tlc_id: u64,
+        tlc_info: &AddTlcInfo,
+        remove_reason: RemoveTlcReason,
     ) {
-        let tlc_info = state.get_offered_tlc(tlc_id).expect("expect tlc");
+        assert!(tlc_info.is_offered());
         let (previous_channel_id, previous_tlc) =
             tlc_info.previous_tlc.expect("expect previous tlc");
         assert!(tlc_info.is_offered());
         assert!(previous_tlc.is_received());
         assert!(previous_channel_id != state.get_id());
 
-        let remove_reason = tlc_info
-            .removed_at
-            .as_ref()
-            .expect("expect remove_at")
-            .1
-            .clone();
-
         debug!(
             "begin to remove tlc from previous channel: {:?}",
             &previous_tlc
         );
 
+        let remove_reason = remove_reason.clone().backward(&tlc_info.shared_secret);
+
+        // TODO: encrypt the error to backward
         self.register_retryable_relay_tlc_remove(
             myself,
             state,
@@ -758,7 +773,7 @@ where
                     };
                     remove_reason = RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
                         TlcErr::new(error_code),
-                        &NO_SHARED_SECRET,
+                        &tlc.shared_secret,
                     ));
                 }
                 CkbInvoiceStatus::Paid => {
@@ -785,86 +800,23 @@ where
         myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
         add_tlc: &AddTlcInfo,
-    ) -> Result<(), ProcessingChannelError> {
-        state.check_tlc_expiry(add_tlc.expiry)?;
-
-        assert!(state.get_received_tlc(add_tlc.tlc_id.into()).is_some());
-
-        let payment_hash = add_tlc.payment_hash;
-        let peeled_onion_packet = match add_tlc.onion_packet.clone() {
-            Some(onion_packet) => Some(
-                self.peel_onion_packet(onion_packet, add_tlc.payment_hash.clone())
-                    .await?,
-            ),
-            None => None,
-        };
-
-        if let Some(ref peeled_onion_packet) = peeled_onion_packet {
-            let received_amount = add_tlc.amount;
-            let forward_amount = peeled_onion_packet.current.amount;
-            debug!(
-                "received_amount: {} forward_amount: {}",
-                add_tlc.amount, forward_amount
-            );
-
-            if peeled_onion_packet.is_last() {
-                if forward_amount != add_tlc.amount {
-                    return Err(ProcessingChannelError::FinalIncorrectHTLCAmount);
-                }
-
-                if let Some(invoice) = self.store.get_invoice(&payment_hash) {
-                    let invoice_status = self.get_invoice_status(&invoice);
-                    if invoice_status != CkbInvoiceStatus::Open {
-                        return Err(ProcessingChannelError::FinalInvoiceInvalid(invoice_status));
-                    }
-                    self.store
-                        .update_invoice_status(&payment_hash, CkbInvoiceStatus::Received)
-                        .expect("update invoice status failed");
-                }
-
-                // if this is the last hop, store the preimage.
-                // though we will RemoveTlcFulfill the TLC in try_to_settle_down_tlc function,
-                // here we can do error check early here for better error handling.
-                let preimage = peeled_onion_packet
-                    .current
-                    .payment_preimage
-                    .or_else(|| self.store.get_invoice_preimage(&add_tlc.payment_hash));
-
-                if let Some(preimage) = preimage {
-                    let filled_payment_hash: Hash256 = add_tlc.hash_algorithm.hash(preimage).into();
-                    if add_tlc.payment_hash != filled_payment_hash {
-                        return Err(ProcessingChannelError::FinalIncorrectPreimage);
-                    }
-                    state.set_received_tlc_preimage(add_tlc.tlc_id.into(), Some(preimage));
-                } else {
-                    return Err(ProcessingChannelError::FinalIncorrectPaymentHash);
-                }
-            } else {
-                assert!(received_amount >= forward_amount);
-                let forward_fee = received_amount.saturating_sub(forward_amount);
-                let fee_rate: u128 = state
-                    .public_channel_info
-                    .as_ref()
-                    .expect("public channel exits")
-                    .tlc_fee_proportional_millionths
-                    .unwrap_or_default();
-                let expected_fee = calculate_tlc_forward_fee(forward_amount, fee_rate);
-                if expected_fee.is_err() || forward_fee < expected_fee.clone().unwrap() {
-                    error!(
-                        "too low forward_fee: {}, expected_fee: {:?}",
-                        forward_fee, expected_fee
-                    );
-                    return Err(ProcessingChannelError::TlcForwardFeeIsTooLow);
-                }
-                // if this is not the last hop, forward TLC to next hop
-                self.handle_forward_onion_packet(
-                    state,
-                    add_tlc.payment_hash,
-                    peeled_onion_packet.clone(),
-                    add_tlc.tlc_id.into(),
-                )
-                .await?;
-            }
+    ) -> Result<(), ProcessingChannelErrorWithSharedSecret> {
+        // If needed, shared secret also get be extracted from the encrypted onion packet:
+        // - Extract public key from onion_packet[1..34]
+        // - Obtain share secret using DH Key Exchange from the public key and the network private key stored in the network actor state.
+        if let Some(peeled_onion_packet) = self
+            .apply_add_tlc_operation_without_peeled_onion_packet(state, add_tlc)
+            .await
+            .map_err(ProcessingChannelError::without_shared_secret)?
+        {
+            let shared_secret = peeled_onion_packet.shared_secret.clone();
+            self.apply_add_tlc_operation_with_peeled_onion_packet(
+                state,
+                add_tlc,
+                peeled_onion_packet,
+            )
+            .await
+            .map_err(move |err| err.with_shared_secret(shared_secret))?;
         }
 
         if let Some(ref udt_type_script) = state.funding_udt_type_script {
@@ -887,6 +839,125 @@ where
         Ok(())
     }
 
+    async fn apply_add_tlc_operation_without_peeled_onion_packet(
+        &self,
+        state: &mut ChannelActorState,
+        add_tlc: &AddTlcInfo,
+    ) -> Result<Option<PeeledPaymentOnionPacket>, ProcessingChannelError> {
+        state.check_tlc_expiry(add_tlc.expiry)?;
+
+        assert!(state.get_received_tlc(add_tlc.tlc_id.into()).is_some());
+
+        Ok(
+            OptionFuture::from(add_tlc.onion_packet.clone().map(|onion_packet| {
+                self.peel_onion_packet(onion_packet, add_tlc.payment_hash.clone())
+            }))
+            .await
+            .transpose()?,
+        )
+    }
+
+    async fn apply_add_tlc_operation_with_peeled_onion_packet(
+        &self,
+        state: &mut ChannelActorState,
+        add_tlc: &AddTlcInfo,
+        peeled_onion_packet: PeeledPaymentOnionPacket,
+    ) -> Result<(), ProcessingChannelError> {
+        let payment_hash = add_tlc.payment_hash;
+        let received_amount = add_tlc.amount;
+        let forward_amount = peeled_onion_packet.current.amount;
+        debug!(
+            "received_amount: {} forward_amount: {}",
+            add_tlc.amount, forward_amount
+        );
+
+        if peeled_onion_packet.is_last() {
+            if forward_amount != add_tlc.amount {
+                return Err(ProcessingChannelError::FinalIncorrectHTLCAmount);
+            }
+
+            if add_tlc.expiry < peeled_onion_packet.current.expiry {
+                return Err(ProcessingChannelError::IncorrectFinalTlcExpiry);
+            }
+            if add_tlc.expiry < now_timestamp_as_millis_u64() + MIN_TLC_EXPIRY_DELTA {
+                return Err(ProcessingChannelError::TlcExpirySoon);
+            }
+
+            if let Some(invoice) = self.store.get_invoice(&payment_hash) {
+                let invoice_status = self.get_invoice_status(&invoice);
+                if invoice_status != CkbInvoiceStatus::Open {
+                    return Err(ProcessingChannelError::FinalInvoiceInvalid(invoice_status));
+                }
+                self.store
+                    .update_invoice_status(&payment_hash, CkbInvoiceStatus::Received)
+                    .expect("update invoice status failed");
+            }
+
+            // if this is the last hop, store the preimage.
+            // though we will RemoveTlcFulfill the TLC in try_to_settle_down_tlc function,
+            // here we can do error check early here for better error handling.
+            let preimage = peeled_onion_packet
+                .current
+                .payment_preimage
+                .or_else(|| self.store.get_invoice_preimage(&add_tlc.payment_hash));
+
+            if let Some(preimage) = preimage {
+                let filled_payment_hash: Hash256 = add_tlc.hash_algorithm.hash(preimage).into();
+                if add_tlc.payment_hash != filled_payment_hash {
+                    return Err(ProcessingChannelError::FinalIncorrectPreimage);
+                }
+                state.set_received_tlc_preimage(add_tlc.tlc_id.into(), Some(preimage));
+            } else {
+                return Err(ProcessingChannelError::FinalIncorrectPaymentHash);
+            }
+        } else {
+            match state.public_channel_info.as_ref() {
+                Some(public_channel_info) if public_channel_info.enabled => {
+                    let min_tlc_value = public_channel_info.tlc_min_value;
+                    if min_tlc_value > received_amount {
+                        return Err(ProcessingChannelError::TlcAmountIsTooLow);
+                    }
+
+                    if add_tlc.expiry
+                        < peeled_onion_packet.current.expiry + public_channel_info.tlc_expiry_delta
+                    {
+                        return Err(ProcessingChannelError::IncorrectTlcExpiry);
+                    }
+
+                    assert!(received_amount >= forward_amount);
+                    let forward_fee = received_amount.saturating_sub(forward_amount);
+                    let fee_rate: u128 = public_channel_info.tlc_fee_proportional_millionths;
+
+                    let expected_fee = calculate_tlc_forward_fee(forward_amount, fee_rate);
+                    if expected_fee.is_err() || forward_fee < expected_fee.clone().unwrap() {
+                        error!(
+                            "too low forward_fee: {}, expected_fee: {:?}",
+                            forward_fee, expected_fee
+                        );
+                        return Err(ProcessingChannelError::TlcForwardFeeIsTooLow);
+                    }
+                    // if this is not the last hop, forward TLC to next hop
+                    self.handle_forward_onion_packet(
+                        state,
+                        add_tlc.payment_hash,
+                        peeled_onion_packet.clone(),
+                        add_tlc.tlc_id.into(),
+                    )
+                    .await?;
+                }
+                _ => {
+                    // if we don't have public channel info, we can not forward the TLC
+                    // this may happended some malicious sender build a invalid onion router
+                    return Err(ProcessingChannelError::InvalidState(
+                        "Received AddTlc message, but the channel is not public or disabled"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn handle_add_tlc_peer_message(
         &self,
         state: &mut ChannelActorState,
@@ -895,7 +966,7 @@ where
         // TODO: here we only check the error which sender didn't follow agreed rules,
         //       if any error happened here we need go to shutdown procedure
 
-        state.check_for_tlc_update(Some(add_tlc.amount), false)?;
+        state.check_for_tlc_update(Some(add_tlc.amount), false, false)?;
         let tlc_info = state.create_inbounding_tlc(add_tlc.clone())?;
         state.check_insert_tlc(&tlc_info)?;
         state
@@ -910,7 +981,7 @@ where
         state: &mut ChannelActorState,
         remove_tlc: RemoveTlc,
     ) -> Result<(), ProcessingChannelError> {
-        state.check_for_tlc_update(None, false)?;
+        state.check_for_tlc_update(None, false, false)?;
         // TODO: here if we received a invalid remove tlc, it's maybe a malioucious peer,
         // maybe we need to go through shutdown process for this error
         state
@@ -932,7 +1003,9 @@ where
     ) -> Result<(), ProcessingChannelError> {
         let channel_id = state.get_id();
         let remove_reason = remove_tlc.reason.clone();
-        let tlc_info = state.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_reason)?;
+        let tlc_info = state
+            .remove_tlc_with_reason(remove_tlc.tlc_id, &remove_reason)
+            .expect("expect remove tlc successfully");
         if let (
             Some(ref udt_type_script),
             RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill { payment_preimage }),
@@ -953,15 +1026,17 @@ where
             // because only the original sender cares about the TLC event to settle the payment
             self.network
                 .send_message(NetworkActorMessage::new_event(
-                    NetworkActorEvent::TlcRemoveReceived(tlc_info.payment_hash, remove_reason),
+                    NetworkActorEvent::TlcRemoveReceived(
+                        tlc_info.payment_hash,
+                        remove_reason.clone(),
+                    ),
                 ))
                 .expect("myself alive");
         } else {
             // relay RemoveTlc to previous channel if needed
-            self.try_to_relay_remove_tlc(myself, state, tlc_info.tlc_id.into())
+            self.try_to_relay_remove_tlc(myself, state, &tlc_info, remove_reason)
                 .await;
         }
-        state.tlc_state.shrink_removed_tlcs(remove_tlc.tlc_id);
         Ok(())
     }
 
@@ -1120,7 +1195,7 @@ where
         state: &mut ChannelActorState,
         command: AddTlcCommand,
     ) -> Result<u64, ProcessingChannelError> {
-        state.check_for_tlc_update(Some(command.amount), true)?;
+        state.check_for_tlc_update(Some(command.amount), true, true)?;
         state.check_tlc_expiry(command.expiry)?;
         let tlc = state.create_outbounding_tlc(command.clone());
         state.check_insert_tlc(tlc.as_add_tlc())?;
@@ -1128,7 +1203,6 @@ where
         state.increment_next_offered_tlc_id();
 
         debug!("Inserted tlc into channel state: {:?}", &tlc);
-
         let add_tlc = AddTlc {
             channel_id: state.get_id(),
             tlc_id: tlc.tlc_id().into(),
@@ -1160,7 +1234,7 @@ where
         state: &mut ChannelActorState,
         command: RemoveTlcCommand,
     ) -> ProcessingChannelResult {
-        state.check_for_tlc_update(None, true)?;
+        state.check_for_tlc_update(None, true, false)?;
         state.check_remove_tlc_with_reason(TLCId::Received(command.id), &command.reason)?;
         let tlc_kind = TlcKind::RemoveTlc(RemoveTlcInfo {
             channel_id: state.get_id(),
@@ -1263,7 +1337,6 @@ where
             enabled,
             tlc_expiry_delta,
             tlc_minimum_value,
-            tlc_maximum_value,
             tlc_fee_proportional_millionths,
         } = command;
 
@@ -1285,10 +1358,6 @@ where
 
         if let Some(value) = tlc_minimum_value {
             updated |= state.update_our_tlc_min_value(value);
-        }
-
-        if let Some(value) = tlc_maximum_value {
-            updated |= state.update_our_tlc_max_value(value);
         }
 
         if let Some(fee) = tlc_fee_proportional_millionths {
@@ -1523,14 +1592,16 @@ where
             }
             ChannelCommand::CommitmentSigned() => self.handle_commitment_signed_command(state),
             ChannelCommand::AddTlc(command, reply) => {
+                let shared_secret = command.shared_secret.clone();
                 match self.handle_add_tlc_command(state, command) {
                     Ok(tlc_id) => {
                         let _ = reply.send(Ok(AddTlcResponse { tlc_id }));
                         Ok(())
                     }
                     Err(err) => {
+                        eprintln!("Error processing AddTlc command: {:?}", &err);
                         let error_detail = self.get_tlc_detail_error(state, &err).await;
-                        let _ = reply.send(Err(TlcErrPacket::new(error_detail, &NO_SHARED_SECRET)));
+                        let _ = reply.send(Err(TlcErrPacket::new(error_detail, &shared_secret)));
                         Err(err)
                     }
                 }
@@ -1700,6 +1771,8 @@ where
                 seed,
                 open_channel,
                 channel_id_sender,
+                max_tlc_number_in_flight,
+                max_tlc_value_in_flight,
             }) => {
                 let peer_id = self.get_remote_peer_id();
                 debug!(
@@ -1722,8 +1795,8 @@ where
                     first_per_commitment_point,
                     second_per_commitment_point,
                     next_local_nonce,
-                    max_tlc_value_in_flight,
-                    max_tlc_number_in_flight,
+                    max_tlc_value_in_flight: remote_max_tlc_value_in_flight,
+                    max_tlc_number_in_flight: remote_max_tlc_number_in_flight,
                     channel_announcement_nonce,
                     ..
                 } = &open_channel;
@@ -1766,8 +1839,10 @@ where
                     channel_announcement_nonce.clone(),
                     *first_per_commitment_point,
                     *second_per_commitment_point,
-                    *max_tlc_value_in_flight,
-                    *max_tlc_number_in_flight,
+                    *remote_max_tlc_value_in_flight,
+                    *remote_max_tlc_number_in_flight,
+                    max_tlc_number_in_flight,
+                    max_tlc_value_in_flight,
                 );
                 state.check_accept_channel_parameters()?;
 
@@ -1783,10 +1858,9 @@ where
                     funding_amount: local_funding_amount,
                     shutdown_script: local_shutdown_script,
                     reserved_ckb_amount: local_reserved_ckb_amount,
-                    max_tlc_value_in_flight: DEFAULT_MAX_TLC_VALUE_IN_FLIGHT,
-                    max_tlc_number_in_flight: DEFAULT_MAX_TLC_NUMBER_IN_FLIGHT,
+                    max_tlc_value_in_flight,
+                    max_tlc_number_in_flight,
                     funding_pubkey: state.signer.funding_key.pubkey(),
-                    min_tlc_value: DEFAULT_MIN_TLC_VALUE,
                     tlc_basepoint: state.signer.tlc_base_key.pubkey(),
                     first_per_commitment_point: state
                         .signer
@@ -1862,8 +1936,8 @@ where
                     funding_fee_rate,
                     funding_udt_type_script.clone(),
                     shutdown_script.clone(),
-                    max_tlc_value_in_flight.unwrap_or(DEFAULT_MAX_TLC_VALUE_IN_FLIGHT),
-                    max_tlc_number_in_flight.unwrap_or(DEFAULT_MAX_TLC_NUMBER_IN_FLIGHT),
+                    max_tlc_value_in_flight,
+                    max_tlc_number_in_flight,
                 );
 
                 channel.check_open_channel_parameters()?;
@@ -1889,9 +1963,8 @@ where
                     funding_fee_rate,
                     commitment_fee_rate,
                     commitment_delay_epoch: channel.commitment_delay_epoch,
-                    max_tlc_value_in_flight: channel.max_tlc_value_in_flight,
-                    max_tlc_number_in_flight: channel.max_tlc_number_in_flight,
-                    min_tlc_value: DEFAULT_MIN_TLC_VALUE,
+                    max_tlc_value_in_flight: channel.local_constraints.max_tlc_value_in_flight,
+                    max_tlc_number_in_flight: channel.local_constraints.max_tlc_number_in_flight,
                     channel_flags,
                     first_per_commitment_point: channel
                         .signer
@@ -2120,6 +2193,10 @@ pub struct AddTlcInfo {
     pub hash_algorithm: HashAlgorithm,
     // the onion packet for multi-hop payment
     pub onion_packet: Option<PaymentOnionPacket>,
+    /// Shared secret used in forwarding.
+    ///
+    /// Save it to backward errors. Use all zeros when no shared secrets are available.
+    pub shared_secret: [u8; 32],
     pub created_at: CommitmentNumbers,
     pub removed_at: Option<(CommitmentNumbers, RemoveTlcReason)>,
     pub payment_preimage: Option<Hash256>,
@@ -2325,7 +2402,6 @@ impl PendingTlcs {
     }
 
     pub fn drop_remove_tlc(&mut self, tlc_id: &TLCId) {
-        //assert_eq!(self.committed_index, self.tlcs.len());
         self.tlcs.retain(|tlc| match tlc {
             TlcKind::RemoveTlc(info) => info.tlc_id != *tlc_id,
             _ => true,
@@ -2333,8 +2409,8 @@ impl PendingTlcs {
         self.committed_index = self.tlcs.len();
     }
 
-    pub fn shrink_removed_tlcs(&mut self) {
-        //assert_eq!(self.committed_index, self.tlcs.len());
+    pub fn shrink_removed_tlc(&mut self) {
+        assert_eq!(self.committed_index, self.tlcs.len());
         let new_committed_index = self
             .get_committed_tlcs()
             .iter()
@@ -2598,7 +2674,7 @@ impl TlcState {
         )
     }
 
-    pub fn apply_tlc_remove(
+    pub fn mark_tlc_remove(
         &mut self,
         tlc_id: TLCId,
         removed_at: CommitmentNumbers,
@@ -2616,16 +2692,46 @@ impl TlcState {
         }
     }
 
-    pub fn shrink_removed_tlcs(&mut self, tlc_id: TLCId) {
+    pub fn apply_remove_tlc(
+        &mut self,
+        tlc_id: TLCId,
+        removed_at: CommitmentNumbers,
+        reason: RemoveTlcReason,
+    ) {
+        self.mark_tlc_remove(tlc_id, removed_at, reason);
         // it's safe to remove multiple removed tlcs from pending TLCS,
         // just make sure the two partners are operating on correct pending list,
         // in other words, when one is remove from local TLCS,
         // the peer should remove it from remote TLCS
         if tlc_id.is_offered() {
-            self.local_pending_tlcs.shrink_removed_tlcs();
+            self.local_pending_tlcs.shrink_removed_tlc();
         } else {
-            self.remote_pending_tlcs.shrink_removed_tlcs();
+            self.remote_pending_tlcs.shrink_removed_tlc();
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Default)]
+pub struct ChannelConstraints {
+    // The maximum value can be in pending
+    pub max_tlc_value_in_flight: u128,
+    // The maximum number of tlcs that we can accept.
+    pub max_tlc_number_in_flight: u64,
+}
+
+impl ChannelConstraints {
+    pub fn new(max_tlc_value_in_flight: u128, max_tlc_number_in_flight: u64) -> Self {
+        Self {
+            max_tlc_value_in_flight,
+            max_tlc_number_in_flight,
+        }
+    }
+
+    pub fn default() -> Self {
+        Self::new(
+            DEFAULT_MAX_TLC_VALUE_IN_FLIGHT,
+            DEFAULT_MAX_TLC_NUMBER_IN_FLIGHT,
+        )
     }
 }
 
@@ -2699,11 +2805,8 @@ pub struct ChannelActorState {
     // This value is guaranteed to be 0 when channel is just created.
     pub commitment_numbers: CommitmentNumbers,
 
-    // The maximum value can be in pending
-    pub max_tlc_value_in_flight: u128,
-
-    // The maximum number of tlcs that we can accept.
-    pub max_tlc_number_in_flight: u64,
+    pub local_constraints: ChannelConstraints,
+    pub remote_constraints: ChannelConstraints,
 
     // Below are fields that are only usable after the channel is funded,
     // (or at some point of the state).
@@ -2724,8 +2827,9 @@ pub struct ChannelActorState {
     #[serde_as(as = "Option<PubNonceAsBytes>")]
     pub last_used_nonce_in_commitment_signed: Option<PubNonce>,
 
-    #[serde_as(as = "Vec<PubNonceAsBytes>")]
-    pub remote_nonces: Vec<PubNonce>,
+    // The nonces that are sent by the counterparty, the length is at most 2
+    #[serde_as(as = "Vec<(U64Hex, PubNonceAsBytes)>")]
+    pub remote_nonces: Vec<(u64, PubNonce)>,
 
     // The latest commitment transaction we're holding
     #[serde_as(as = "Option<EntityHex>")]
@@ -2733,7 +2837,8 @@ pub struct ChannelActorState {
 
     // All the commitment point that are sent from the counterparty.
     // We need to save all these points to derive the keys for the commitment transactions.
-    pub remote_commitment_points: Vec<Pubkey>,
+    // The length of this vector is at most the maximum number of flighting tlcs.
+    pub remote_commitment_points: Vec<(u64, Pubkey)>,
     pub remote_channel_public_keys: Option<ChannelBasePublicKeys>,
 
     // The shutdown info for both local and remote, they are setup by the shutdown command or message.
@@ -2770,13 +2875,13 @@ pub struct PublicChannelInfo {
     // This is a fee that is paid by the sender of the tlc.
     // The detailed calculation for the fee of forwarding tlcs is
     // `fee = round_above(tlc_fee_proportional_millionths * tlc_value / 1,000,000)`.
-    // TODO: consider this value while building the commitment transaction.
-    pub tlc_fee_proportional_millionths: Option<u128>,
-    // Max/min value of the tlc that we will accept.
-    pub tlc_max_value: Option<u128>,
-    pub tlc_min_value: Option<u128>,
+    pub tlc_fee_proportional_millionths: u128,
+
     // The expiry delta timestamp, in milliseconds, for the tlc.
-    pub tlc_expiry_delta: Option<u64>,
+    pub tlc_expiry_delta: u64,
+
+    /// The minimal tcl value we can receive in relay tlc
+    pub tlc_min_value: u128,
 
     // Channel announcement signatures, may be empty for private channel.
     pub local_channel_announcement_signature: Option<(EcdsaSignature, PartialSignature)>,
@@ -2791,16 +2896,14 @@ pub struct PublicChannelInfo {
 
 impl PublicChannelInfo {
     pub fn new(
-        tlc_expiry_delta: u64,
         tlc_min_value: u128,
-        tlc_max_value: u128,
+        tlc_expiry_delta: u64,
         tlc_fee_proportional_millionths: u128,
     ) -> Self {
         Self {
-            tlc_fee_proportional_millionths: Some(tlc_fee_proportional_millionths),
-            tlc_max_value: Some(tlc_max_value),
-            tlc_min_value: Some(tlc_min_value),
-            tlc_expiry_delta: Some(tlc_expiry_delta),
+            tlc_min_value,
+            tlc_expiry_delta,
+            tlc_fee_proportional_millionths,
             enabled: true,
             ..Default::default()
         }
@@ -2841,6 +2944,10 @@ pub enum ProcessingChannelError {
     WaitingTlcAck,
     #[error("Failed to peel onion packet: {0}")]
     PeelingOnionPacketError(String),
+    #[error("Forwarding node has tampered with the intended HTLC values or origin node has an obsolete cltv_expiry_delta")]
+    IncorrectTlcExpiry,
+    #[error("Upstream node set CLTV to less than the CLTV set by the sender")]
+    IncorrectFinalTlcExpiry,
     #[error("The amount in the HTLC is not expected")]
     FinalIncorrectHTLCAmount,
     #[error("The payment_hash is not expected for final hop")]
@@ -2857,10 +2964,40 @@ pub enum ProcessingChannelError {
     TlcValueInflightExceedLimit,
     #[error("The tlc amount below minimal")]
     TlcAmountIsTooLow,
+    #[error("The tlc amount exceed maximal")]
+    TlcAmountExceedLimit,
     #[error("The tlc expiry soon")]
     TlcExpirySoon,
     #[error("The tlc expiry too far")]
     TlcExpiryTooFar,
+}
+
+/// ProcessingChannelError which brings the shared secret used in forwarding onion packet.
+/// The shared secret is required to obfuscate the error message.
+#[derive(Error, Debug)]
+#[error("{source}")]
+pub struct ProcessingChannelErrorWithSharedSecret {
+    pub source: ProcessingChannelError,
+    /// Shared secret used in forwarding.
+    ///
+    /// Save it to backward errors. Use all zeros when no shared secrets are available.
+    pub shared_secret: [u8; 32],
+}
+
+impl ProcessingChannelError {
+    pub fn with_shared_secret(
+        self,
+        shared_secret: [u8; 32],
+    ) -> ProcessingChannelErrorWithSharedSecret {
+        ProcessingChannelErrorWithSharedSecret {
+            source: self,
+            shared_secret,
+        }
+    }
+
+    pub fn without_shared_secret(self) -> ProcessingChannelErrorWithSharedSecret {
+        self.with_shared_secret(NO_SHARED_SECRET.clone())
+    }
 }
 
 bitflags! {
@@ -3359,33 +3496,19 @@ impl ChannelActorState {
         let message_flags = if local_is_node1 { 0 } else { 1 };
 
         self.public_channel_info.as_ref().and_then(|info| {
-            match (
+            Some(ChannelUpdate::new_unsigned(
+                Default::default(),
+                self.must_get_funding_transaction_outpoint(),
+                std::time::UNIX_EPOCH
+                    .elapsed()
+                    .expect("Duration since unix epoch")
+                    .as_secs(),
+                message_flags,
+                0,
                 info.tlc_expiry_delta,
                 info.tlc_min_value,
-                info.tlc_max_value,
                 info.tlc_fee_proportional_millionths,
-            ) {
-                (
-                    Some(expiry_delta),
-                    Some(min_value),
-                    Some(max_value),
-                    Some(fee_proportional_millionths),
-                ) => Some(ChannelUpdate::new_unsigned(
-                    get_chain_hash(),
-                    self.must_get_funding_transaction_outpoint(),
-                    now_timestamp_as_millis_u64(),
-                    message_flags,
-                    0,
-                    expiry_delta,
-                    min_value,
-                    max_value,
-                    fee_proportional_millionths,
-                )),
-                _ => {
-                    warn!("Missing channel update parameters, cannot create channel update message: public_channel_info={:?}", info);
-                    None
-                }
-            }
+            ))
         })
     }
 
@@ -3410,8 +3533,10 @@ impl ChannelActorState {
         remote_channel_announcement_nonce: Option<PubNonce>,
         first_commitment_point: Pubkey,
         second_commitment_point: Pubkey,
-        max_tlc_value_in_flight: u128,
-        max_tlc_number_in_flight: u64,
+        remote_max_tlc_value_in_flight: u128,
+        remote_max_tlc_number_in_flight: u64,
+        local_max_tlc_number_in_flight: u64,
+        local_max_tlc_value_in_flight: u128,
     ) -> Self {
         let signer = InMemorySigner::generate_from_seed(seed);
         let local_base_pubkeys = signer.get_base_public_keys();
@@ -3449,16 +3574,24 @@ impl ChannelActorState {
             commitment_numbers: Default::default(),
             remote_shutdown_script: Some(remote_shutdown_script),
             last_used_nonce_in_commitment_signed: None,
-            remote_nonces: vec![remote_nonce],
-            remote_commitment_points: vec![first_commitment_point, second_commitment_point],
+            remote_nonces: vec![(0, remote_nonce)],
+            remote_commitment_points: vec![
+                (0, first_commitment_point),
+                (1, second_commitment_point),
+            ],
             local_shutdown_info: None,
             remote_shutdown_info: None,
             local_reserved_ckb_amount,
             remote_reserved_ckb_amount,
             latest_commitment_transaction: None,
-            max_tlc_value_in_flight,
-            max_tlc_number_in_flight,
-
+            local_constraints: ChannelConstraints::new(
+                local_max_tlc_value_in_flight,
+                local_max_tlc_number_in_flight,
+            ),
+            remote_constraints: ChannelConstraints::new(
+                remote_max_tlc_value_in_flight,
+                remote_max_tlc_number_in_flight,
+            ),
             reestablishing: false,
             created_at: SystemTime::now(),
         };
@@ -3481,8 +3614,8 @@ impl ChannelActorState {
         funding_fee_rate: u64,
         funding_udt_type_script: Option<Script>,
         shutdown_script: Script,
-        max_tlc_value_in_flight: u128,
-        max_tlc_number_in_flight: u64,
+        local_max_tlc_value_in_flight: u128,
+        local_max_tlc_number_in_flight: u64,
     ) -> Self {
         let signer = InMemorySigner::generate_from_seed(seed);
         let local_pubkeys = signer.get_base_public_keys();
@@ -3505,8 +3638,12 @@ impl ChannelActorState {
             tlc_state: Default::default(),
             signer,
             local_channel_public_keys: local_pubkeys,
-            max_tlc_number_in_flight,
-            max_tlc_value_in_flight,
+            local_constraints: ChannelConstraints::new(
+                local_max_tlc_value_in_flight,
+                local_max_tlc_number_in_flight,
+            ),
+            // these values will update after accept channel peer message handled
+            remote_constraints: ChannelConstraints::default(),
             remote_channel_public_keys: None,
             last_used_nonce_in_commitment_signed: None,
             remote_nonces: vec![],
@@ -3519,7 +3656,6 @@ impl ChannelActorState {
             local_reserved_ckb_amount,
             remote_reserved_ckb_amount: 0,
             latest_commitment_transaction: None,
-
             reestablishing: false,
             created_at: SystemTime::now(),
         }
@@ -3589,10 +3725,10 @@ impl ChannelActorState {
         }
 
         // max_tlc_number_in_flight
-        if self.max_tlc_number_in_flight > SYS_MAX_TLC_NUMBER_IN_FLIGHT {
+        if self.local_constraints.max_tlc_number_in_flight > SYS_MAX_TLC_NUMBER_IN_FLIGHT {
             return Err(ProcessingChannelError::InvalidParameter(format!(
-                "Max TLC number in flight {} is greater than the system maximal value {}",
-                self.max_tlc_number_in_flight, SYS_MAX_TLC_NUMBER_IN_FLIGHT
+                "Local max TLC number in flight {} is greater than the system maximal value {}",
+                self.local_constraints.max_tlc_number_in_flight, SYS_MAX_TLC_NUMBER_IN_FLIGHT
             )));
         }
 
@@ -3600,6 +3736,13 @@ impl ChannelActorState {
     }
 
     fn check_accept_channel_parameters(&self) -> Result<(), ProcessingChannelError> {
+        if self.remote_constraints.max_tlc_number_in_flight > MAX_TLC_NUMBER_IN_FLIGHT {
+            return Err(ProcessingChannelError::InvalidParameter(format!(
+                "Remote max TLC number in flight {} is greater than the system maximal value {}",
+                self.remote_constraints.max_tlc_number_in_flight, MAX_TLC_NUMBER_IN_FLIGHT
+            )));
+        }
+
         let udt_type_script = &self.funding_udt_type_script;
 
         // reserved_ckb_amount
@@ -3799,7 +3942,7 @@ impl ChannelActorState {
     fn get_our_tlc_fee_proportional_millionths(&self) -> Option<u128> {
         self.public_channel_info
             .as_ref()
-            .and_then(|state| state.tlc_fee_proportional_millionths)
+            .map(|state| state.tlc_fee_proportional_millionths)
     }
 
     fn update_our_tlc_fee_proportional_millionths(&mut self, fee: u128) -> bool {
@@ -3808,24 +3951,7 @@ impl ChannelActorState {
             Some(old_fee) if old_fee == fee => false,
             _ => {
                 self.public_channel_state_mut()
-                    .tlc_fee_proportional_millionths = Some(fee);
-                true
-            }
-        }
-    }
-
-    fn get_our_tlc_max_value(&self) -> Option<u128> {
-        self.public_channel_info
-            .as_ref()
-            .and_then(|state| state.tlc_max_value)
-    }
-
-    fn update_our_tlc_max_value(&mut self, value: u128) -> bool {
-        let old_value = self.get_our_tlc_max_value();
-        match old_value {
-            Some(old_value) if old_value == value => false,
-            _ => {
-                self.public_channel_state_mut().tlc_max_value = Some(value);
+                    .tlc_fee_proportional_millionths = fee;
                 true
             }
         }
@@ -3834,7 +3960,7 @@ impl ChannelActorState {
     fn get_our_tlc_min_value(&self) -> Option<u128> {
         self.public_channel_info
             .as_ref()
-            .and_then(|state| state.tlc_min_value)
+            .map(|state| state.tlc_min_value)
     }
 
     fn update_our_tlc_min_value(&mut self, value: u128) -> bool {
@@ -3842,7 +3968,7 @@ impl ChannelActorState {
         match old_value {
             Some(old_value) if old_value == value => false,
             _ => {
-                self.public_channel_state_mut().tlc_min_value = Some(value);
+                self.public_channel_state_mut().tlc_min_value = value;
                 true
             }
         }
@@ -3866,7 +3992,7 @@ impl ChannelActorState {
     fn get_our_tlc_expiry_delta(&self) -> Option<u64> {
         self.public_channel_info
             .as_ref()
-            .and_then(|state| state.tlc_expiry_delta)
+            .map(|info| info.tlc_expiry_delta)
     }
 
     fn update_our_tlc_expiry_delta(&mut self, value: u64) -> bool {
@@ -3874,7 +4000,7 @@ impl ChannelActorState {
         match old_value {
             Some(old_value) if old_value == value => false,
             _ => {
-                self.public_channel_state_mut().tlc_expiry_delta = Some(value);
+                self.public_channel_state_mut().tlc_expiry_delta = value;
                 true
             }
         }
@@ -4011,15 +4137,35 @@ impl ChannelActorState {
             "Getting remote nonce: commitment number {}, current nonces: {:?}",
             comitment_number, &self.remote_nonces
         );
-        self.remote_nonces[comitment_number as usize].clone()
+        assert!(self.remote_nonces.len() <= 2);
+        self.remote_nonces
+            .iter()
+            .rev()
+            .find_map(|(number, nonce)| {
+                if *number == comitment_number {
+                    Some(nonce.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("get_remote_nonce")
     }
 
     fn save_remote_nonce(&mut self, nonce: PubNonce) {
         debug!(
-            "Saving remote nonce: new nonce {:?}, current nonces {:?}",
-            &nonce, &self.remote_nonces
+            "Saving remote nonce: new nonce {:?}, current nonces {:?}, commitment numbers {:?}",
+            &nonce, &self.remote_nonces, self.commitment_numbers
         );
-        self.remote_nonces.push(nonce);
+
+        let next_remote_number = if self.remote_nonces.is_empty() {
+            0
+        } else {
+            self.get_remote_commitment_number() + 1
+        };
+        self.remote_nonces.push((next_remote_number, nonce));
+        if self.remote_nonces.len() > 2 {
+            self.remote_nonces.remove(0);
+        }
     }
 
     fn save_remote_nonce_for_raa(&mut self) {
@@ -4123,16 +4269,10 @@ impl ChannelActorState {
                 payment_hash, tlc
             )));
         }
-        if tlc.amount == 0 {
-            return Err(ProcessingChannelError::TlcAmountIsTooLow);
-        }
         if tlc.is_offered() {
-            // TODO: We should actually also consider all our fulfilled tlcs here.
-            // Because this is also the amount that we can actually spend.
             let sent_tlc_value = self.get_offered_tlc_balance();
             debug!("Value of local sent tlcs: {}", sent_tlc_value);
             debug_assert!(self.to_local_amount >= sent_tlc_value);
-            // TODO: handle transaction fee here.
             if sent_tlc_value + tlc.amount > self.to_local_amount {
                 return Err(ProcessingChannelError::InvalidParameter(format!(
                     "Adding tlc {:?} with amount {} exceeds local balance {}",
@@ -4142,12 +4282,9 @@ impl ChannelActorState {
                 )));
             }
         } else {
-            // TODO: We should actually also consider all their fulfilled tlcs here.
-            // Because this is also the amount that we can actually spend.
             let received_tlc_value = self.get_received_tlc_balance();
             debug!("Value of remote received tlcs: {}", received_tlc_value);
             debug_assert!(self.to_remote_amount >= received_tlc_value);
-            // TODO: handle transaction fee here.
             if received_tlc_value + tlc.amount > self.to_remote_amount {
                 return Err(ProcessingChannelError::InvalidParameter(format!(
                     "Adding tlc {:?} with amount {} exceeds remote balance {}",
@@ -4177,68 +4314,55 @@ impl ChannelActorState {
         reason: &RemoveTlcReason,
     ) -> Result<AddTlcInfo, ProcessingChannelError> {
         let removed_at = self.get_current_commitment_numbers();
-        let tlc = match self.tlc_state.get(&tlc_id).cloned() {
-            None => {
-                return Err(ProcessingChannelError::InvalidParameter(format!(
-                    "Trying to remove non-existing tlc with id {:?}",
-                    tlc_id
-                )))
+        let current = self.tlc_state.get(&tlc_id).expect("TLC exists").clone();
+
+        match &current.removed_at {
+            Some((current_removed_at, current_remove_reason))
+                if current_remove_reason == reason && removed_at == *current_removed_at =>
+            {
+                debug!("Skipping removing of tlc {:?} as it is already removed at {:?} with the same reason {:?}", tlc_id, removed_at, reason);
+                return Err(ProcessingChannelError::RepeatedProcessing(
+                    "TLC is already removed".to_string(),
+                ));
             }
-            Some(current) => {
-                let add_tlc = current.clone();
-                match &current.removed_at {
-                    Some((current_removed_at, current_remove_reason))
-                        if current_remove_reason == reason && removed_at == *current_removed_at =>
-                    {
-                        debug!(
-                            "Skipping removing of tlc {:?} as it is already removed at {:?} with the same reason {:?}", tlc_id, removed_at, reason
-                        );
-                        return Err(ProcessingChannelError::RepeatedProcessing(
-                            "TLC is already removed".to_string(),
-                        ));
-                    }
-                    Some((current_remove_reason, current_removed_at)) => {
-                        return Err(ProcessingChannelError::InvalidParameter(
+            Some((current_remove_reason, current_removed_at)) => {
+                return Err(ProcessingChannelError::InvalidParameter(
                             format!("Illegally removing the same tlc: {:?} was previously removed at {:?} for {:?}, and trying to remove it again at {:?} for {:?}",
                                 tlc_id,  current_removed_at, reason, removed_at, current_remove_reason)));
-                    }
-                    None => {
-                        debug!(
-                            "Inserting remove reason {:?} at commitment number {:?} for tlc {:?} hash_algorithm: {:?}",
-                            reason, removed_at, current, add_tlc.hash_algorithm
-                        );
-                        if let RemoveTlcReason::RemoveTlcFulfill(fulfill) = reason {
-                            let filled_payment_hash: Hash256 =
-                                add_tlc.hash_algorithm.hash(fulfill.payment_preimage).into();
-                            if current.payment_hash != filled_payment_hash {
-                                return Err(ProcessingChannelError::FinalIncorrectPreimage);
-                            }
-
-                            // update balance according to the tlc
-                            let (mut to_local_amount, mut to_remote_amount) =
-                                (self.to_local_amount, self.to_remote_amount);
-                            if add_tlc.is_offered() {
-                                to_local_amount -= add_tlc.amount;
-                                to_remote_amount += add_tlc.amount;
-                            } else {
-                                to_local_amount += add_tlc.amount;
-                                to_remote_amount -= add_tlc.amount;
-                            }
-                            self.to_local_amount = to_local_amount;
-                            self.to_remote_amount = to_remote_amount;
-
-                            debug!("Updated local balance to {} and remote balance to {} by removing tlc {:?} with reason {:?}",
-                                to_local_amount, to_remote_amount, tlc_id, reason);
-                        }
-                    }
-                };
-
-                self.tlc_state
-                    .apply_tlc_remove(tlc_id, removed_at, reason.clone());
-                current
             }
-        };
-        Ok(tlc.clone())
+            None => {
+                debug!("Inserting remove reason {:?} at commitment number {:?} for tlc {:?} hash_algorithm: {:?}",
+                        reason, removed_at, current, current.hash_algorithm);
+
+                if let RemoveTlcReason::RemoveTlcFulfill(fulfill) = reason {
+                    let filled_payment_hash: Hash256 =
+                        current.hash_algorithm.hash(fulfill.payment_preimage).into();
+                    if current.payment_hash != filled_payment_hash {
+                        return Err(ProcessingChannelError::FinalIncorrectPreimage);
+                    }
+
+                    // update balance according to the tlc
+                    let (mut to_local_amount, mut to_remote_amount) =
+                        (self.to_local_amount, self.to_remote_amount);
+                    if current.is_offered() {
+                        to_local_amount -= current.amount;
+                        to_remote_amount += current.amount;
+                    } else {
+                        to_local_amount += current.amount;
+                        to_remote_amount -= current.amount;
+                    }
+                    self.to_local_amount = to_local_amount;
+                    self.to_remote_amount = to_remote_amount;
+
+                    debug!("Updated local balance to {} and remote balance to {} by removing tlc {:?} with reason {:?}",
+                            to_local_amount, to_remote_amount, tlc_id, reason);
+                }
+                self.tlc_state
+                    .apply_remove_tlc(tlc_id, removed_at, reason.clone());
+            }
+        }
+
+        Ok(current.clone())
     }
 
     pub fn get_local_channel_public_keys(&self) -> &ChannelBasePublicKeys {
@@ -4303,16 +4427,20 @@ impl ChannelActorState {
 
     /// Get the counterparty commitment point for the given commitment number.
     fn get_remote_commitment_point(&self, commitment_number: u64) -> Pubkey {
-        debug!("Getting remote commitment point #{}", commitment_number);
-        let index = commitment_number as usize;
-        let commitment_point = self.remote_commitment_points[index];
         debug!(
-            "Obtained remote commitment point #{} (counting from 0) out of total {} commitment points: {:?}",
-            index,
-            self.remote_commitment_points.len(),
-            commitment_point
+            "Getting remote commitment point #{} from remote_commitment_points: {:?}",
+            commitment_number, &self.remote_commitment_points
         );
-        commitment_point
+        self.remote_commitment_points
+            .iter()
+            .find_map(|(number, point)| {
+                if *number == commitment_number {
+                    Some(point.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("remote commitment point should exist")
     }
 
     fn get_current_local_commitment_point(&self) -> Pubkey {
@@ -4615,6 +4743,7 @@ impl ChannelActorState {
         &self,
         add_tlc_amount: Option<u128>,
         is_tlc_command_message: bool,
+        is_sent: bool,
     ) -> ProcessingChannelResult {
         if is_tlc_command_message && self.tlc_state.waiting_ack {
             return Err(ProcessingChannelError::WaitingTlcAck);
@@ -4636,36 +4765,45 @@ impl ChannelActorState {
         }
 
         if let Some(add_amount) = add_tlc_amount {
-            self.check_tlc_limits(add_amount, true)?;
-            if is_tlc_command_message {
-                // TODO: this should be replaced by using the remote channel's max_tlc_number_in_flight and max_tlc_value_in_flight
-                self.check_tlc_limits(add_amount, false)?;
-            }
+            self.check_tlc_limits(add_amount, is_sent)?;
         }
         Ok(())
     }
 
-    // TODO: need to use `local` to check the limits for the remote peer
     fn check_tlc_limits(
         &self,
         add_amount: u128,
-        _local: bool,
+        is_sent: bool,
     ) -> Result<(), ProcessingChannelError> {
-        let active_tls_number =
-            self.get_all_offer_tlcs().count() + self.get_all_received_tlcs().count();
-
-        if active_tls_number as u64 + 1 > self.max_tlc_number_in_flight {
-            return Err(ProcessingChannelError::TlcNumberExceedLimit);
+        if add_amount == 0 {
+            return Err(ProcessingChannelError::TlcAmountIsTooLow);
         }
+        if is_sent {
+            let active_offered_tls_number = self.get_all_offer_tlcs().count() as u64 + 1;
+            if active_offered_tls_number > self.local_constraints.max_tlc_number_in_flight {
+                return Err(ProcessingChannelError::TlcNumberExceedLimit);
+            }
 
-        if self
-            .get_all_offer_tlcs()
-            .chain(self.get_all_received_tlcs())
-            .fold(0_u128, |sum, tlc| sum + tlc.amount)
-            + add_amount
-            > self.max_tlc_value_in_flight
-        {
-            return Err(ProcessingChannelError::TlcValueInflightExceedLimit);
+            let active_offered_amount = self
+                .get_all_offer_tlcs()
+                .fold(0_u128, |sum, tlc| sum + tlc.amount)
+                + add_amount;
+            if active_offered_amount > self.local_constraints.max_tlc_value_in_flight {
+                return Err(ProcessingChannelError::TlcValueInflightExceedLimit);
+            }
+        } else {
+            let active_received_tls_number = self.get_all_received_tlcs().count() as u64 + 1;
+            if active_received_tls_number > self.remote_constraints.max_tlc_number_in_flight {
+                return Err(ProcessingChannelError::TlcNumberExceedLimit);
+            }
+
+            let active_received_amount = self
+                .get_all_received_tlcs()
+                .fold(0_u128, |sum, tlc| sum + tlc.amount)
+                + add_amount;
+            if active_received_amount > self.remote_constraints.max_tlc_value_in_flight {
+                return Err(ProcessingChannelError::TlcValueInflightExceedLimit);
+            }
         }
 
         Ok(())
@@ -4695,6 +4833,7 @@ impl ChannelActorState {
             payment_preimage: None,
             removed_at: None,
             onion_packet: command.onion_packet,
+            shared_secret: command.shared_secret,
             previous_tlc: command
                 .previous_tlc
                 .map(|(channel_id, tlc_id)| (channel_id, TLCId::Received(tlc_id))),
@@ -4714,6 +4853,8 @@ impl ChannelActorState {
             hash_algorithm: message.hash_algorithm,
             // will be set when apply AddTlc operations after the signature is checked
             onion_packet: message.onion_packet,
+            // No need to save shared secret for inbound TLC.
+            shared_secret: NO_SHARED_SECRET.clone(),
             created_at: self.get_current_commitment_numbers(),
             payment_preimage: None,
             removed_at: None,
@@ -4886,10 +5027,16 @@ impl ChannelActorState {
         let remote_pubkeys = (&accept_channel).into();
         self.remote_channel_public_keys = Some(remote_pubkeys);
         self.remote_commitment_points = vec![
-            accept_channel.first_per_commitment_point,
-            accept_channel.second_per_commitment_point,
+            (0, accept_channel.first_per_commitment_point),
+            (1, accept_channel.second_per_commitment_point),
         ];
         self.remote_shutdown_script = Some(accept_channel.shutdown_script.clone());
+
+        self.remote_constraints = ChannelConstraints::new(
+            accept_channel.max_tlc_value_in_flight,
+            accept_channel.max_tlc_number_in_flight,
+        );
+
         self.check_accept_channel_parameters()?;
 
         match accept_channel.channel_announcement_nonce {
@@ -5012,7 +5159,7 @@ impl ChannelActorState {
         Ok(())
     }
 
-    fn handle_commitment_signed_message(
+    fn verify_commitment_signed_and_send_ack(
         &mut self,
         commitment_signed: CommitmentSigned,
         network: &ActorRef<NetworkActorMessage>,
@@ -5305,19 +5452,27 @@ impl ChannelActorState {
     }
 
     fn append_remote_commitment_point(&mut self, commitment_point: Pubkey) {
-        debug!(
-            "Setting remote commitment point #{} (counting from 0)): {:?}",
-            self.remote_commitment_points.len(),
-            commitment_point
+        self.remote_commitment_points
+            .push((self.get_local_commitment_number(), commitment_point));
+
+        let len = self.remote_commitment_points.len();
+        if len > (self.local_constraints.max_tlc_number_in_flight + 1) as usize {
+            let min_remote_commitment = self
+                .tlc_state
+                .all_tlcs()
+                .map(|x| x.created_at.remote)
+                .min()
+                .unwrap_or_default();
+            self.remote_commitment_points
+                .retain(|(num, _)| *num >= min_remote_commitment);
+        }
+        assert!(
+            self.remote_commitment_points.len()
+                <= (self.local_constraints.max_tlc_number_in_flight + 1) as usize
         );
-        assert_eq!(
-            self.remote_commitment_points.len() as u64,
-            self.get_local_commitment_number()
-        );
-        self.remote_commitment_points.push(commitment_point);
     }
 
-    fn handle_revoke_and_ack_message(
+    fn handle_revoke_and_ack_peer_message(
         &mut self,
         network: &ActorRef<NetworkActorMessage>,
         revoke_and_ack: RevokeAndAck,
@@ -5407,10 +5562,12 @@ impl ChannelActorState {
 
         self.increment_local_commitment_number();
         self.append_remote_commitment_point(next_per_commitment_point);
+
         let staging_tlcs = self.tlc_state.commit_local_tlcs();
         for tlc in staging_tlcs {
             if let TlcKind::RemoveTlc(remove_tlc) = tlc {
-                self.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_tlc.reason)?;
+                self.remove_tlc_with_reason(remove_tlc.tlc_id, &remove_tlc.reason)
+                    .expect("expect remove tlc successfully");
             }
         }
         self.tlc_state.set_waiting_ack(false);

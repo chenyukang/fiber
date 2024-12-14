@@ -190,7 +190,6 @@ fn test_store_save_channel_update() {
         0,
         0,
         0,
-        0,
     );
     let out_point = channel_update_of_node1.channel_outpoint.clone();
     store.save_channel_update(channel_update_of_node1.clone());
@@ -309,10 +308,9 @@ fn test_channel_actor_state_store() {
         state: ChannelState::NegotiatingFunding(NegotiatingFundingFlags::THEIR_INIT_SENT),
         public_channel_info: Some(PublicChannelInfo {
             enabled: false,
-            tlc_fee_proportional_millionths: Some(123),
-            tlc_max_value: Some(1),
-            tlc_min_value: Some(2),
-            tlc_expiry_delta: Some(3),
+            tlc_fee_proportional_millionths: 123,
+            tlc_expiry_delta: 3,
+            tlc_min_value: 10,
             local_channel_announcement_signature: Some((
                 mock_ecdsa_signature(),
                 MaybeScalar::two(),
@@ -351,15 +349,18 @@ fn test_channel_actor_state_store() {
         commitment_numbers: Default::default(),
         remote_shutdown_script: Some(Script::default()),
         last_used_nonce_in_commitment_signed: None,
-        remote_nonces: vec![pub_nonce.clone()],
-        remote_commitment_points: vec![gen_rand_fiber_public_key(), gen_rand_fiber_public_key()],
+        remote_nonces: vec![(0, pub_nonce.clone())],
+        remote_commitment_points: vec![
+            (0, gen_rand_fiber_public_key()),
+            (1, gen_rand_fiber_public_key()),
+        ],
         local_shutdown_info: None,
         remote_shutdown_info: None,
         local_reserved_ckb_amount: 100,
         remote_reserved_ckb_amount: 100,
         latest_commitment_transaction: None,
-        max_tlc_value_in_flight: 100,
-        max_tlc_number_in_flight: 100,
+        local_constraints: ChannelConstraints::default(),
+        remote_constraints: ChannelConstraints::default(),
         reestablishing: false,
         created_at: SystemTime::now(),
     };
