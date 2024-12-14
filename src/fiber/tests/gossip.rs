@@ -13,15 +13,15 @@ use tentacle::{
 use tokio::{spawn, sync::RwLock};
 
 use crate::{
-    ckb::tests::actor::create_mock_chain_actor,
+    ckb::{tests::actor::create_mock_chain_actor, CkbChainMessage},
     fiber::{
         gossip::{
             ExtendedGossipMessageStore, ExtendedGossipMessageStoreMessage, GossipMessageStore,
             GossipMessageUpdates, GossipProtocolHandle, SubscribableGossipMessageStore,
         },
-        types::{BroadcastMessage, BroadcastMessageWithTimestamp},
+        types::{BroadcastMessage, BroadcastMessageWithTimestamp, Cursor},
     },
-    gen_node_announcement_from_privkey, gen_rand_node_announcement,
+    gen_node_announcement_from_privkey, gen_rand_channel_announcement, gen_rand_node_announcement,
     store::Store,
 };
 
@@ -45,6 +45,73 @@ impl ServiceHandle for DummyServiceHandle {
     }
 }
 
+struct GossipTestingContext {
+    chain_actor: ActorRef<CkbChainMessage>,
+    store_update_subscriber: ExtendedGossipMessageStore<Store>,
+}
+
+impl GossipTestingContext {
+    async fn new() -> Self {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("gossip_store");
+        let store = Store::new(path).expect("created store failed");
+        let chain_actor = create_mock_chain_actor().await;
+        let root_actor = get_test_root_actor().await;
+        let (gossip_handle, store_update_subscriber) = GossipProtocolHandle::new(
+            None,
+            Duration::from_millis(50).into(),
+            Duration::from_millis(50).into(),
+            store.clone(),
+            chain_actor.clone(),
+            root_actor.get_cell(),
+        )
+        .await;
+
+        run_dummy_tentacle_service(gossip_handle).await;
+
+        Self {
+            chain_actor,
+            store_update_subscriber,
+        }
+    }
+}
+
+impl GossipTestingContext {
+    fn get_chain_actor(&self) -> &ActorRef<CkbChainMessage> {
+        &self.chain_actor
+    }
+
+    fn get_store_update_subscriber(&self) -> &ExtendedGossipMessageStore<Store> {
+        &self.store_update_subscriber
+    }
+
+    fn get_store(&self) -> &Store {
+        &self.store_update_subscriber.store
+    }
+
+    fn get_store_actor(&self) -> &ActorRef<ExtendedGossipMessageStoreMessage> {
+        &self.store_update_subscriber.actor
+    }
+
+    async fn subscribe(
+        &self,
+        cursor: Option<Cursor>,
+    ) -> Arc<RwLock<Vec<BroadcastMessageWithTimestamp>>> {
+        let (subscriber, messages) = Subscriber::start_actor().await;
+        self.store_update_subscriber
+            .subscribe(cursor, subscriber, |m| Some(SubscriberMessage::Update(m)))
+            .await
+            .expect("subscribe to store updates");
+        messages
+    }
+
+    fn save_message(&self, message: BroadcastMessage) {
+        self.get_store_actor()
+            .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(message))
+            .expect("send message");
+    }
+}
+
 // The gossip actor expects us to pass a tentacle control. This is a dummy tentacle service that
 // passes the control to the gossip actor. It serves no other purpose.
 async fn run_dummy_tentacle_service(gossip_handle: GossipProtocolHandle) {
@@ -63,57 +130,6 @@ async fn run_dummy_tentacle_service(gossip_handle: GossipProtocolHandle) {
     let _ = spawn(async move {
         service.run().await;
     });
-}
-
-// This function creates a gossip store that can be subscribed to. The first return value is the
-// the underlying store, the second is the actor that can be used to save messages to the store,
-// The third is an entity from which we can subscribe to store updates.
-async fn create_subscribable_gossip_store() -> (
-    Store,
-    ActorRef<ExtendedGossipMessageStoreMessage>,
-    ExtendedGossipMessageStore<Store>,
-) {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("gossip_store");
-    let store = Store::new(path).expect("created store failed");
-    let chain_actor = create_mock_chain_actor().await;
-    let root_actor = get_test_root_actor().await;
-    let (gossip_handle, store_update_subscriber) = GossipProtocolHandle::new(
-        None,
-        Duration::from_millis(50).into(),
-        Duration::from_millis(50).into(),
-        store.clone(),
-        chain_actor,
-        root_actor.get_cell(),
-    )
-    .await;
-
-    run_dummy_tentacle_service(gossip_handle).await;
-
-    (
-        store,
-        store_update_subscriber.actor.clone(),
-        store_update_subscriber,
-    )
-}
-
-// This function creates a gossip store that can be subscribed to. The first return value is the
-// the underlying store, the second is the actor that can be used to save messages to the store,
-// The third is an entity from which we can subscribe to store updates. The fourth is a vector
-// that stores all the messages that the subscriber has received.
-async fn create_subscribable_gossip_store_with_subscriber() -> (
-    Store,
-    ActorRef<ExtendedGossipMessageStoreMessage>,
-    ExtendedGossipMessageStore<Store>,
-    Arc<RwLock<Vec<BroadcastMessageWithTimestamp>>>,
-) {
-    let (store, store_actor, store_update_subscriber) = create_subscribable_gossip_store().await;
-    let (subscriber, messages) = Subscriber::start_actor().await;
-    store_update_subscriber
-        .subscribe(None, subscriber, |m| Some(SubscriberMessage::Update(m)))
-        .await
-        .expect("subscribe to store updates");
-    (store, store_actor, store_update_subscriber, messages)
 }
 
 // A subscriber which subscribes to the store updates and save all updates to a vector.
@@ -185,15 +201,12 @@ impl Actor for Subscriber {
 
 #[tokio::test]
 async fn test_save_gossip_message() {
-    let (store, store_actor, _store_update_subscriber) = create_subscribable_gossip_store().await;
+    let context = GossipTestingContext::new().await;
     let (_, announcement) = gen_rand_node_announcement();
-    store_actor
-        .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
-            BroadcastMessage::NodeAnnouncement(announcement.clone()),
-        ))
-        .expect("send message");
+    context.save_message(BroadcastMessage::NodeAnnouncement(announcement.clone()));
     tokio::time::sleep(Duration::from_millis(200).into()).await;
-    let new_announcement = store
+    let new_announcement = context
+        .get_store()
         .get_latest_node_announcement(&announcement.node_id)
         .expect("get latest node announcement");
     assert_eq!(new_announcement, announcement);
@@ -201,29 +214,23 @@ async fn test_save_gossip_message() {
 
 #[tokio::test]
 async fn test_save_outdated_gossip_message() {
-    let (store, store_actor, _store_update_subscriber) = create_subscribable_gossip_store().await;
+    let context = GossipTestingContext::new().await;
     let (sk, old_announcement) = gen_rand_node_announcement();
     // Make sure new announcement has a different timestamp
     tokio::time::sleep(Duration::from_millis(2).into()).await;
     let new_announcement = gen_node_announcement_from_privkey(&sk);
-    store_actor
-        .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
-            BroadcastMessage::NodeAnnouncement(new_announcement.clone()),
-        ))
-        .expect("send message");
+    context.save_message(BroadcastMessage::NodeAnnouncement(new_announcement.clone()));
     tokio::time::sleep(Duration::from_millis(200).into()).await;
-    let announcement_in_store = store
+    let announcement_in_store = context
+        .get_store()
         .get_latest_node_announcement(&new_announcement.node_id)
         .expect("get latest node announcement");
     assert_eq!(announcement_in_store, new_announcement);
 
-    store_actor
-        .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
-            BroadcastMessage::NodeAnnouncement(old_announcement.clone()),
-        ))
-        .expect("send message");
+    context.save_message(BroadcastMessage::NodeAnnouncement(old_announcement.clone()));
     tokio::time::sleep(Duration::from_millis(200).into()).await;
-    let announcement_in_store = store
+    let announcement_in_store = context
+        .get_store()
         .get_latest_node_announcement(&new_announcement.node_id)
         .expect("get latest node announcement");
     assert_eq!(announcement_in_store, new_announcement);
@@ -231,13 +238,10 @@ async fn test_save_outdated_gossip_message() {
 
 #[tokio::test]
 async fn test_gossip_store_updates_basic_subscription() {
-    let (_, store_actor, _, messages) = create_subscribable_gossip_store_with_subscriber().await;
+    let context = GossipTestingContext::new().await;
+    let messages = context.subscribe(None).await;
     let (_, announcement) = gen_rand_node_announcement();
-    store_actor
-        .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
-            BroadcastMessage::NodeAnnouncement(announcement.clone()),
-        ))
-        .expect("send message");
+    context.save_message(BroadcastMessage::NodeAnnouncement(announcement.clone()));
     tokio::time::sleep(Duration::from_millis(200).into()).await;
     let messages = messages.read().await;
     assert!(messages.len() == 1);
@@ -249,14 +253,11 @@ async fn test_gossip_store_updates_basic_subscription() {
 
 #[tokio::test]
 async fn test_gossip_store_updates_repeated_saving() {
-    let (_, store_actor, _, messages) = create_subscribable_gossip_store_with_subscriber().await;
+    let context = GossipTestingContext::new().await;
+    let messages = context.subscribe(None).await;
     let (_, announcement) = gen_rand_node_announcement();
     for _ in 0..10 {
-        store_actor
-            .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
-                BroadcastMessage::NodeAnnouncement(announcement.clone()),
-            ))
-            .expect("send message");
+        context.save_message(BroadcastMessage::NodeAnnouncement(announcement.clone()));
     }
     tokio::time::sleep(Duration::from_millis(200).into()).await;
     let messages = messages.read().await;
@@ -269,17 +270,14 @@ async fn test_gossip_store_updates_repeated_saving() {
 
 #[tokio::test]
 async fn test_gossip_store_updates_saving_multiple_messages() {
-    let (_, store_actor, _, messages) = create_subscribable_gossip_store_with_subscriber().await;
+    let context = GossipTestingContext::new().await;
+    let messages = context.subscribe(None).await;
     let announcements = (0..10)
         .into_iter()
         .map(|_| gen_rand_node_announcement().1)
         .collect::<Vec<_>>();
     for annoncement in &announcements {
-        store_actor
-            .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
-                BroadcastMessage::NodeAnnouncement(annoncement.clone()),
-            ))
-            .expect("send message");
+        context.save_message(BroadcastMessage::NodeAnnouncement(annoncement.clone()));
     }
     tokio::time::sleep(Duration::from_millis(200).into()).await;
     let messages = messages.read().await;
@@ -294,17 +292,14 @@ async fn test_gossip_store_updates_saving_multiple_messages() {
 
 #[tokio::test]
 async fn test_gossip_store_updates_saving_outdated_message() {
-    let (_, store_actor, _, messages) = create_subscribable_gossip_store_with_subscriber().await;
+    let context = GossipTestingContext::new().await;
+    let messages = context.subscribe(None).await;
     let (sk, old_announcement) = gen_rand_node_announcement();
     // Make sure new announcement has a different timestamp
     tokio::time::sleep(Duration::from_millis(2).into()).await;
     let new_announcement = gen_node_announcement_from_privkey(&sk);
     for announcement in [&old_announcement, &new_announcement] {
-        store_actor
-            .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
-                BroadcastMessage::NodeAnnouncement(announcement.clone()),
-            ))
-            .expect("send message");
+        context.save_message(BroadcastMessage::NodeAnnouncement(announcement.clone()));
     }
 
     tokio::time::sleep(Duration::from_millis(200).into()).await;
