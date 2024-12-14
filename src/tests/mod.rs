@@ -1,14 +1,19 @@
+use ckb_hash::blake2b_256;
+use ckb_sdk::{Since, SinceType};
+use ckb_types::core::TransactionView;
+use ckb_types::packed::CellOutput;
 use ckb_types::prelude::{Builder, Entity};
 use ckb_types::{packed::OutPoint, prelude::Pack};
-use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey};
+use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey, XOnlyPublicKey};
 
+use crate::ckb::contracts::{get_cell_deps_by_contracts, get_script_by_contract, Contract};
 use crate::{
     fiber::{
         config::AnnouncedNodeName,
         network::get_chain_hash,
         types::{ChannelAnnouncement, NodeAnnouncement, Privkey, Pubkey},
     },
-    gen_rand_sha256_hash, now_timestamp_as_millis_u64,
+    now_timestamp_as_millis_u64,
 };
 
 pub fn gen_rand_fiber_public_key() -> Pubkey {
@@ -61,19 +66,51 @@ pub fn gen_node_announcement_from_privkey(sk: &Privkey) -> NodeAnnouncement {
     )
 }
 
-pub fn gen_rand_channel_announcement() -> (Privkey, ChannelAnnouncement, Privkey, Privkey) {
+pub fn create_funding_tx(x_only: &XOnlyPublicKey) -> TransactionView {
+    let version = 0u64;
+    let delay_epoch = 42;
+    let capacity = 100u64;
+    let commitment_lock_script_args = [
+        &blake2b_256(x_only.serialize())[0..20],
+        (Since::new(SinceType::EpochNumberWithFraction, delay_epoch, true).value())
+            .to_le_bytes()
+            .as_slice(),
+        version.to_be_bytes().as_slice(),
+    ]
+    .concat();
+
+    TransactionView::new_advanced_builder()
+        .cell_deps(get_cell_deps_by_contracts(vec![Contract::CommitmentLock]))
+        .output(
+            CellOutput::new_builder()
+                .capacity(capacity.pack())
+                .lock(get_script_by_contract(
+                    Contract::CommitmentLock,
+                    commitment_lock_script_args.as_slice(),
+                ))
+                .build(),
+        )
+        .output_data(Default::default())
+        .build()
+}
+
+pub fn gen_rand_channel_announcement() -> (
+    Privkey,
+    ChannelAnnouncement,
+    TransactionView,
+    Privkey,
+    Privkey,
+) {
     let sk1: Privkey = gen_rand_fiber_private_key();
     let sk2: Privkey = gen_rand_fiber_private_key();
     let sk = gen_rand_fiber_private_key();
     let xonly = sk.x_only_pub_key();
-    let rand_hash256 = gen_rand_sha256_hash();
+    let tx = create_funding_tx(&xonly);
+    let outpoint = tx.output_pts_iter().next().unwrap();
     let mut channel_announcement = ChannelAnnouncement::new_unsigned(
         &sk1.pubkey(),
         &sk2.pubkey(),
-        OutPoint::new_builder()
-            .tx_hash(rand_hash256.into())
-            .index(0u32.pack())
-            .build(),
+        outpoint.clone(),
         get_chain_hash(),
         &xonly,
         0,
@@ -84,5 +121,5 @@ pub fn gen_rand_channel_announcement() -> (Privkey, ChannelAnnouncement, Privkey
     channel_announcement.ckb_signature = Some(sk.sign_schnorr(message));
     channel_announcement.node1_signature = Some(sk1.sign(message));
     channel_announcement.node2_signature = Some(sk2.sign(message));
-    (sk, channel_announcement, sk1, sk2)
+    (sk, channel_announcement, tx, sk1, sk2)
 }

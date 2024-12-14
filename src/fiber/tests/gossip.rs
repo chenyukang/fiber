@@ -1,5 +1,7 @@
 use std::{collections::HashSet, str::FromStr, sync::Arc};
 
+use ckb_jsonrpc_types::Status;
+use ckb_types::core::TransactionView;
 use ractor::{async_trait, concurrency::Duration, Actor, ActorProcessingErr, ActorRef};
 use tempfile::tempdir;
 use tentacle::{
@@ -13,7 +15,10 @@ use tentacle::{
 use tokio::{spawn, sync::RwLock};
 
 use crate::{
-    ckb::{tests::actor::create_mock_chain_actor, CkbChainMessage},
+    ckb::{
+        tests::{actor::create_mock_chain_actor, test_utils::submit_tx},
+        CkbChainMessage,
+    },
     fiber::{
         gossip::{
             ExtendedGossipMessageStore, ExtendedGossipMessageStoreMessage, GossipMessageStore,
@@ -98,7 +103,7 @@ impl GossipTestingContext {
         cursor: Option<Cursor>,
     ) -> Arc<RwLock<Vec<BroadcastMessageWithTimestamp>>> {
         let (subscriber, messages) = Subscriber::start_actor().await;
-        self.store_update_subscriber
+        self.get_store_update_subscriber()
             .subscribe(cursor, subscriber, |m| Some(SubscriberMessage::Update(m)))
             .await
             .expect("subscribe to store updates");
@@ -109,6 +114,10 @@ impl GossipTestingContext {
         self.get_store_actor()
             .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(message))
             .expect("send message");
+    }
+
+    async fn submit_tx(&self, tx: TransactionView) -> Status {
+        submit_tx(self.get_chain_actor().clone(), tx).await
     }
 }
 
@@ -210,6 +219,32 @@ async fn test_save_gossip_message() {
         .get_latest_node_announcement(&announcement.node_id)
         .expect("get latest node announcement");
     assert_eq!(new_announcement, announcement);
+}
+
+#[tokio::test]
+async fn test_saving_unconfirmed_channel_announcement() {
+    let context = GossipTestingContext::new().await;
+    let (_, announcement, _, _, _) = gen_rand_channel_announcement();
+    context.save_message(BroadcastMessage::ChannelAnnouncement(announcement.clone()));
+    tokio::time::sleep(Duration::from_millis(200).into()).await;
+    let new_announcement = context
+        .get_store()
+        .get_latest_channel_announcement(&announcement.channel_outpoint);
+    assert_eq!(new_announcement, None);
+}
+
+#[tokio::test]
+async fn test_saving_confirmed_channel_announcement() {
+    let context = GossipTestingContext::new().await;
+    let (_, announcement, tx, _, _) = gen_rand_channel_announcement();
+    context.save_message(BroadcastMessage::ChannelAnnouncement(announcement.clone()));
+    let status = context.submit_tx(tx).await;
+    assert_eq!(status, Status::Committed);
+    tokio::time::sleep(Duration::from_millis(200).into()).await;
+    let new_announcement = context
+        .get_store()
+        .get_latest_channel_announcement(&announcement.channel_outpoint);
+    assert_eq!(new_announcement, None);
 }
 
 #[tokio::test]
