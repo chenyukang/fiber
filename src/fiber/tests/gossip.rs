@@ -1,4 +1,4 @@
-use std::{str::FromStr, sync::Arc};
+use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use ractor::{async_trait, concurrency::Duration, Actor, ActorProcessingErr, ActorRef};
 use tempfile::tempdir;
@@ -200,7 +200,7 @@ async fn test_save_gossip_message() {
 }
 
 #[tokio::test]
-async fn test_subscribe_gossip_store_updates() {
+async fn test_gossip_store_updates_basic_subscription() {
     let (_, store_actor, _, messages) = create_subscribable_gossip_store_with_subscriber().await;
     let (_, announcement) = gen_rand_node_announcement();
     store_actor
@@ -214,5 +214,50 @@ async fn test_subscribe_gossip_store_updates() {
     assert_eq!(
         messages[0],
         BroadcastMessageWithTimestamp::NodeAnnouncement(announcement)
+    );
+}
+
+#[tokio::test]
+async fn test_gossip_store_updates_repeated_saving() {
+    let (_, store_actor, _, messages) = create_subscribable_gossip_store_with_subscriber().await;
+    let (_, announcement) = gen_rand_node_announcement();
+    for _ in 0..10 {
+        store_actor
+            .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
+                BroadcastMessage::NodeAnnouncement(announcement.clone()),
+            ))
+            .expect("send message");
+    }
+    tokio::time::sleep(Duration::from_millis(200).into()).await;
+    let messages = messages.read().await;
+    assert!(messages.len() == 1);
+    assert_eq!(
+        messages[0],
+        BroadcastMessageWithTimestamp::NodeAnnouncement(announcement)
+    );
+}
+
+#[tokio::test]
+async fn test_gossip_store_updates_saving_multiple_messages() {
+    let (_, store_actor, _, messages) = create_subscribable_gossip_store_with_subscriber().await;
+    let announcements = (0..10)
+        .into_iter()
+        .map(|_| gen_rand_node_announcement().1)
+        .collect::<Vec<_>>();
+    for annoncement in &announcements {
+        store_actor
+            .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
+                BroadcastMessage::NodeAnnouncement(annoncement.clone()),
+            ))
+            .expect("send message");
+    }
+    tokio::time::sleep(Duration::from_millis(200).into()).await;
+    let messages = messages.read().await;
+    assert_eq!(
+        messages.iter().cloned().collect::<HashSet<_>>(),
+        announcements
+            .into_iter()
+            .map(|a| BroadcastMessageWithTimestamp::NodeAnnouncement(a))
+            .collect::<HashSet<_>>()
     );
 }
