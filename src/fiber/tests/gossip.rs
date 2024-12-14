@@ -21,7 +21,7 @@ use crate::{
         },
         types::{BroadcastMessage, BroadcastMessageWithTimestamp},
     },
-    gen_rand_node_announcement,
+    gen_node_announcement_from_privkey, gen_rand_node_announcement,
     store::Store,
 };
 
@@ -200,6 +200,36 @@ async fn test_save_gossip_message() {
 }
 
 #[tokio::test]
+async fn test_save_outdated_gossip_message() {
+    let (store, store_actor, _store_update_subscriber) = create_subscribable_gossip_store().await;
+    let (sk, old_announcement) = gen_rand_node_announcement();
+    // Make sure new announcement has a different timestamp
+    tokio::time::sleep(Duration::from_millis(2).into()).await;
+    let new_announcement = gen_node_announcement_from_privkey(&sk);
+    store_actor
+        .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
+            BroadcastMessage::NodeAnnouncement(new_announcement.clone()),
+        ))
+        .expect("send message");
+    tokio::time::sleep(Duration::from_millis(200).into()).await;
+    let announcement_in_store = store
+        .get_latest_node_announcement(&new_announcement.node_id)
+        .expect("get latest node announcement");
+    assert_eq!(announcement_in_store, new_announcement);
+
+    store_actor
+        .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
+            BroadcastMessage::NodeAnnouncement(old_announcement.clone()),
+        ))
+        .expect("send message");
+    tokio::time::sleep(Duration::from_millis(200).into()).await;
+    let announcement_in_store = store
+        .get_latest_node_announcement(&new_announcement.node_id)
+        .expect("get latest node announcement");
+    assert_eq!(announcement_in_store, new_announcement);
+}
+
+#[tokio::test]
 async fn test_gossip_store_updates_basic_subscription() {
     let (_, store_actor, _, messages) = create_subscribable_gossip_store_with_subscriber().await;
     let (_, announcement) = gen_rand_node_announcement();
@@ -259,5 +289,30 @@ async fn test_gossip_store_updates_saving_multiple_messages() {
             .into_iter()
             .map(|a| BroadcastMessageWithTimestamp::NodeAnnouncement(a))
             .collect::<HashSet<_>>()
+    );
+}
+
+#[tokio::test]
+async fn test_gossip_store_updates_saving_outdated_message() {
+    let (_, store_actor, _, messages) = create_subscribable_gossip_store_with_subscriber().await;
+    let (sk, old_announcement) = gen_rand_node_announcement();
+    // Make sure new announcement has a different timestamp
+    tokio::time::sleep(Duration::from_millis(2).into()).await;
+    let new_announcement = gen_node_announcement_from_privkey(&sk);
+    for announcement in [&old_announcement, &new_announcement] {
+        store_actor
+            .send_message(ExtendedGossipMessageStoreMessage::SaveMessage(
+                BroadcastMessage::NodeAnnouncement(announcement.clone()),
+            ))
+            .expect("send message");
+    }
+
+    tokio::time::sleep(Duration::from_millis(200).into()).await;
+    let messages = messages.read().await;
+    // The subscriber may or may not receive the old announcement, but it should always receive the
+    // new announcement.
+    assert_eq!(
+        messages[messages.len() - 1],
+        BroadcastMessageWithTimestamp::NodeAnnouncement(new_announcement)
     );
 }
