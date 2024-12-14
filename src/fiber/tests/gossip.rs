@@ -2,6 +2,9 @@ use std::{collections::HashSet, str::FromStr, sync::Arc};
 
 use ckb_jsonrpc_types::Status;
 use ckb_types::core::TransactionView;
+use ckb_types::packed::Bytes;
+use ckb_types::prelude::{Builder, Entity};
+use molecule::prelude::Byte;
 use ractor::{async_trait, concurrency::Duration, Actor, ActorProcessingErr, ActorRef};
 use tempfile::tempdir;
 use tentacle::{
@@ -239,6 +242,40 @@ async fn test_saving_confirmed_channel_announcement() {
     let (_, announcement, tx, _, _) = gen_rand_channel_announcement();
     context.save_message(BroadcastMessage::ChannelAnnouncement(announcement.clone()));
     let status = context.submit_tx(tx).await;
+    assert_eq!(status, Status::Committed);
+    tokio::time::sleep(Duration::from_millis(200).into()).await;
+    let new_announcement = context
+        .get_store()
+        .get_latest_channel_announcement(&announcement.channel_outpoint);
+    assert_eq!(new_announcement, None);
+}
+
+#[tokio::test]
+async fn test_saving_invalid_channel_announcement() {
+    let context = GossipTestingContext::new().await;
+    let (_, announcement, tx, _, _) = gen_rand_channel_announcement();
+    context.save_message(BroadcastMessage::ChannelAnnouncement(announcement.clone()));
+    let output = tx.output(0).expect("get output").clone();
+    let invalid_lock = output
+        .lock()
+        .as_builder()
+        .args(
+            Bytes::new_builder()
+                .set(
+                    b"wrong lock args"
+                        .into_iter()
+                        .map(|b| Byte::new(*b))
+                        .collect(),
+                )
+                .build(),
+        )
+        .build();
+    let invalid_output = output.as_builder().lock(invalid_lock).build();
+    let invalid_tx = tx
+        .as_advanced_builder()
+        .set_outputs(vec![invalid_output])
+        .build();
+    let status = context.submit_tx(invalid_tx).await;
     assert_eq!(status, Status::Committed);
     tokio::time::sleep(Duration::from_millis(200).into()).await;
     let new_announcement = context
