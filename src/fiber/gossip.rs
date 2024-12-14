@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     marker::PhantomData,
     sync::Arc,
     time::Duration,
@@ -1033,8 +1033,10 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
         let mut sorted_messages = Vec::with_capacity(complete_messages.len());
 
         // Save all the messages to a map so that we can easily order messages by their dependencies.
-        let mut messages_map: HashMap<(BroadcastMessageID, bool), BroadcastMessageWithTimestamp> =
-            HashMap::new();
+        let mut messages_map: HashMap<
+            (BroadcastMessageID, bool),
+            VecDeque<BroadcastMessageWithTimestamp>,
+        > = HashMap::new();
 
         for new_message in complete_messages {
             let key = (
@@ -1048,11 +1050,15 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
                     _ => true,
                 },
             );
-            match messages_map.get(&key) {
-                // Ignore the message if we already have a newer message in the list.
-                Some(old_message) if new_message.cursor() < old_message.cursor() => continue,
+            let messages = messages_map.entry(key).or_default();
+            let index = messages.partition_point(|m| m.cursor() < new_message.cursor());
+            match messages.get(index + 1) {
+                Some(message) if message == &new_message => {
+                    // The same message is already saved.
+                    continue;
+                }
                 _ => {
-                    messages_map.insert(key, new_message);
+                    messages.insert(index, new_message);
                 }
             }
         }
@@ -1062,16 +1068,20 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
                 None => break,
                 Some(key) => key.clone(),
             };
-            let message = messages_map.remove(&key).expect("key exists");
-            if let BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) = &message {
+            let messages = messages_map.remove(&key).expect("key exists");
+            if let BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) = &messages[0] {
                 let outpoint = channel_update.channel_outpoint.clone();
                 if let Some(message) =
                     messages_map.remove(&(BroadcastMessageID::ChannelAnnouncement(outpoint), true))
                 {
-                    sorted_messages.push(message);
+                    for message in message {
+                        sorted_messages.push(message);
+                    }
                 }
             }
-            sorted_messages.push(message);
+            for message in messages {
+                sorted_messages.push(message);
+            }
         }
 
         let mut verified_sorted_messages = Vec::with_capacity(sorted_messages.len());

@@ -7,6 +7,7 @@ use ckb_types::{packed::OutPoint, prelude::Pack};
 use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey, XOnlyPublicKey};
 
 use crate::ckb::contracts::{get_cell_deps_by_contracts, get_script_by_contract, Contract};
+use crate::fiber::types::EcdsaSignature;
 use crate::{
     fiber::{
         config::AnnouncedNodeName,
@@ -122,4 +123,9 @@ pub fn gen_rand_channel_announcement() -> (
     channel_announcement.node1_signature = Some(sk1.sign(message));
     channel_announcement.node2_signature = Some(sk2.sign(message));
     (sk, channel_announcement, tx, sk1, sk2)
+}
+
+pub fn create_invalid_ecdsa_signature() -> EcdsaSignature {
+    let sk = Privkey::from([42u8; 32]);
+    sk.sign([0u8; 32])
 }
