@@ -1024,7 +1024,7 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
         let complete_messages = self
             .messages_to_be_saved
             .iter()
-            .filter(|m| self.has_dependencies_available(m, false))
+            .filter(|m| self.has_dependencies_available(m))
             .cloned()
             .collect::<HashSet<_>>();
         self.messages_to_be_saved
@@ -1103,25 +1103,10 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
         verified_sorted_messages
     }
 
-    fn get_channel_annnouncement(
-        &self,
-        outpoint: &OutPoint,
-        only_in_store: bool,
-    ) -> Option<(u64, ChannelAnnouncement)> {
+    fn get_channel_annnouncement(&self, outpoint: &OutPoint) -> Option<(u64, ChannelAnnouncement)> {
         self.store
             .get_latest_channel_announcement(outpoint)
-            .or_else(|| {
-                if only_in_store {
-                    None
-                } else {
-                    let result = self.get_channel_annnouncement_in_memory(outpoint);
-                    debug!(
-                        "Getting channel announcement in memory for outpoint {:?}: {:?}",
-                        outpoint, result
-                    );
-                    result
-                }
-            })
+            .or_else(|| self.get_channel_annnouncement_in_memory(outpoint))
     }
 
     fn get_channel_annnouncement_in_memory(
@@ -1172,14 +1157,10 @@ impl<S: GossipMessageStore> ExtendedGossipMessageStoreState<S> {
         Ok(message)
     }
 
-    fn has_dependencies_available(
-        &self,
-        message: &BroadcastMessageWithTimestamp,
-        only_in_store: bool,
-    ) -> bool {
+    fn has_dependencies_available(&self, message: &BroadcastMessageWithTimestamp) -> bool {
         match message {
             BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => self
-                .get_channel_annnouncement(&channel_update.channel_outpoint, only_in_store)
+                .get_channel_annnouncement(&channel_update.channel_outpoint)
                 .is_some(),
             _ => true,
         }
