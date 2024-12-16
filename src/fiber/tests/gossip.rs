@@ -18,6 +18,7 @@ use tentacle::{
 use tokio::{spawn, sync::RwLock};
 
 use crate::create_invalid_ecdsa_signature;
+use crate::fiber::types::NodeAnnouncement;
 use crate::{
     ckb::{
         tests::{actor::create_mock_chain_actor, test_utils::submit_tx},
@@ -385,69 +386,60 @@ async fn test_gossip_store_updates_saving_outdated_message() {
     );
 }
 
+async fn check_two_node_announcements_with_one_invalid(
+    valid_announcement: NodeAnnouncement,
+    invalid_announcement: NodeAnnouncement,
+) {
+    // Checking both saving orders (valid first, invalid first)
+    for announcements in [
+        [&valid_announcement, &invalid_announcement],
+        [&invalid_announcement, &valid_announcement],
+    ] {
+        let context = GossipTestingContext::new().await;
+        let messages = context.subscribe(None).await;
+        for announcement in announcements {
+            context.save_message(BroadcastMessage::NodeAnnouncement(announcement.clone()));
+        }
+        tokio::time::sleep(Duration::from_millis(200).into()).await;
+        let messages = messages.read().await;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0],
+            BroadcastMessageWithTimestamp::NodeAnnouncement(valid_announcement.clone())
+        );
+    }
+}
+
 // Old message is invalid, new message is valid
 #[tokio::test]
 async fn test_gossip_store_updates_saving_invalid_message_1() {
-    let context = GossipTestingContext::new().await;
-    let messages = context.subscribe(None).await;
     let (sk, mut old_announcement) = gen_rand_node_announcement();
     old_announcement.signature = Some(create_invalid_ecdsa_signature());
     // Make sure new announcement has a different timestamp
     tokio::time::sleep(Duration::from_millis(2).into()).await;
     let new_announcement = gen_node_announcement_from_privkey(&sk);
-    for announcement in [&old_announcement, &new_announcement] {
-        context.save_message(BroadcastMessage::NodeAnnouncement(announcement.clone()));
-    }
 
-    tokio::time::sleep(Duration::from_millis(200).into()).await;
-    let messages = messages.read().await;
-    assert_eq!(messages.len(), 1,);
-    assert_eq!(
-        messages[0],
-        BroadcastMessageWithTimestamp::NodeAnnouncement(new_announcement)
-    );
+    check_two_node_announcements_with_one_invalid(new_announcement, old_announcement).await;
 }
 
 // New message is invalid, old message is valid
 #[tokio::test]
 async fn test_gossip_store_updates_saving_invalid_message_2() {
-    let context = GossipTestingContext::new().await;
-    let messages = context.subscribe(None).await;
     let (sk, old_announcement) = gen_rand_node_announcement();
     // Make sure new announcement has a different timestamp
     tokio::time::sleep(Duration::from_millis(2).into()).await;
     let mut new_announcement = gen_node_announcement_from_privkey(&sk);
     new_announcement.signature = Some(create_invalid_ecdsa_signature());
-    for announcement in [&old_announcement, &new_announcement] {
-        context.save_message(BroadcastMessage::NodeAnnouncement(announcement.clone()));
-    }
 
-    tokio::time::sleep(Duration::from_millis(200).into()).await;
-    let messages = messages.read().await;
-    assert_eq!(messages.len(), 1,);
-    assert_eq!(
-        messages[0],
-        BroadcastMessageWithTimestamp::NodeAnnouncement(old_announcement)
-    );
+    check_two_node_announcements_with_one_invalid(old_announcement, new_announcement).await;
 }
 
 // Both messages have the same timestamp, but there is one invalid message
 #[tokio::test]
 async fn test_gossip_store_updates_saving_invalid_message_3() {
-    let context = GossipTestingContext::new().await;
-    let messages = context.subscribe(None).await;
-    let (sk, old_announcement) = gen_rand_node_announcement();
+    let (_, old_announcement) = gen_rand_node_announcement();
     let mut new_announcement = old_announcement.clone();
     new_announcement.signature = Some(create_invalid_ecdsa_signature());
-    for announcement in [&old_announcement, &new_announcement] {
-        context.save_message(BroadcastMessage::NodeAnnouncement(announcement.clone()));
-    }
 
-    tokio::time::sleep(Duration::from_millis(200).into()).await;
-    let messages = messages.read().await;
-    assert_eq!(messages.len(), 1,);
-    assert_eq!(
-        messages[0],
-        BroadcastMessageWithTimestamp::NodeAnnouncement(old_announcement)
-    );
+    check_two_node_announcements_with_one_invalid(old_announcement, new_announcement).await;
 }
