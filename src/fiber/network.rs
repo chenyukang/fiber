@@ -60,11 +60,13 @@ use super::gossip::{GossipActorMessage, GossipMessageStore, GossipMessageUpdates
 use super::graph::{NetworkGraph, NetworkGraphStateStore, SessionRoute};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
-    BroadcastMessage, EcdsaSignature, FiberMessage, GossipMessage, Hash256, NodeAnnouncement,
-    OpenChannel, PaymentHopData, Privkey, Pubkey, RemoveTlcReason, TlcErr, TlcErrData,
-    TlcErrPacket, TlcErrorCode,
+    EcdsaSignature, FiberMessage, Hash256, NodeAnnouncement, OpenChannel, PaymentHopData, Privkey,
+    Pubkey, TlcErr, TlcErrData, TlcErrorCode,
 };
 use super::{FiberConfig, ASSUME_NETWORK_ACTOR_ALIVE};
+use crate::fiber::types::BroadcastMessage;
+use crate::fiber::types::GossipMessage;
+use crate::fiber::types::RemoveTlcReason;
 
 use crate::ckb::config::UdtCfgInfos;
 use crate::ckb::contracts::{check_udt_script, get_udt_whitelist, is_udt_type_auto_accept};
@@ -215,10 +217,7 @@ pub enum NetworkActorCommand {
     ControlFiberChannel(ChannelCommandWithId),
     // The first parameter is the peeled onion in binary via `PeeledOnionPacket::serialize`. `PeeledOnionPacket::current`
     // is for the current node.
-    SendPaymentOnionPacket(
-        SendOnionPacketCommand,
-        RpcReplyPort<Result<u64, TlcErrPacket>>,
-    ),
+    SendPaymentOnionPacket(SendOnionPacketCommand, RpcReplyPort<Result<u64, TlcErr>>),
     PeelPaymentOnionPacket(
         PaymentOnionPacket, // onion_packet
         Hash256,            // payment_hash
@@ -1352,7 +1351,7 @@ where
         &self,
         state: &mut NetworkActorState<S>,
         command: SendOnionPacketCommand,
-        reply: RpcReplyPort<Result<u64, TlcErrPacket>>,
+        reply: RpcReplyPort<Result<u64, TlcErr>>,
     ) {
         let SendOnionPacketCommand {
             peeled_onion_packet,
@@ -1365,14 +1364,14 @@ where
         debug!("Processing onion packet info: {:?}", info);
 
         let channel_outpoint = OutPoint::new(info.funding_tx_hash.into(), 0);
-        let unknown_next_peer = |reply: RpcReplyPort<Result<u64, TlcErrPacket>>| {
+        let unknown_next_peer = |reply: RpcReplyPort<Result<u64, TlcErr>>| {
             let error_detail = TlcErr::new_channel_fail(
                 TlcErrorCode::UnknownNextPeer,
                 channel_outpoint.clone(),
                 None,
             );
             reply
-                .send(Err(TlcErrPacket::new(error_detail, &shared_secret)))
+                .send(Err(error_detail))
                 .expect("send add tlc response");
         };
 
@@ -1386,7 +1385,7 @@ where
                 return unknown_next_peer(reply);
             }
         };
-        let (send, recv) = oneshot::channel::<Result<AddTlcResponse, TlcErrPacket>>();
+        let (send, recv) = oneshot::channel::<Result<AddTlcResponse, TlcErr>>();
         let rpc_reply = RpcReplyPort::from(send);
         let command = ChannelCommand::AddTlc(
             AddTlcCommand {
@@ -1415,7 +1414,7 @@ where
                 );
                 let error_detail = TlcErr::new(TlcErrorCode::TemporaryNodeFailure);
                 return reply
-                    .send(Err(TlcErrPacket::new(error_detail, &shared_secret)))
+                    .send(Err(error_detail))
                     .expect("send add tlc response");
             }
         }
@@ -1566,7 +1565,7 @@ where
         payment_session.route =
             SessionRoute::new(state.get_public_key(), payment_data.target_pubkey, &hops);
 
-        let (send, recv) = oneshot::channel::<Result<u64, TlcErrPacket>>();
+        let (send, recv) = oneshot::channel::<Result<u64, TlcErr>>();
         let rpc_reply = RpcReplyPort::from(send);
         let peeled_onion_packet = match PeeledPaymentOnionPacket::create(
             session_key,
@@ -1593,32 +1592,20 @@ where
         self.handle_send_onion_packet_command(state, command, rpc_reply)
             .await;
         match recv.await.expect("msg recv error") {
-            Err(e) => {
-                if let Some(error_detail) = e.decode(
-                    &payment_session.session_key,
-                    payment_session.hops_public_keys(),
-                ) {
-                    // This is the error implies we send payment request to the first hop failed
-                    // graph or payment history need to update and then have a retry
-                    self.update_graph_with_tlc_fail(&state.network, &error_detail)
-                        .await;
-                    let need_to_retry = self
-                        .network_graph
-                        .write()
-                        .await
-                        .record_payment_fail(&payment_session, error_detail.clone());
-                    let err = format!(
-                        "Failed to send onion packet with error {}",
-                        error_detail.error_code_as_str()
-                    );
-                    self.set_payment_fail_with_error(payment_session, &err);
-                    return Err(Error::SendPaymentFirstHopError(err, need_to_retry));
-                } else {
-                    // This expected never to be happended, to be safe, we will set the payment session to failed
-                    let err = format!("Failed to send onion packet, got malioucious error message");
-                    self.set_payment_fail_with_error(payment_session, &err);
-                    return Err(Error::SendPaymentError(err));
-                }
+            Err(error_detail) => {
+                self.update_graph_with_tlc_fail(&state.network, &error_detail)
+                    .await;
+                let need_to_retry = self
+                    .network_graph
+                    .write()
+                    .await
+                    .record_payment_fail(&payment_session, error_detail.clone());
+                let err = format!(
+                    "Failed to send onion packet with error {}",
+                    error_detail.error_code_as_str()
+                );
+                self.set_payment_fail_with_error(payment_session, &err);
+                return Err(Error::SendPaymentFirstHopError(err, need_to_retry));
             }
             Ok(tlc_id) => {
                 payment_session.set_inflight_status(first_channel_outpoint, tlc_id);
