@@ -1,3 +1,4 @@
+use super::channel::ChannelActorStateStore;
 use super::config::AnnouncedNodeName;
 use super::gossip::GossipMessageStore;
 use super::history::{Direction, InternalResult, PaymentHistory, TimedResult};
@@ -73,6 +74,7 @@ impl From<NodeAnnouncement> for NodeInfo {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChannelInfo {
     pub channel_outpoint: OutPoint,
+    pub channel_id: Hash256,
     // The timestamp in the block header of the block that includes the funding transaction of the channel.
     pub timestamp: u64,
 
@@ -150,6 +152,7 @@ impl From<(u64, ChannelAnnouncement)> for ChannelInfo {
         Self {
             channel_outpoint: channel_announcement.channel_outpoint,
             timestamp,
+            channel_id: channel_announcement.channel_id,
             features: channel_announcement.features,
             node1: channel_announcement.node1_id,
             node2: channel_announcement.node2_id,
@@ -230,7 +233,13 @@ pub struct PathEdge {
 
 impl<S> NetworkGraph<S>
 where
-    S: NetworkGraphStateStore + GossipMessageStore + Clone + Send + Sync + 'static,
+    S: NetworkGraphStateStore
+        + ChannelActorStateStore
+        + GossipMessageStore
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     pub fn new(store: S, source: Pubkey) -> Self {
         let mut network_graph = Self {
@@ -880,6 +889,17 @@ where
                 }
                 if amount_to_send < channel_update.tlc_minimum_value {
                     continue;
+                }
+
+                // if this is a direct channel, try to load the channel actor state for balance
+                if from == self.source {
+                    let channel_id = channel_info.channel_id;
+                    if let Some(state) = self.store.get_channel_actor_state(&channel_id) {
+                        let to_local_balance = state.to_local_amount;
+                        if amount_to_send > to_local_balance {
+                            continue;
+                        }
+                    }
                 }
 
                 let expiry_delta = if from == source {

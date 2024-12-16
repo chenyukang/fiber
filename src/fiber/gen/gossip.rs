@@ -3756,7 +3756,8 @@ impl ::core::fmt::Debug for ChannelAnnouncement {
 impl ::core::fmt::Display for ChannelAnnouncement {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{} {{ ", Self::NAME)?;
-        write!(f, "{}: {}", "node1_signature", self.node1_signature())?;
+        write!(f, "{}: {}", "channel_id", self.channel_id())?;
+        write!(f, ", {}: {}", "node1_signature", self.node1_signature())?;
         write!(f, ", {}: {}", "node2_signature", self.node2_signature())?;
         write!(f, ", {}: {}", "ckb_signature", self.ckb_signature())?;
         write!(f, ", {}: {}", "features", self.features())?;
@@ -3781,9 +3782,9 @@ impl ::core::default::Default for ChannelAnnouncement {
     }
 }
 impl ChannelAnnouncement {
-    const DEFAULT_VALUE: [u8; 310] = [
-        54, 1, 0, 0, 48, 0, 0, 0, 52, 0, 0, 0, 56, 0, 0, 0, 120, 0, 0, 0, 128, 0, 0, 0, 160, 0, 0,
-        0, 196, 0, 0, 0, 229, 0, 0, 0, 6, 1, 0, 0, 38, 1, 0, 0, 54, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    const DEFAULT_VALUE: [u8; 346] = [
+        90, 1, 0, 0, 52, 0, 0, 0, 84, 0, 0, 0, 88, 0, 0, 0, 92, 0, 0, 0, 156, 0, 0, 0, 164, 0, 0,
+        0, 196, 0, 0, 0, 232, 0, 0, 0, 9, 1, 0, 0, 42, 1, 0, 0, 74, 1, 0, 0, 90, 1, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -3792,9 +3793,10 @@ impl ChannelAnnouncement {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    pub const FIELD_COUNT: usize = 11;
+    pub const FIELD_COUNT: usize = 12;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -3811,71 +3813,77 @@ impl ChannelAnnouncement {
     pub fn has_extra_fields(&self) -> bool {
         Self::FIELD_COUNT != self.field_count()
     }
-    pub fn node1_signature(&self) -> EcdsaSignature {
+    pub fn channel_id(&self) -> Byte32 {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[4..]) as usize;
         let end = molecule::unpack_number(&slice[8..]) as usize;
-        EcdsaSignature::new_unchecked(self.0.slice(start..end))
+        Byte32::new_unchecked(self.0.slice(start..end))
     }
-    pub fn node2_signature(&self) -> EcdsaSignature {
+    pub fn node1_signature(&self) -> EcdsaSignature {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[8..]) as usize;
         let end = molecule::unpack_number(&slice[12..]) as usize;
         EcdsaSignature::new_unchecked(self.0.slice(start..end))
     }
-    pub fn ckb_signature(&self) -> SchnorrSignature {
+    pub fn node2_signature(&self) -> EcdsaSignature {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[12..]) as usize;
         let end = molecule::unpack_number(&slice[16..]) as usize;
+        EcdsaSignature::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn ckb_signature(&self) -> SchnorrSignature {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[16..]) as usize;
+        let end = molecule::unpack_number(&slice[20..]) as usize;
         SchnorrSignature::new_unchecked(self.0.slice(start..end))
     }
     pub fn features(&self) -> Uint64 {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[16..]) as usize;
-        let end = molecule::unpack_number(&slice[20..]) as usize;
+        let start = molecule::unpack_number(&slice[20..]) as usize;
+        let end = molecule::unpack_number(&slice[24..]) as usize;
         Uint64::new_unchecked(self.0.slice(start..end))
     }
     pub fn chain_hash(&self) -> Byte32 {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[20..]) as usize;
-        let end = molecule::unpack_number(&slice[24..]) as usize;
+        let start = molecule::unpack_number(&slice[24..]) as usize;
+        let end = molecule::unpack_number(&slice[28..]) as usize;
         Byte32::new_unchecked(self.0.slice(start..end))
     }
     pub fn channel_outpoint(&self) -> OutPoint {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[24..]) as usize;
-        let end = molecule::unpack_number(&slice[28..]) as usize;
+        let start = molecule::unpack_number(&slice[28..]) as usize;
+        let end = molecule::unpack_number(&slice[32..]) as usize;
         OutPoint::new_unchecked(self.0.slice(start..end))
     }
     pub fn node1_id(&self) -> Pubkey {
-        let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[28..]) as usize;
-        let end = molecule::unpack_number(&slice[32..]) as usize;
-        Pubkey::new_unchecked(self.0.slice(start..end))
-    }
-    pub fn node2_id(&self) -> Pubkey {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[32..]) as usize;
         let end = molecule::unpack_number(&slice[36..]) as usize;
         Pubkey::new_unchecked(self.0.slice(start..end))
     }
-    pub fn ckb_key(&self) -> SchnorrXOnlyPubkey {
+    pub fn node2_id(&self) -> Pubkey {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[36..]) as usize;
         let end = molecule::unpack_number(&slice[40..]) as usize;
+        Pubkey::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn ckb_key(&self) -> SchnorrXOnlyPubkey {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[40..]) as usize;
+        let end = molecule::unpack_number(&slice[44..]) as usize;
         SchnorrXOnlyPubkey::new_unchecked(self.0.slice(start..end))
     }
     pub fn capacity(&self) -> Uint128 {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[40..]) as usize;
-        let end = molecule::unpack_number(&slice[44..]) as usize;
+        let start = molecule::unpack_number(&slice[44..]) as usize;
+        let end = molecule::unpack_number(&slice[48..]) as usize;
         Uint128::new_unchecked(self.0.slice(start..end))
     }
     pub fn udt_type_script(&self) -> ScriptOpt {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[44..]) as usize;
+        let start = molecule::unpack_number(&slice[48..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[48..]) as usize;
+            let end = molecule::unpack_number(&slice[52..]) as usize;
             ScriptOpt::new_unchecked(self.0.slice(start..end))
         } else {
             ScriptOpt::new_unchecked(self.0.slice(start..))
@@ -3908,6 +3916,7 @@ impl molecule::prelude::Entity for ChannelAnnouncement {
     }
     fn as_builder(self) -> Self::Builder {
         Self::new_builder()
+            .channel_id(self.channel_id())
             .node1_signature(self.node1_signature())
             .node2_signature(self.node2_signature())
             .ckb_signature(self.ckb_signature())
@@ -3940,7 +3949,8 @@ impl<'r> ::core::fmt::Debug for ChannelAnnouncementReader<'r> {
 impl<'r> ::core::fmt::Display for ChannelAnnouncementReader<'r> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
         write!(f, "{} {{ ", Self::NAME)?;
-        write!(f, "{}: {}", "node1_signature", self.node1_signature())?;
+        write!(f, "{}: {}", "channel_id", self.channel_id())?;
+        write!(f, ", {}: {}", "node1_signature", self.node1_signature())?;
         write!(f, ", {}: {}", "node2_signature", self.node2_signature())?;
         write!(f, ", {}: {}", "ckb_signature", self.ckb_signature())?;
         write!(f, ", {}: {}", "features", self.features())?;
@@ -3959,7 +3969,7 @@ impl<'r> ::core::fmt::Display for ChannelAnnouncementReader<'r> {
     }
 }
 impl<'r> ChannelAnnouncementReader<'r> {
-    pub const FIELD_COUNT: usize = 11;
+    pub const FIELD_COUNT: usize = 12;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -3976,71 +3986,77 @@ impl<'r> ChannelAnnouncementReader<'r> {
     pub fn has_extra_fields(&self) -> bool {
         Self::FIELD_COUNT != self.field_count()
     }
-    pub fn node1_signature(&self) -> EcdsaSignatureReader<'r> {
+    pub fn channel_id(&self) -> Byte32Reader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[4..]) as usize;
         let end = molecule::unpack_number(&slice[8..]) as usize;
-        EcdsaSignatureReader::new_unchecked(&self.as_slice()[start..end])
+        Byte32Reader::new_unchecked(&self.as_slice()[start..end])
     }
-    pub fn node2_signature(&self) -> EcdsaSignatureReader<'r> {
+    pub fn node1_signature(&self) -> EcdsaSignatureReader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[8..]) as usize;
         let end = molecule::unpack_number(&slice[12..]) as usize;
         EcdsaSignatureReader::new_unchecked(&self.as_slice()[start..end])
     }
-    pub fn ckb_signature(&self) -> SchnorrSignatureReader<'r> {
+    pub fn node2_signature(&self) -> EcdsaSignatureReader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[12..]) as usize;
         let end = molecule::unpack_number(&slice[16..]) as usize;
+        EcdsaSignatureReader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn ckb_signature(&self) -> SchnorrSignatureReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[16..]) as usize;
+        let end = molecule::unpack_number(&slice[20..]) as usize;
         SchnorrSignatureReader::new_unchecked(&self.as_slice()[start..end])
     }
     pub fn features(&self) -> Uint64Reader<'r> {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[16..]) as usize;
-        let end = molecule::unpack_number(&slice[20..]) as usize;
+        let start = molecule::unpack_number(&slice[20..]) as usize;
+        let end = molecule::unpack_number(&slice[24..]) as usize;
         Uint64Reader::new_unchecked(&self.as_slice()[start..end])
     }
     pub fn chain_hash(&self) -> Byte32Reader<'r> {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[20..]) as usize;
-        let end = molecule::unpack_number(&slice[24..]) as usize;
+        let start = molecule::unpack_number(&slice[24..]) as usize;
+        let end = molecule::unpack_number(&slice[28..]) as usize;
         Byte32Reader::new_unchecked(&self.as_slice()[start..end])
     }
     pub fn channel_outpoint(&self) -> OutPointReader<'r> {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[24..]) as usize;
-        let end = molecule::unpack_number(&slice[28..]) as usize;
+        let start = molecule::unpack_number(&slice[28..]) as usize;
+        let end = molecule::unpack_number(&slice[32..]) as usize;
         OutPointReader::new_unchecked(&self.as_slice()[start..end])
     }
     pub fn node1_id(&self) -> PubkeyReader<'r> {
-        let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[28..]) as usize;
-        let end = molecule::unpack_number(&slice[32..]) as usize;
-        PubkeyReader::new_unchecked(&self.as_slice()[start..end])
-    }
-    pub fn node2_id(&self) -> PubkeyReader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[32..]) as usize;
         let end = molecule::unpack_number(&slice[36..]) as usize;
         PubkeyReader::new_unchecked(&self.as_slice()[start..end])
     }
-    pub fn ckb_key(&self) -> SchnorrXOnlyPubkeyReader<'r> {
+    pub fn node2_id(&self) -> PubkeyReader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[36..]) as usize;
         let end = molecule::unpack_number(&slice[40..]) as usize;
+        PubkeyReader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn ckb_key(&self) -> SchnorrXOnlyPubkeyReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[40..]) as usize;
+        let end = molecule::unpack_number(&slice[44..]) as usize;
         SchnorrXOnlyPubkeyReader::new_unchecked(&self.as_slice()[start..end])
     }
     pub fn capacity(&self) -> Uint128Reader<'r> {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[40..]) as usize;
-        let end = molecule::unpack_number(&slice[44..]) as usize;
+        let start = molecule::unpack_number(&slice[44..]) as usize;
+        let end = molecule::unpack_number(&slice[48..]) as usize;
         Uint128Reader::new_unchecked(&self.as_slice()[start..end])
     }
     pub fn udt_type_script(&self) -> ScriptOptReader<'r> {
         let slice = self.as_slice();
-        let start = molecule::unpack_number(&slice[44..]) as usize;
+        let start = molecule::unpack_number(&slice[48..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[48..]) as usize;
+            let end = molecule::unpack_number(&slice[52..]) as usize;
             ScriptOptReader::new_unchecked(&self.as_slice()[start..end])
         } else {
             ScriptOptReader::new_unchecked(&self.as_slice()[start..])
@@ -4093,22 +4109,24 @@ impl<'r> molecule::prelude::Reader<'r> for ChannelAnnouncementReader<'r> {
         if offsets.windows(2).any(|i| i[0] > i[1]) {
             return ve!(Self, OffsetsNotMatch);
         }
-        EcdsaSignatureReader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
+        Byte32Reader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
         EcdsaSignatureReader::verify(&slice[offsets[1]..offsets[2]], compatible)?;
-        SchnorrSignatureReader::verify(&slice[offsets[2]..offsets[3]], compatible)?;
-        Uint64Reader::verify(&slice[offsets[3]..offsets[4]], compatible)?;
-        Byte32Reader::verify(&slice[offsets[4]..offsets[5]], compatible)?;
-        OutPointReader::verify(&slice[offsets[5]..offsets[6]], compatible)?;
-        PubkeyReader::verify(&slice[offsets[6]..offsets[7]], compatible)?;
+        EcdsaSignatureReader::verify(&slice[offsets[2]..offsets[3]], compatible)?;
+        SchnorrSignatureReader::verify(&slice[offsets[3]..offsets[4]], compatible)?;
+        Uint64Reader::verify(&slice[offsets[4]..offsets[5]], compatible)?;
+        Byte32Reader::verify(&slice[offsets[5]..offsets[6]], compatible)?;
+        OutPointReader::verify(&slice[offsets[6]..offsets[7]], compatible)?;
         PubkeyReader::verify(&slice[offsets[7]..offsets[8]], compatible)?;
-        SchnorrXOnlyPubkeyReader::verify(&slice[offsets[8]..offsets[9]], compatible)?;
-        Uint128Reader::verify(&slice[offsets[9]..offsets[10]], compatible)?;
-        ScriptOptReader::verify(&slice[offsets[10]..offsets[11]], compatible)?;
+        PubkeyReader::verify(&slice[offsets[8]..offsets[9]], compatible)?;
+        SchnorrXOnlyPubkeyReader::verify(&slice[offsets[9]..offsets[10]], compatible)?;
+        Uint128Reader::verify(&slice[offsets[10]..offsets[11]], compatible)?;
+        ScriptOptReader::verify(&slice[offsets[11]..offsets[12]], compatible)?;
         Ok(())
     }
 }
 #[derive(Clone, Debug, Default)]
 pub struct ChannelAnnouncementBuilder {
+    pub(crate) channel_id: Byte32,
     pub(crate) node1_signature: EcdsaSignature,
     pub(crate) node2_signature: EcdsaSignature,
     pub(crate) ckb_signature: SchnorrSignature,
@@ -4122,7 +4140,11 @@ pub struct ChannelAnnouncementBuilder {
     pub(crate) udt_type_script: ScriptOpt,
 }
 impl ChannelAnnouncementBuilder {
-    pub const FIELD_COUNT: usize = 11;
+    pub const FIELD_COUNT: usize = 12;
+    pub fn channel_id(mut self, v: Byte32) -> Self {
+        self.channel_id = v;
+        self
+    }
     pub fn node1_signature(mut self, v: EcdsaSignature) -> Self {
         self.node1_signature = v;
         self
@@ -4173,6 +4195,7 @@ impl molecule::prelude::Builder for ChannelAnnouncementBuilder {
     const NAME: &'static str = "ChannelAnnouncementBuilder";
     fn expected_length(&self) -> usize {
         molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1)
+            + self.channel_id.as_slice().len()
             + self.node1_signature.as_slice().len()
             + self.node2_signature.as_slice().len()
             + self.ckb_signature.as_slice().len()
@@ -4188,6 +4211,8 @@ impl molecule::prelude::Builder for ChannelAnnouncementBuilder {
     fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
         let mut total_size = molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1);
         let mut offsets = Vec::with_capacity(Self::FIELD_COUNT);
+        offsets.push(total_size);
+        total_size += self.channel_id.as_slice().len();
         offsets.push(total_size);
         total_size += self.node1_signature.as_slice().len();
         offsets.push(total_size);
@@ -4214,6 +4239,7 @@ impl molecule::prelude::Builder for ChannelAnnouncementBuilder {
         for offset in offsets.into_iter() {
             writer.write_all(&molecule::pack_number(offset as molecule::Number))?;
         }
+        writer.write_all(self.channel_id.as_slice())?;
         writer.write_all(self.node1_signature.as_slice())?;
         writer.write_all(self.node2_signature.as_slice())?;
         writer.write_all(self.ckb_signature.as_slice())?;

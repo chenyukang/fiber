@@ -1158,14 +1158,14 @@ async fn test_network_send_payment_amount_is_too_large() {
             rpc_reply,
         ))
     };
-    let res = call!(node_a.network_actor, message)
-        .expect("node_a alive")
-        .unwrap();
-    assert_eq!(res.status, PaymentSessionStatus::Failed);
+    // because find_path will retrieve the balance from channel
+    // so we can not build router with amount is too large
+    let res = call!(node_a.network_actor, message).expect("node_a alive");
+    assert!(res.is_err());
     assert!(res
-        .failed_error
-        .unwrap()
-        .contains("TemporaryChannelFailure"));
+        .unwrap_err()
+        .to_string()
+        .contains("Failed to build route"));
 }
 
 // FIXME: this is the case send_payment with direct channels, we should handle this case

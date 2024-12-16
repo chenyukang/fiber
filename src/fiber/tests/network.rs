@@ -71,8 +71,10 @@ fn create_fake_channel_announcement_mesage(
     let node_announcement1 = create_node_announcement_mesage_with_priv_key(&sk1);
     let sk2 = Privkey::from([2u8; 32]);
     let node_announcement2 = create_node_announcement_mesage_with_priv_key(&sk2);
+    let channel_id = gen_rand_sha256_hash();
 
     let mut channel_announcement = ChannelAnnouncement::new_unsigned(
+        channel_id,
         &sk1.pubkey(),
         &sk2.pubkey(),
         outpoint,

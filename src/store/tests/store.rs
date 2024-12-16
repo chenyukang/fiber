@@ -57,6 +57,7 @@ fn mock_channel() -> ChannelAnnouncement {
     let (xonly, _parity) = keypair.x_only_public_key();
     let rand_hash256 = gen_rand_sha256_hash();
     ChannelAnnouncement::new_unsigned(
+        gen_rand_sha256_hash(),
         &sk1.pubkey(),
         &sk2.pubkey(),
         OutPoint::new_builder()
