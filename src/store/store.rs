@@ -34,6 +34,49 @@ pub struct Store {
     pub(crate) db: Arc<DB>,
 }
 
+#[derive(Copy, Clone)]
+enum ChannelTimestamp {
+    ChannelAnnouncement(),
+    ChannelUpdateOfNode1(),
+    ChannelUpdateOfNode2(),
+}
+
+fn update_channel_timestamp(
+    batch: &mut Batch,
+    outpoint: &OutPoint,
+    timestamp: u64,
+    channel_timestamp: ChannelTimestamp,
+) {
+    let offset = match channel_timestamp {
+        ChannelTimestamp::ChannelAnnouncement() => 0,
+        ChannelTimestamp::ChannelUpdateOfNode1() => 8,
+        ChannelTimestamp::ChannelUpdateOfNode2() => 16,
+    };
+    let message_id = match channel_timestamp {
+        ChannelTimestamp::ChannelAnnouncement() => {
+            BroadcastMessageID::ChannelAnnouncement(outpoint.clone())
+        }
+        ChannelTimestamp::ChannelUpdateOfNode1() => {
+            BroadcastMessageID::ChannelUpdate(outpoint.clone())
+        }
+        ChannelTimestamp::ChannelUpdateOfNode2() => {
+            BroadcastMessageID::ChannelUpdate(outpoint.clone())
+        }
+    };
+
+    let timestamp_key = [
+        &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
+        message_id.to_bytes().as_slice(),
+    ]
+    .concat();
+    let mut timestamps = batch
+        .get(&timestamp_key)
+        .map(|v| v.try_into().expect("Invalid timestamp value length"))
+        .unwrap_or([0u8; 24]);
+    timestamps[offset..offset + 8].copy_from_slice(&timestamp.to_be_bytes());
+    batch.put(timestamp_key, timestamps);
+}
+
 impl Store {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let db = Self::open_db(path.as_ref())?;
@@ -278,6 +321,13 @@ impl StoreKeyValue for KeyValue {
 }
 
 impl Batch {
+    fn get<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
+        self.db
+            .get(key.as_ref())
+            .map(|v| v.map(|vi| vi.to_vec()))
+            .expect("get should be OK")
+    }
+
     fn put_kv(&mut self, key_value: KeyValue) {
         self.put(key_value.key(), key_value.value());
     }
@@ -595,30 +645,24 @@ impl GossipMessageStore for Store {
         }
 
         let mut batch = self.batch();
-        let cursor = Cursor::new(
+
+        update_channel_timestamp(
+            &mut batch,
+            &channel_announcement.channel_outpoint,
             timestamp,
-            BroadcastMessageID::ChannelAnnouncement(channel_announcement.channel_outpoint.clone()),
+            ChannelTimestamp::ChannelAnnouncement(),
         );
 
-        // Update the timestamps of the channel
-        let timestamp_key = [
-            &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
-            cursor.message_id.to_bytes().as_slice(),
-        ]
-        .concat();
-        let mut timestamps = self
-            .get(&timestamp_key)
-            .map(|v| v.try_into().expect("Invalid timestamp value length"))
-            .unwrap_or([0u8; 24]);
-        timestamps[..8].copy_from_slice(&timestamp.to_be_bytes());
-        batch.put(timestamp_key, timestamps);
+        batch.put_kv(KeyValue::BroadcastMessage(
+            Cursor::new(
+                timestamp,
+                BroadcastMessageID::ChannelAnnouncement(
+                    channel_announcement.channel_outpoint.clone(),
+                ),
+            ),
+            BroadcastMessage::ChannelAnnouncement(channel_announcement),
+        ));
 
-        // Save the channel announcement
-        let message = BroadcastMessage::ChannelAnnouncement(channel_announcement);
-        batch.put(
-            [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
-            serialize_to_vec(&message, "BroadcastMessage"),
-        );
         batch.commit();
     }
 
@@ -647,32 +691,22 @@ impl GossipMessageStore for Store {
             );
         }
 
-        // Update the timestamps of the channel
-        let timestamp_key = [
-            &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
-            message_id.to_bytes().as_slice(),
-        ]
-        .concat();
-        let mut timestamps = self
-            .get(&timestamp_key)
-            .map(|v| v.try_into().expect("Invalid timestamp value length"))
-            .unwrap_or([0u8; 24]);
-        let start_index = if channel_update.is_update_of_node_1() {
-            8
-        } else {
-            16
-        };
-        timestamps[start_index..start_index + 8]
-            .copy_from_slice(&channel_update.timestamp.to_be_bytes());
-        batch.put(timestamp_key, timestamps);
+        update_channel_timestamp(
+            &mut batch,
+            &channel_update.channel_outpoint,
+            channel_update.timestamp,
+            if channel_update.is_update_of_node_1() {
+                ChannelTimestamp::ChannelUpdateOfNode1()
+            } else {
+                ChannelTimestamp::ChannelUpdateOfNode2()
+            },
+        );
 
         // Save the channel update
-        let cursor = Cursor::new(channel_update.timestamp, message_id);
-        let message = BroadcastMessage::ChannelUpdate(channel_update);
-        batch.put(
-            [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
-            serialize_to_vec(&message, "BroadcastMessage"),
-        );
+        batch.put_kv(KeyValue::BroadcastMessage(
+            Cursor::new(channel_update.timestamp, message_id),
+            BroadcastMessage::ChannelUpdate(channel_update),
+        ));
         batch.commit();
     }
 
@@ -699,22 +733,15 @@ impl GossipMessageStore for Store {
                 .concat(),
             );
         }
-        batch.put(
-            [
-                &[BROADCAST_MESSAGE_TIMESTAMP_PREFIX],
-                message_id.to_bytes().as_slice(),
-            ]
-            .concat(),
-            node_announcement.timestamp.to_be_bytes(),
-        );
+        batch.put_kv(KeyValue::BroadcastMessageTimestamp(
+            BroadcastMessageID::NodeAnnouncement(node_announcement.node_id.clone()),
+            node_announcement.timestamp,
+        ));
 
-        // Save the channel update
-        let cursor = Cursor::new(node_announcement.timestamp, message_id);
-        let message = BroadcastMessage::NodeAnnouncement(node_announcement);
-        batch.put(
-            [&[BROADCAST_MESSAGE_PREFIX], cursor.to_bytes().as_slice()].concat(),
-            serialize_to_vec(&message, "BroadcastMessage"),
-        );
+        batch.put_kv(KeyValue::BroadcastMessage(
+            Cursor::new(node_announcement.timestamp, message_id.clone()),
+            BroadcastMessage::NodeAnnouncement(node_announcement.clone()),
+        ));
         batch.commit();
     }
 }
