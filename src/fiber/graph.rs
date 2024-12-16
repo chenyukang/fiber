@@ -390,6 +390,18 @@ where
                     &channel_announcement
                 );
                 let channel_info = ChannelInfo::from((timestamp, channel_announcement));
+                // The history needs to know the mapping between nodes and channels.
+                // So that when a node is marked as failed, the history can mark all the channels
+                // associated with the node as failed. Here we tell the history about
+                // the mapping between nodes and channels.
+                self.history.add_node_channel_map(
+                    channel_info.node1.clone(),
+                    channel_info.out_point().clone(),
+                );
+                self.history.add_node_channel_map(
+                    channel_info.node2.clone(),
+                    channel_info.out_point().clone(),
+                );
                 self.channels
                     .insert(channel_info.channel_outpoint.clone(), channel_info);
                 return Some(cursor);
