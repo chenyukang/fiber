@@ -144,6 +144,8 @@ pub enum ChannelCommand {
     RemoveTlc(RemoveTlcCommand, RpcReplyPort<Result<(), String>>),
     Shutdown(ShutdownCommand, RpcReplyPort<Result<(), String>>),
     Update(UpdateCommand, RpcReplyPort<Result<(), String>>),
+    #[cfg(test)]
+    ReloadState(),
 }
 
 #[derive(Debug)]
@@ -279,7 +281,7 @@ pub struct ChannelActor<S> {
 
 impl<S> ChannelActor<S>
 where
-    S: InvoiceStore,
+    S: InvoiceStore + ChannelActorStateStore,
 {
     pub fn new(
         local_pubkey: Pubkey,
@@ -627,13 +629,16 @@ where
                 // otherwise, channel maybe not ready
                 _ => TlcErrorCode::TemporaryChannelFailure,
             },
-            ProcessingChannelError::RepeatedProcessing(_)
-            | ProcessingChannelError::SpawnErr(_)
+            ProcessingChannelError::RepeatedProcessing(_) => TlcErrorCode::TemporaryChannelFailure,
+            ProcessingChannelError::SpawnErr(_)
             | ProcessingChannelError::Musig2SigningError(_)
             | ProcessingChannelError::Musig2VerifyError(_)
             | ProcessingChannelError::CapacityError(_) => TlcErrorCode::TemporaryNodeFailure,
             ProcessingChannelError::InvalidParameter(_) => {
                 TlcErrorCode::IncorrectOrUnknownPaymentDetails
+            }
+            ProcessingChannelError::TlcForwardingError(_) => {
+                unreachable!("TlcForwardingError should be handled before this point")
             }
         };
 
@@ -672,28 +677,36 @@ where
                 TlcKind::AddTlc(add_tlc) => {
                     assert!(add_tlc.is_received());
                     if let Err(e) = self.apply_add_tlc_operation(myself, state, &add_tlc).await {
-                        let error_detail = self.get_tlc_detail_error(state, &e.source).await;
+                        let error_packet = match e.source {
+                            // If we already have TlcErrPacket, we can directly use it to send back to the peer.
+                            ProcessingChannelError::TlcForwardingError(err_packet) => err_packet,
+                            _ => {
+                                let error_detail =
+                                    self.get_tlc_detail_error(state, &e.source).await;
+                                self.network
+                                    .clone()
+                                    .send_message(NetworkActorMessage::new_notification(
+                                        NetworkServiceEvent::AddTlcFailed(
+                                            state.get_local_peer_id(),
+                                            add_tlc.payment_hash,
+                                            error_detail.clone(),
+                                        ),
+                                    ))
+                                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                                TlcErrPacket::new(
+                                    error_detail,
+                                    // There's no shared secret stored in the received TLC, use the one found in the peeled onion packet.
+                                    &e.shared_secret,
+                                )
+                            }
+                        };
                         self.register_retryable_tlc_remove(
                             myself,
                             state,
                             add_tlc.tlc_id,
-                            RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
-                                error_detail.clone(),
-                                // There's no shared secret stored in the received TLC, use the one found in the peeled onion packet.
-                                &e.shared_secret,
-                            )),
+                            RemoveTlcReason::RemoveTlcFail(error_packet),
                         )
                         .await;
-                        self.network
-                            .clone()
-                            .send_message(NetworkActorMessage::new_notification(
-                                NetworkServiceEvent::AddTlcFailed(
-                                    state.get_local_peer_id(),
-                                    add_tlc.payment_hash,
-                                    error_detail,
-                                ),
-                            ))
-                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                     }
                 }
                 TlcKind::RemoveTlc(remove_tlc) => {
@@ -729,8 +742,6 @@ where
         );
 
         let remove_reason = remove_reason.clone().backward(&tlc_info.shared_secret);
-
-        // TODO: encrypt the error to backward
         self.register_retryable_relay_tlc_remove(
             myself,
             state,
@@ -1063,10 +1074,8 @@ where
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
         // If we failed to forward the onion packet, we should remove the tlc.
-        if let Err(_res) = recv.await.expect("expect command replied") {
-            return Err(ProcessingChannelError::PeelingOnionPacketError(
-                "failed to forward".to_string(),
-            ));
+        if let Err(res) = recv.await.expect("expect command replied") {
+            return Err(ProcessingChannelError::TlcForwardingError(res));
         }
         Ok(())
     }
@@ -1113,7 +1122,7 @@ where
                         "Signing commitment transactions while shutdown is pending, current state {:?}",
                         &state.state
                     );
-                    CommitmentSignedFlags::PendingShutdown(flags)
+                    CommitmentSignedFlags::PendingShutdown()
                 } else {
                     return Err(ProcessingChannelError::InvalidState(format!(
                         "Unable to process commitment_signed message in shutdowning state with flags {:?}",
@@ -1183,7 +1192,7 @@ where
                 state.maybe_transition_to_tx_signatures(flags, &self.network)?;
             }
             CommitmentSignedFlags::ChannelReady() => {}
-            CommitmentSignedFlags::PendingShutdown(_) => {
+            CommitmentSignedFlags::PendingShutdown() => {
                 state.maybe_transition_to_shutdown(&self.network)?;
             }
         }
@@ -1599,7 +1608,7 @@ where
                         Ok(())
                     }
                     Err(err) => {
-                        eprintln!("Error processing AddTlc command: {:?}", &err);
+                        debug!("Error processing AddTlc command: {:?}", &err);
                         let error_detail = self.get_tlc_detail_error(state, &err).await;
                         let _ = reply.send(Err(TlcErrPacket::new(error_detail, &shared_secret)));
                         Err(err)
@@ -1645,6 +1654,14 @@ where
                         Err(err)
                     }
                 }
+            }
+            #[cfg(test)]
+            ChannelCommand::ReloadState() => {
+                *state = self
+                    .store
+                    .get_channel_actor_state(&state.get_id())
+                    .expect("load channel state failed");
+                Ok(())
             }
         }
     }
@@ -2058,9 +2075,10 @@ where
         trace!(
             "Channel actor processing message: id: {:?}, state: {:?}, message: {:?}",
             &state.get_id(),
-            &message,
-            &state.state
+            &state.state,
+            message,
         );
+
         match message {
             ChannelActorMessage::PeerMessage(message) => {
                 if let Err(error) = self.handle_peer_message(&myself, state, message).await {
@@ -2970,6 +2988,8 @@ pub enum ProcessingChannelError {
     TlcExpirySoon,
     #[error("The tlc expiry too far")]
     TlcExpiryTooFar,
+    #[error("Tlc forwarding error")]
+    TlcForwardingError(TlcErrPacket),
 }
 
 /// ProcessingChannelError which brings the shared secret used in forwarding onion packet.
@@ -3081,7 +3101,7 @@ bitflags! {
 #[derive(Debug)]
 enum CommitmentSignedFlags {
     SigningCommitment(SigningCommitmentFlags),
-    PendingShutdown(ShuttingDownFlags),
+    PendingShutdown(),
     ChannelReady(),
 }
 
@@ -4264,7 +4284,7 @@ impl ChannelActorState {
             .all_tlcs()
             .find(|tlc| tlc.payment_hash == payment_hash)
         {
-            return Err(ProcessingChannelError::InvalidParameter(format!(
+            return Err(ProcessingChannelError::RepeatedProcessing(format!(
                 "Trying to insert tlc with duplicate payment hash {:?} with tlc {:?}",
                 payment_hash, tlc
             )));
@@ -4274,24 +4294,26 @@ impl ChannelActorState {
             debug!("Value of local sent tlcs: {}", sent_tlc_value);
             debug_assert!(self.to_local_amount >= sent_tlc_value);
             if sent_tlc_value + tlc.amount > self.to_local_amount {
-                return Err(ProcessingChannelError::InvalidParameter(format!(
+                debug!(
                     "Adding tlc {:?} with amount {} exceeds local balance {}",
                     tlc.tlc_id,
                     tlc.amount,
                     self.to_local_amount - sent_tlc_value
-                )));
+                );
+                return Err(ProcessingChannelError::TlcAmountExceedLimit);
             }
         } else {
             let received_tlc_value = self.get_received_tlc_balance();
             debug!("Value of remote received tlcs: {}", received_tlc_value);
             debug_assert!(self.to_remote_amount >= received_tlc_value);
             if received_tlc_value + tlc.amount > self.to_remote_amount {
-                return Err(ProcessingChannelError::InvalidParameter(format!(
+                debug!(
                     "Adding tlc {:?} with amount {} exceeds remote balance {}",
                     tlc.tlc_id,
                     tlc.amount,
                     self.to_remote_amount - received_tlc_value
-                )));
+                );
+                return Err(ProcessingChannelError::TlcAmountExceedLimit);
             }
         }
         debug!(
@@ -5205,7 +5227,7 @@ impl ChannelActorState {
                         "Signing commitment transactions while shutdown is pending, current state {:?}",
                         &self.state
                     );
-                    CommitmentSignedFlags::PendingShutdown(flags)
+                    CommitmentSignedFlags::PendingShutdown()
                 } else {
                     return Err(ProcessingChannelError::InvalidState(format!(
                         "Unable to process commitment_signed message in shutdowning state with flags {:?}",
@@ -5259,11 +5281,11 @@ impl ChannelActorState {
                 self.update_state(ChannelState::SigningCommitment(flags));
                 self.maybe_transition_to_tx_signatures(flags, network)?;
             }
-            CommitmentSignedFlags::ChannelReady() | CommitmentSignedFlags::PendingShutdown(_) => {
+            CommitmentSignedFlags::ChannelReady() | CommitmentSignedFlags::PendingShutdown() => {
                 self.send_revoke_and_ack_message(network);
                 match flags {
                     CommitmentSignedFlags::ChannelReady() => {}
-                    CommitmentSignedFlags::PendingShutdown(_) => {
+                    CommitmentSignedFlags::PendingShutdown() => {
                         // TODO: Handle error in the below function call.
                         // We've already updated our state, we should never fail here.
                         self.maybe_transition_to_shutdown(network)?;

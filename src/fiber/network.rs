@@ -1106,7 +1106,6 @@ where
                     .await?
             }
 
-            // TODO: we should check the OnionPacket is valid or not, only the current node can decrypt it.
             NetworkActorCommand::SendPaymentOnionPacket(command, reply) => {
                 self.handle_send_onion_packet_command(state, command, reply)
                     .await;
