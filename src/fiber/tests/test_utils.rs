@@ -107,14 +107,19 @@ pub fn init_tracing() {
 static ROOT_ACTOR: OnceCell<ActorRef<RootActorMessage>> = OnceCell::const_new();
 
 pub async fn get_test_root_actor() -> ActorRef<RootActorMessage> {
-    Actor::spawn(
-        Some("test root actor".to_string()),
-        RootActor {},
-        (new_tokio_task_tracker(), new_tokio_cancellation_token()),
-    )
-    .await
-    .expect("start test root actor")
-    .0
+    use futures::FutureExt;
+    // Only one actor with the same name can be created.
+    ROOT_ACTOR
+        .get_or_init(|| {
+            Actor::spawn(
+                Some("test root actor".to_string()),
+                RootActor {},
+                (new_tokio_task_tracker(), new_tokio_cancellation_token()),
+            )
+            .map(|r| r.expect("start test root actor").0)
+        })
+        .await
+        .clone()
 }
 
 pub fn get_fiber_config<P: AsRef<Path>>(base_dir: P, node_name: Option<&str>) -> FiberConfig {
@@ -542,7 +547,7 @@ impl NetworkNode {
 
         let _span = tracing::info_span!("NetworkNode", node_name = &node_name).entered();
 
-        let root = ROOT_ACTOR.get_or_init(get_test_root_actor).await.clone();
+        let root = get_test_root_actor().await;
         let (event_sender, mut event_receiver) = mpsc::channel(10000);
 
         let chain_actor = Actor::spawn_linked(None, MockChainActor::new(), (), root.get_cell())

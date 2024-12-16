@@ -355,7 +355,7 @@ where
             .insert_payment_history_result(channel, direction, result);
     }
 
-    fn add_node_channel_map(&mut self, node: Pubkey, channel: OutPoint) {
+    pub(crate) fn add_node_channel_map(&mut self, node: Pubkey, channel: OutPoint) {
         self.nodes_to_channel_map
             .entry(node)
             .or_default()
@@ -368,11 +368,6 @@ where
             self.inner.insert((channel, direction), result);
         }
         return;
-        todo!("Implement load from store for PaymentHistory");
-        // for channel in self.store.get_channels(None).iter() {
-        //     self.add_node_channel_map(channel.node1(), channel.out_point());
-        //     self.add_node_channel_map(channel.node2(), channel.out_point());
-        // }
     }
 
     pub(crate) fn apply_pair_result(

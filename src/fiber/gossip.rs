@@ -275,9 +275,9 @@ pub trait SubscribableGossipMessageStore {
         converter: F,
     ) -> Result<Self::Subscription, Self::Error>;
 
-    /// Unsubscribe from the gossip message store updates. The subscription parameter is the return value
-    /// of the subscribe function. The new cursor will be used to determine the starting point of the
-    /// next batch of messages that will be sent to the receiver.
+    /// Update the subscription to the gossip message store updates. The subscription parameter is the
+    /// return value of the subscribe function. The new cursor will be used to determine the
+    /// starting point of the next batch of messages that will be sent to the receiver.
     async fn update_subscription(
         &self,
         subscription: &Self::Subscription,
@@ -305,7 +305,7 @@ pub enum GossipActorMessage {
     // The function of TickNetworkMaintenance is to maintain the network state.
     // Currently it will do the following things:
     // 1. Check if we have sufficient number of peers to receive broadcasts. If not, send more BroadcastMessageFilter.
-    // 2. Check if there are any pending broadcast messages. If so, broadcast them to the network.
+    // 2. Check if there are any pending broadcast message queries. If so, broadcast them to the network.
     TickNetworkMaintenance,
 
     // The active syncing process is finished for a peer.
@@ -319,12 +319,14 @@ pub enum GossipActorMessage {
     // our own node announcement messages, channel updates from the onion error packets, etc.
     ProcessBroadcastMessage(BroadcastMessage),
     // Try to broadcast BroadcastMessage created by us to the network.
-    // These messages will be saved to the store and when their dependencies are met,
-    // we will broadcast them to the network. If not, we will wait for the dependencies
-    // to be met.
+    // We will save and broadcast the messages. Note that we don't check the dependencies of
+    // these messages because we assume that the messages created by us are always valid.
     TryBroadcastMessages(Vec<BroadcastMessage>),
     // Broadcast a message to the network. The message here must have all its dependencies met.
     // This is normally the case when we saved a message to the store.
+    // This is an internal command used by both TryBroadcastMessages and ProcessBroadcastMessage,
+    // in which we will normally enrich the BroadcastMessage and check their dependencies,
+    // and then broadcast them to the network.
     BroadcastMessageImmediately(BroadcastMessageWithTimestamp),
     // Send gossip message to a peer.
     SendGossipMessage(GossipMessageWithPeerId),
@@ -356,7 +358,8 @@ pub struct GossipSyncingActorState<S> {
     store: ExtendedGossipMessageStore<S>,
     // The problem of using the cursor from the store is that a malicious peer may only
     // send large cursor to us, which may cause us to miss some messages.
-    // The problem of using different cursor for different peers is that we may waste
+    // So we decide to keep a cursor for each peer.
+    // Of course, using different cursor for different peers will waste
     // some bandwidth by requesting the same messages from different peers.
     cursor: Cursor,
     peer_state: SyncingPeerState,
@@ -389,16 +392,6 @@ impl<S> GossipSyncingActorState<S> {
         &self.cursor
     }
 
-    // fn select_a_node(&self) -> Option<&PeerId> {
-    //     self.select_n_nodes(1).into_iter().next()
-    // }
-
-    // fn select_n_nodes(&self, n: usize) -> impl IntoIterator<Item = &PeerId> {
-    //     let mut peers = self.peers.iter().collect::<Vec<_>>();
-    //     peers.sort_by_key(|(_, state)| state.failed_times);
-    //     peers.into_iter().take(n).map(|(peer, _)| peer)
-    // }
-
     fn get_and_increment_request_id(&mut self) -> u64 {
         let id = self.request_id;
         self.request_id += 1;
@@ -419,8 +412,12 @@ impl<S> GossipSyncingActor<S> {
 }
 
 pub(crate) enum GossipSyncingActorMessage {
+    // A GetBroadcastMessages request to the syncing peer has timed out.
     RequestTimeout(u64),
+    // A GetBroadcastMessagesResult response from the syncing peer.
     ResponseReceived(GetBroadcastMessagesResult),
+    // Initiate a new GetBroadcastMessages request.
+    // Mostly triggered by a timeout or a response received.
     NewGetRequest(),
 }
 
@@ -939,12 +936,12 @@ impl<S: GossipMessageStore + Sync> SubscribableGossipMessageStore
 }
 
 struct BroadcastMessageOutput {
-    // The id of the subscriber. Mostly for debugging.
-    id: u64,
     // This is the last cursor of the ExtendedGossipMessageStore when the subscriber is created.
     // We have to send all messages up to this cursor to the subscriber immediately after the
     // subscription is created. Other messages (messages after this cursor) are automatically
     // forwarded to the subscriber by the store actor.
+    // This somewhat prevents sending duplicate messages to the subscriber (because we will
+    // both read messages from the store and `messages_to_be_saved` list to the subscriber).
     store_last_cursor_while_starting: Cursor,
     // The filter that a subscriber has set. We will only send messages that are newer than this filter.
     // This is normally a cursor that the subscriber is confident that it has received all the messages
@@ -956,13 +953,11 @@ struct BroadcastMessageOutput {
 
 impl BroadcastMessageOutput {
     fn new(
-        id: u64,
         store_last_cursor_while_starting: Cursor,
         filter: Option<Cursor>,
         output_port: Arc<OutputPort<GossipMessageUpdates>>,
     ) -> Self {
         Self {
-            id,
             store_last_cursor_while_starting,
             filter,
             output_port,
@@ -1250,7 +1245,6 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                 state.output_ports.insert(
                     id,
                     BroadcastMessageOutput::new(
-                        id,
                         store_last_cursor_while_starting,
                         cursor,
                         Arc::clone(&output_port),
@@ -1337,14 +1331,10 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                     state.output_ports.len(),
                     state.messages_to_be_saved.len(),
                 );
-                trace!(
-                    "Gossip store maintenance ticked: state.messages_to_be_saved {:?}",
-                    state.messages_to_be_saved
-                );
 
                 // These are the messages that have complete dependencies and can be sent to the subscribers.
                 let complete_messages = state.prune_messages_to_be_saved().await;
-                for subscription in state.output_ports.values() {
+                for (id, subscription) in state.output_ports.iter() {
                     let messages_to_send = match subscription.filter {
                         Some(ref filter) => complete_messages
                             .iter()
@@ -1353,9 +1343,9 @@ impl<S: GossipMessageStore + Send + Sync + 'static> Actor for ExtendedGossipMess
                             .collect::<Vec<_>>(),
                         None => complete_messages.clone(),
                     };
-                    debug!(
-                        "ExtendedGossipMessageActor sending complete messages to subscriber: number of messages = {}",
-                        messages_to_send.len()
+                    trace!(
+                        "ExtendedGossipMessageActor sending complete messages to subscriber #{}: number of messages = {}",
+                        id, messages_to_send.len()
                     );
                     for chunk in messages_to_send.chunks(MAX_NUM_OF_BROADCAST_MESSAGES as usize) {
                         subscription
