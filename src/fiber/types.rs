@@ -1843,7 +1843,6 @@ impl TryFrom<molecule_gossip::NodeAnnouncement> for NodeAnnouncement {
 #[serde_as]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct ChannelAnnouncement {
-    pub channel_id: Hash256,
     pub node1_signature: Option<EcdsaSignature>,
     pub node2_signature: Option<EcdsaSignature>,
     // Signature signed by the funding transaction output public key.
@@ -1867,7 +1866,6 @@ pub struct ChannelAnnouncement {
 
 impl ChannelAnnouncement {
     pub fn new_unsigned(
-        channel_id: Hash256,
         node1_pubkey: &Pubkey,
         node2_pubkey: &Pubkey,
         channel_outpoint: OutPoint,
@@ -1877,7 +1875,6 @@ impl ChannelAnnouncement {
         udt_type_script: Option<Script>,
     ) -> Self {
         Self {
-            channel_id,
             node1_signature: None,
             node2_signature: None,
             ckb_signature: None,
@@ -1900,7 +1897,6 @@ impl ChannelAnnouncement {
 
     pub fn message_to_sign(&self) -> [u8; 32] {
         let unsigned_announcement = Self {
-            channel_id: self.channel_id,
             node1_signature: None,
             node2_signature: None,
             ckb_signature: None,
@@ -1944,7 +1940,6 @@ impl From<ChannelAnnouncement> for molecule_gossip::ChannelAnnouncement {
             )
             .features(channel_announcement.features.pack())
             .chain_hash(channel_announcement.chain_hash.into())
-            .channel_id(channel_announcement.channel_id.into())
             .channel_outpoint(channel_announcement.channel_outpoint)
             .node1_id(channel_announcement.node1_id.into())
             .node2_id(channel_announcement.node2_id.into())
@@ -1962,7 +1957,6 @@ impl TryFrom<molecule_gossip::ChannelAnnouncement> for ChannelAnnouncement {
         channel_announcement: molecule_gossip::ChannelAnnouncement,
     ) -> Result<Self, Self::Error> {
         Ok(ChannelAnnouncement {
-            channel_id: channel_announcement.channel_id().into(),
             node1_signature: Some(channel_announcement.node1_signature().try_into()?),
             node2_signature: Some(channel_announcement.node2_signature().try_into()?),
             ckb_signature: Some(channel_announcement.ckb_signature().try_into()?),

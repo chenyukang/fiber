@@ -3,6 +3,7 @@ use crate::fiber::config::{DEFAULT_TLC_EXPIRY_DELTA, MAX_PAYMENT_TLC_EXPIRY_LIMI
 use crate::fiber::gossip::GossipMessageStore;
 use crate::fiber::graph::{PathFindError, SessionRoute};
 use crate::fiber::types::Pubkey;
+use crate::now_timestamp_as_millis_u64;
 use crate::{
     fiber::{
         graph::{NetworkGraph, PathEdge},
@@ -11,7 +12,6 @@ use crate::{
     },
     store::Store,
 };
-use crate::{gen_rand_sha256_hash, now_timestamp_as_millis_u64};
 use ckb_types::{
     packed::{OutPoint, Script},
     prelude::Entity,
@@ -110,7 +110,6 @@ impl MockNetworkGraph {
         self.store.save_channel_announcement(
             now_timestamp_as_millis_u64(),
             ChannelAnnouncement {
-                channel_id: gen_rand_sha256_hash(),
                 chain_hash: get_chain_hash(),
                 node1_id: node_a_key.into(),
                 node2_id: node_b_key.into(),
@@ -804,7 +803,7 @@ fn test_graph_mark_failed_channel() {
         max_parts: None,
         keysend: false,
         udt_type_script: None,
-        preimage: None, 
+        preimage: None,
         allow_self_payment: false,
         dry_run: false,
     });

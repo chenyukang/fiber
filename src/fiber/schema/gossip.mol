@@ -60,7 +60,6 @@ table NodeAnnouncement {
 // A ChannelAnnouncement is an announcement of a channel to the network.
 // This message must be immutable for any specific channel.
 table ChannelAnnouncement {
-    channel_id: Byte32,
     node1_signature: EcdsaSignature,
     node2_signature: EcdsaSignature,
     // Signature signed by the funding transaction output public key.

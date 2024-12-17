@@ -74,7 +74,6 @@ impl From<NodeAnnouncement> for NodeInfo {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChannelInfo {
     pub channel_outpoint: OutPoint,
-    pub channel_id: Hash256,
     // The timestamp in the block header of the block that includes the funding transaction of the channel.
     pub timestamp: u64,
 
@@ -152,7 +151,6 @@ impl From<(u64, ChannelAnnouncement)> for ChannelInfo {
         Self {
             channel_outpoint: channel_announcement.channel_outpoint,
             timestamp,
-            channel_id: channel_announcement.channel_id,
             features: channel_announcement.features,
             node1: channel_announcement.node1_id,
             node2: channel_announcement.node2_id,

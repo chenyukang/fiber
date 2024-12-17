@@ -8,7 +8,6 @@ use secp256k1::{Keypair, PublicKey, Secp256k1, SecretKey, XOnlyPublicKey};
 
 use crate::ckb::contracts::{get_cell_deps_by_contracts, get_script_by_contract, Contract};
 use crate::fiber::types::EcdsaSignature;
-use crate::gen_rand_sha256_hash;
 use crate::{
     fiber::{
         config::AnnouncedNodeName,
@@ -109,9 +108,7 @@ pub fn gen_rand_channel_announcement() -> (
     let xonly = sk.x_only_pub_key();
     let tx = create_funding_tx(&xonly);
     let outpoint = tx.output_pts_iter().next().unwrap();
-    let channel_id = gen_rand_sha256_hash();
     let mut channel_announcement = ChannelAnnouncement::new_unsigned(
-        channel_id,
         &sk1.pubkey(),
         &sk2.pubkey(),
         outpoint.clone(),

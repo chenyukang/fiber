@@ -3349,7 +3349,6 @@ impl ChannelActorState {
                     (self.remote_pubkey, self.local_pubkey)
                 };
                 let channel_announcement = ChannelAnnouncement::new_unsigned(
-                    self.get_id(),
                     &node1_id,
                     &node2_id,
                     channel_outpoint,
