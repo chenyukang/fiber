@@ -893,10 +893,11 @@ where
 
                 // if this is a direct channel, try to load the channel actor state for balance
                 if from == self.source {
-                    let channel_id = channel_info.channel_id;
-                    if let Some(state) = self.store.get_channel_actor_state(&channel_id) {
-                        let to_local_balance = state.to_local_amount;
-                        if amount_to_send > to_local_balance {
+                    if let Some(state) = self
+                        .store
+                        .get_channel_state_by_outpoint(&channel_info.channel_outpoint)
+                    {
+                        if amount_to_send > state.to_local_amount {
                             continue;
                         }
                     }

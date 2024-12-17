@@ -1188,7 +1188,7 @@ async fn test_network_send_payment_with_dry_run() {
         NetworkActorMessage::Command(NetworkActorCommand::SendPayment(
             SendPaymentCommand {
                 target_pubkey: Some(node_b_pubkey),
-                amount: Some(100000000000 + 5),
+                amount: Some(100000),
                 payment_hash: Some(gen_rand_sha256_hash()),
                 final_tlc_expiry_delta: None,
                 invoice: None,
