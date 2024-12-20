@@ -550,19 +550,49 @@ where
         &self,
         node_id: Pubkey,
     ) -> impl Iterator<Item = (Pubkey, Pubkey, &ChannelInfo, &ChannelUpdateInfo)> {
+        eprintln!("self.channels.len(): {:?}", self.channels.len());
+        self.channels.values().for_each(|channel| {
+            if let Some(info) = channel.update_of_node2.as_ref() {
+                eprintln!(
+                    "from node2 || node1: {:?}, node2: {:?}",
+                    channel.node1(),
+                    channel.node2()
+                );
+            }
+
+            if let Some(info) = channel.update_of_node1.as_ref() {
+                eprintln!(
+                    "from node1 || node1: {:?}, node2: {:?}",
+                    channel.node1(),
+                    channel.node2()
+                );
+            }
+            eprintln!("\n");
+        });
+        eprintln!("\n\n\n");
         let mut channels: Vec<(Pubkey, Pubkey, &ChannelInfo, &ChannelUpdateInfo)> = self
             .channels
             .values()
             .filter_map(move |channel| {
                 if let Some(info) = channel.update_of_node2.as_ref() {
-                    if info.enabled && channel.node2() == node_id {
-                        return Some((channel.node1(), channel.node2(), channel, info));
+                    if info.enabled {
+                        if channel.node2() == node_id {
+                            return Some((channel.node1(), channel.node2(), channel, info));
+                        }
+                        if channel.node1() == node_id {
+                            return Some((channel.node2(), channel.node1(), channel, info));
+                        }
                     }
                 }
 
                 if let Some(info) = channel.update_of_node1.as_ref() {
-                    if info.enabled && channel.node1() == node_id {
-                        return Some((channel.node2(), channel.node1(), channel, info));
+                    if info.enabled {
+                        if channel.node1() == node_id {
+                            return Some((channel.node2(), channel.node1(), channel, info));
+                        }
+                        if channel.node2() == node_id {
+                            return Some((channel.node1(), channel.node2(), channel, info));
+                        }
                     }
                 }
                 None
@@ -834,9 +864,19 @@ where
         while let Some(cur_hop) = nodes_heap.pop() {
             nodes_visited += 1;
 
+            eprintln!("iterating : {:?}", cur_hop.node_id);
+            let channels: Vec<_> = self.get_node_inbounds(cur_hop.node_id).collect();
+            eprintln!("channels len: {:?}", channels.len());
             for (from, to, channel_info, channel_update) in self.get_node_inbounds(cur_hop.node_id)
             {
+                eprintln!(
+                    "got channel from: {:?}, outpoint: {:?}",
+                    from,
+                    channel_info.out_point()
+                );
+                assert_eq!(to, cur_hop.node_id);
                 if from == target && !route_to_self {
+                    eprintln!("skip it now .........");
                     continue;
                 }
                 if &udt_type_script != channel_info.udt_type_script() {
@@ -848,6 +888,12 @@ where
                     .values()
                     .any(|x| x == &channel_info.out_point())
                 {
+                    eprintln!(
+                        "skip it now ......... xxxx from: {:?} to: {:?} with {:?}",
+                        from,
+                        to,
+                        channel_info.out_point()
+                    );
                     continue;
                 }
 
@@ -863,6 +909,12 @@ where
                     continue;
                 }
 
+                // eprintln!(
+                //     "from: {:?} to: {:?} channel_outpoint: {:?}",
+                //     from,
+                //     to,
+                //     channel_info.out_point()
+                // );
                 let fee = if from == source {
                     0
                 } else {
@@ -900,12 +952,17 @@ where
                 }
 
                 // if this is a direct channel, try to load the channel actor state for balance
-                if from == self.source {
+                if from == self.source || to == self.source {
                     if let Some(state) = self
                         .store
                         .get_channel_state_by_outpoint(&channel_info.out_point())
                     {
-                        if amount_to_send > state.to_local_amount {
+                        let balance = if from == self.source {
+                            state.to_local_amount
+                        } else {
+                            state.to_remote_amount
+                        };
+                        if amount_to_send > balance {
                             continue;
                         }
                     }
@@ -939,7 +996,7 @@ where
                     to
                 );
                 if probability < DEFAULT_MIN_PROBABILITY {
-                    debug!("probability is too low: {:?}", probability);
+                    eprintln!("probability is too low: {:?}", probability);
                     continue;
                 }
                 let agg_weight =
@@ -947,11 +1004,16 @@ where
                 let weight = cur_hop.weight + agg_weight;
                 let distance = self.calculate_distance_based_probability(probability, weight);
 
+                eprintln!(
+                    "from {:?} to {:?} weight: {:?} distance: {:?}",
+                    from, to, weight, distance
+                );
                 if let Some(node) = distances.get(&from) {
                     if distance >= node.distance {
                         continue;
                     }
                 }
+                eprintln!("push now: {:?} => {:?}", from, to);
                 let node = NodeHeapElement {
                     node_id: from,
                     weight,
@@ -962,8 +1024,14 @@ where
                     probability,
                     next_hop: Some((cur_hop.node_id, channel_info.out_point().clone())),
                 };
-                last_hop_channels.insert(node.node_id, channel_info.out_point());
-                distances.insert(node.node_id, node.clone());
+                eprintln!(
+                    "insert from: {:?} to: {:?} channel: {:?}\n\n\n",
+                    from,
+                    to,
+                    channel_info.out_point()
+                );
+                last_hop_channels.insert(from, channel_info.out_point());
+                distances.insert(from, node.clone());
                 nodes_heap.push_or_fix(node);
             }
         }
@@ -981,7 +1049,7 @@ where
             }
         }
 
-        info!(
+        eprintln!(
             "get_route: nodes visited: {}, edges expanded: {}, time: {:?} \nresult: {:?}",
             nodes_visited,
             edges_expanded,
