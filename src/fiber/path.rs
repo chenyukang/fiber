@@ -30,6 +30,9 @@ pub(crate) struct NodeHeapElement {
 
     // next_hop is the edge this route comes from
     pub next_hop: Option<(Pubkey, OutPoint)>,
+
+    // edges
+    pub channels: Vec<OutPoint>,
 }
 
 impl Ord for NodeHeapElement {

@@ -551,53 +551,72 @@ where
         node_id: Pubkey,
     ) -> impl Iterator<Item = (Pubkey, Pubkey, &ChannelInfo, &ChannelUpdateInfo)> {
         eprintln!("self.channels.len(): {:?}", self.channels.len());
-        self.channels.values().for_each(|channel| {
-            if let Some(info) = channel.update_of_node2.as_ref() {
-                eprintln!(
-                    "from node2 || node1: {:?}, node2: {:?}",
-                    channel.node1(),
-                    channel.node2()
-                );
-            }
+        // self.channels.values().for_each(|channel| {
+        //     if let Some(info) = channel.update_of_node2.as_ref() {
+        //         eprintln!(
+        //             "from node2 || node1: {:?}, node2: {:?}",
+        //             channel.node1(),
+        //             channel.node2()
+        //         );
+        //     }
 
-            if let Some(info) = channel.update_of_node1.as_ref() {
-                eprintln!(
-                    "from node1 || node1: {:?}, node2: {:?}",
-                    channel.node1(),
-                    channel.node2()
-                );
-            }
-            eprintln!("\n");
-        });
-        eprintln!("\n\n\n");
+        //     if let Some(info) = channel.update_of_node1.as_ref() {
+        //         eprintln!(
+        //             "from node1 || node1: {:?}, node2: {:?}",
+        //             channel.node1(),
+        //             channel.node2()
+        //         );
+        //     }
+        //     eprintln!("\n");
+        // });
+        // eprintln!("\n\n\n");
         let mut channels: Vec<(Pubkey, Pubkey, &ChannelInfo, &ChannelUpdateInfo)> = self
             .channels
             .values()
             .filter_map(move |channel| {
                 if let Some(info) = channel.update_of_node2.as_ref() {
-                    if info.enabled {
-                        if channel.node2() == node_id {
-                            return Some((channel.node1(), channel.node2(), channel, info));
-                        }
-                        if channel.node1() == node_id {
-                            return Some((channel.node2(), channel.node1(), channel, info));
-                        }
+                    if info.enabled && channel.node2() == node_id {
+                        return Some((channel.node1(), channel.node2(), channel, info));
                     }
                 }
 
                 if let Some(info) = channel.update_of_node1.as_ref() {
-                    if info.enabled {
-                        if channel.node1() == node_id {
-                            return Some((channel.node2(), channel.node1(), channel, info));
-                        }
-                        if channel.node2() == node_id {
-                            return Some((channel.node1(), channel.node2(), channel, info));
-                        }
+                    if info.enabled && channel.node1() == node_id {
+                        return Some((channel.node2(), channel.node1(), channel, info));
                     }
                 }
                 None
             })
             .collect();
+
+        // let mut channels: Vec<(Pubkey, Pubkey, &ChannelInfo, &ChannelUpdateInfo)> = self
+        //     .channels
+        //     .values()
+        //     .filter_map(move |channel| {
+        //         if let Some(info) = channel.update_of_node2.as_ref() {
+        //             if info.enabled {
+        //                 if channel.node2() == node_id {
+        //                     return Some((channel.node1(), channel.node2(), channel, info));
+        //                 }
+        //                 if channel.node1() == node_id {
+        //                     return Some((channel.node2(), channel.node1(), channel, info));
+        //                 }
+        //             }
+        //         }
+
+        //         if let Some(info) = channel.update_of_node1.as_ref() {
+        //             if info.enabled {
+        //                 if channel.node1() == node_id {
+        //                     return Some((channel.node2(), channel.node1(), channel, info));
+        //                 }
+        //                 if channel.node2() == node_id {
+        //                     return Some((channel.node1(), channel.node2(), channel, info));
+        //                 }
+        //             }
+        //         }
+        //         None
+        //     })
+        //     .collect();
 
         // Iterating over HashMap's values is not guaranteed to be in order,
         // which may introduce randomness in the path finding.
@@ -822,7 +841,7 @@ where
         // when we starting iterate channels from A, we may considerting channel_1 and channel_2,
         // and we selected channel_1 according to weight
         // in this case, `last_hop_channels` stores (B -> channel_1) so that we can skip channel_1 when we iterate channels from B
-        let mut last_hop_channels = HashMap::new();
+        let mut last_hop_channels = HashMap::<(Pubkey, Pubkey), OutPoint>::new();
 
         if amount == 0 {
             return Err(PathFindError::Amount(
@@ -859,6 +878,7 @@ where
             probability: 1.0,
             next_hop: None,
             incoming_tlc_expiry: final_tlc_expiry_delta,
+            channels: vec![],
         });
 
         while let Some(cur_hop) = nodes_heap.pop() {
@@ -867,8 +887,8 @@ where
             eprintln!("iterating : {:?}", cur_hop.node_id);
             let channels: Vec<_> = self.get_node_inbounds(cur_hop.node_id).collect();
             eprintln!("channels len: {:?}", channels.len());
-            for (from, to, channel_info, channel_update) in self.get_node_inbounds(cur_hop.node_id)
-            {
+            //let mut this_hop_channels = HashMap::new();
+            for (from, to, channel_info, channel_update) in channels {
                 eprintln!(
                     "got channel from: {:?}, outpoint: {:?}",
                     from,
@@ -876,7 +896,7 @@ where
                 );
                 assert_eq!(to, cur_hop.node_id);
                 if from == target && !route_to_self {
-                    eprintln!("skip it now .........");
+                    //eprintln!("skip it now .........");
                     continue;
                 }
                 if &udt_type_script != channel_info.udt_type_script() {
@@ -884,10 +904,18 @@ where
                 }
 
                 // if the channel is already visited in the last hop, skip it
-                if last_hop_channels
-                    .values()
-                    .any(|x| x == &channel_info.out_point())
-                {
+                // if let Some(channel) = last_hop_channels.get(&sort_node(from, to)) {
+                //     if *channel == *channel_info.out_point() {
+                //         eprintln!(
+                //             "skip it now ......... xxxx from: {:?} to: {:?} with {:?}",
+                //             from,
+                //             to,
+                //             channel_info.out_point()
+                //         );
+                //         continue;
+                //     }
+                // }
+                if cur_hop.channels.contains(&channel_info.out_point()) {
                     eprintln!(
                         "skip it now ......... xxxx from: {:?} to: {:?} with {:?}",
                         from,
@@ -1023,6 +1051,11 @@ where
                     fee_charged: fee,
                     probability,
                     next_hop: Some((cur_hop.node_id, channel_info.out_point().clone())),
+                    channels: {
+                        let mut channels = cur_hop.channels.clone();
+                        channels.push(channel_info.out_point().clone());
+                        channels
+                    },
                 };
                 eprintln!(
                     "insert from: {:?} to: {:?} channel: {:?}\n\n\n",
@@ -1030,10 +1063,12 @@ where
                     to,
                     channel_info.out_point()
                 );
-                last_hop_channels.insert(from, channel_info.out_point());
+                //last_hop_channels.insert(sort_node(from, to), channel_info.out_point().clone());
+                //this_hop_channels.insert(channel_info.out_point());
                 distances.insert(from, node.clone());
                 nodes_heap.push_or_fix(node);
             }
+            //last_hop_channels = this_hop_channels;
         }
 
         let mut current = source_node.node_id;
@@ -1077,6 +1112,14 @@ where
         let default_attemp_cost = 0.1_f64;
         let penalty = default_attemp_cost * (1.0 / (0.5 - time_pref / 2.0) - 1.0);
         weight as u128 + (penalty / probability) as u128
+    }
+}
+
+fn sort_node(node_1: Pubkey, node_2: Pubkey) -> (Pubkey, Pubkey) {
+    if node_1 < node_2 {
+        (node_1, node_2)
+    } else {
+        (node_2, node_1)
     }
 }
 

@@ -278,6 +278,7 @@ async fn test_send_payment_with_more_capacity_for_payself() {
     )
     .await;
     let [mut node_0, node_1, node_2] = nodes.try_into().expect("3 nodes");
+
     eprintln!("node_0: {:?}", node_0.pubkey);
     eprintln!("node_1: {:?}", node_1.pubkey);
     eprintln!("node_2: {:?}\n\n\n", node_2.pubkey);
@@ -287,34 +288,13 @@ async fn test_send_payment_with_more_capacity_for_payself() {
     // let node_2_channel1_balance = node_2.get_local_balance_from_channel(channels[1]);
     // let node_2_channel2_balance = node_2.get_local_balance_from_channel(channels[2]);
 
-    // // sleep for a while
-    // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    // sleep for a while
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
-    // // now node_0 -> node_2 will be ok with direct channel
-    // let res = node_0
-    //     .send_payment(SendPaymentCommand {
-    //         target_pubkey: Some(node_2.pubkey.clone()),
-    //         amount: Some(60000000),
-    //         payment_hash: None,
-    //         final_tlc_expiry_delta: None,
-    //         tlc_expiry_limit: None,
-    //         invoice: None,
-    //         timeout: None,
-    //         max_fee_amount: None,
-    //         max_parts: None,
-    //         keysend: Some(true),
-    //         udt_type_script: None,
-    //         allow_self_payment: false,
-    //         dry_run: true,
-    //     })
-    //     .await;
-
-    // assert_eq!(res.unwrap().fee, 0);
-
-    // node_0 -> node_0 will be ok for dry_run if `allow_self_payment` is true
+    // node_0 -> node_0 will be ok if `allow_self_payment` is true
     let res = node_0
         .send_payment(SendPaymentCommand {
-            target_pubkey: Some(node_2.pubkey.clone()),
+            target_pubkey: Some(node_0.pubkey.clone()),
             amount: Some(60000000),
             payment_hash: None,
             final_tlc_expiry_delta: None,
@@ -333,13 +313,13 @@ async fn test_send_payment_with_more_capacity_for_payself() {
     eprintln!("res: {:?}", res);
     assert!(res.is_ok());
 
-    // // sleep for a while
-    // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    // let res = res.unwrap();
-    // let payment_hash = res.payment_hash;
-    // node_0
-    //     .assert_payment_status(payment_hash, PaymentSessionStatus::Success, Some(1))
-    //     .await;
+    // sleep for a while
+    tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
+    let res = res.unwrap();
+    let payment_hash = res.payment_hash;
+    node_0
+        .assert_payment_status(payment_hash, PaymentSessionStatus::Success, Some(1))
+        .await;
 
     // let node_0_balance1 = node_0.get_local_balance_from_channel(channels[0]);
     // let node_0_balance2 = node_0.get_local_balance_from_channel(channels[2]);
@@ -366,27 +346,4 @@ async fn test_send_payment_with_more_capacity_for_payself() {
     //     - (node_2_channel2_balance - node_2_new_channel2_balance);
     // assert!(node2_fee > 0);
     // assert_eq!(node1_fee + node2_fee, res.fee);
-
-    // // node_0 -> node_2 will be ok with direct channel2,
-    // // since after payself this channel now have enough balance, so the fee is 0
-    // let res = node_0
-    //     .send_payment(SendPaymentCommand {
-    //         target_pubkey: Some(node_2.pubkey.clone()),
-    //         amount: Some(60000000),
-    //         payment_hash: None,
-    //         final_tlc_expiry_delta: None,
-    //         tlc_expiry_limit: None,
-    //         invoice: None,
-    //         timeout: None,
-    //         max_fee_amount: None,
-    //         max_parts: None,
-    //         keysend: Some(true),
-    //         udt_type_script: None,
-    //         allow_self_payment: false,
-    //         dry_run: true,
-    //     })
-    //     .await;
-
-    // eprintln!("res: {:?}", res);
-    // assert_eq!(res.unwrap().fee, 0);
 }
