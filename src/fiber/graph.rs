@@ -841,7 +841,7 @@ where
         // when we starting iterate channels from A, we may considerting channel_1 and channel_2,
         // and we selected channel_1 according to weight
         // in this case, `last_hop_channels` stores (B -> channel_1) so that we can skip channel_1 when we iterate channels from B
-        let mut last_hop_channels = HashMap::<(Pubkey, Pubkey), OutPoint>::new();
+        //let mut last_hop_channels = HashMap::<(Pubkey, Pubkey), OutPoint>::new();
 
         if amount == 0 {
             return Err(PathFindError::Amount(
@@ -881,6 +881,18 @@ where
             channels: vec![],
         });
 
+        let mut first_hop_channels = vec![];
+        // simple set the first channel to the first hop
+        if route_to_self {
+            for (from, to, channel_info, channel_update) in self.get_node_inbounds(target) {
+                if &udt_type_script != channel_info.udt_type_script() {
+                    continue;
+                }
+                first_hop_channels.push(channel_info.out_point().clone());
+                break;
+            }
+        }
+
         while let Some(cur_hop) = nodes_heap.pop() {
             nodes_visited += 1;
 
@@ -903,18 +915,14 @@ where
                     continue;
                 }
 
-                // if the channel is already visited in the last hop, skip it
-                // if let Some(channel) = last_hop_channels.get(&sort_node(from, to)) {
-                //     if *channel == *channel_info.out_point() {
-                //         eprintln!(
-                //             "skip it now ......... xxxx from: {:?} to: {:?} with {:?}",
-                //             from,
-                //             to,
-                //             channel_info.out_point()
-                //         );
-                //         continue;
-                //     }
-                // }
+                if to == source
+                    && route_to_self
+                    && !first_hop_channels.contains(&channel_info.out_point())
+                {
+                    eprintln!("skip for fistt hop allow_self: {:?}", allow_self);
+                    continue;
+                }
+
                 if cur_hop.channels.contains(&channel_info.out_point()) {
                     eprintln!(
                         "skip it now ......... xxxx from: {:?} to: {:?} with {:?}",
@@ -1037,7 +1045,10 @@ where
                     from, to, weight, distance
                 );
                 if let Some(node) = distances.get(&from) {
-                    if distance >= node.distance {
+                    if distance > node.distance {
+                        continue;
+                    }
+                    if distance == node.distance && probability <= node.probability {
                         continue;
                     }
                 }
@@ -1112,14 +1123,6 @@ where
         let default_attemp_cost = 0.1_f64;
         let penalty = default_attemp_cost * (1.0 / (0.5 - time_pref / 2.0) - 1.0);
         weight as u128 + (penalty / probability) as u128
-    }
-}
-
-fn sort_node(node_1: Pubkey, node_2: Pubkey) -> (Pubkey, Pubkey) {
-    if node_1 < node_2 {
-        (node_1, node_2)
-    } else {
-        (node_2, node_1)
     }
 }
 

@@ -249,7 +249,7 @@ async fn test_send_payment_with_more_capacity_for_payself() {
     let _span = tracing::info_span!("node", node = "test").entered();
     // from https://github.com/nervosnetwork/fiber/issues/362
 
-    let (nodes, channels) = create_n_nodes_with_index_and_amounts_with_established_channel(
+    let (nodes, _channels) = create_n_nodes_with_index_and_amounts_with_established_channel(
         &[
             (
                 (0, 1),

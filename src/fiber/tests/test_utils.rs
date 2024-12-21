@@ -737,7 +737,7 @@ impl NetworkNode {
         // If we start the node immediately, other nodes may deem our new connection
         // as a duplicate connection and report RepeatedConnection error.
         // And we will receive `ProtocolSelectError` error from tentacle.
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         tracing::debug!("Node stopped, restarting");
         self.start().await;
     }
