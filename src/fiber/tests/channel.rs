@@ -850,6 +850,111 @@ async fn test_network_send_payment_send_with_ack() {
 }
 
 #[tokio::test]
+async fn test_network_add_two_tlcs_remove_one() {
+    let _span = tracing::info_span!("node", node = "test").entered();
+    let node_a_funding_amount = 100000000000;
+    let node_b_funding_amount = 100000000000;
+
+    let (node_a, node_b, channel_id) =
+        create_nodes_with_established_channel(node_a_funding_amount, node_b_funding_amount, true)
+            .await;
+    // Wait for the channel announcement to be broadcasted
+
+    let old_a_balance = node_a.get_local_balance_from_channel(channel_id);
+    let old_b_balance = node_b.get_local_balance_from_channel(channel_id);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+    let preimage_a = [1; 32];
+    let algorithm = HashAlgorithm::Sha256;
+    let digest = algorithm.hash(&preimage_a);
+
+    let add_tlc_result_a = call!(node_a.network_actor, |rpc_reply| {
+        NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
+            ChannelCommandWithId {
+                channel_id: channel_id,
+                command: ChannelCommand::AddTlc(
+                    AddTlcCommand {
+                        amount: 1000,
+                        hash_algorithm: algorithm,
+                        payment_hash: digest.into(),
+                        expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
+                        onion_packet: None,
+                        shared_secret: NO_SHARED_SECRET.clone(),
+                        previous_tlc: None,
+                    },
+                    rpc_reply,
+                ),
+            },
+        ))
+    })
+    .expect("node_a alive")
+    .expect("successfully added tlc");
+
+    eprintln!("add_tlc_result: {:?}", add_tlc_result_a);
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+    let preimage_b = [2; 32];
+    let algorithm = HashAlgorithm::Sha256;
+    let digest = algorithm.hash(&preimage_b);
+    let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
+        NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
+            ChannelCommandWithId {
+                channel_id: channel_id,
+                command: ChannelCommand::AddTlc(
+                    AddTlcCommand {
+                        amount: 2000,
+                        hash_algorithm: algorithm,
+                        payment_hash: digest.into(),
+                        expiry: now_timestamp_as_millis_u64() + DEFAULT_EXPIRY_DELTA,
+                        onion_packet: None,
+                        shared_secret: NO_SHARED_SECRET.clone(),
+                        previous_tlc: None,
+                    },
+                    rpc_reply,
+                ),
+            },
+        ))
+    })
+    .expect("node_b alive")
+    .expect("successfully added tlc");
+
+    eprintln!("add_tlc_result: {:?}", add_tlc_result);
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+    // remove tlc from node_b
+    let res = call!(node_b.network_actor, |rpc_reply| {
+        NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
+            ChannelCommandWithId {
+                channel_id: channel_id,
+                command: ChannelCommand::RemoveTlc(
+                    RemoveTlcCommand {
+                        id: add_tlc_result_a.tlc_id,
+                        reason: RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill {
+                            payment_preimage: preimage_a.into(),
+                        }),
+                    },
+                    rpc_reply,
+                ),
+            },
+        ))
+    })
+    .expect("node_b alive")
+    .expect("successfully removed tlc");
+    eprintln!("remove tlc result: {:?}", res);
+    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+    let new_a_balance = node_a.get_local_balance_from_channel(channel_id);
+    let new_b_balance = node_b.get_local_balance_from_channel(channel_id);
+    eprintln!(
+        "old_a_balance: {}, new_a_balance: {}, old_b_balance: {}, new_b_balance: {}",
+        old_a_balance, new_a_balance, old_b_balance, new_b_balance
+    );
+    assert_eq!(new_a_balance, old_a_balance - 1000);
+    assert_eq!(new_b_balance, old_b_balance + 1000);
+}
+
+#[tokio::test]
 async fn test_network_send_previous_tlc_error() {
     init_tracing();
 

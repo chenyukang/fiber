@@ -1212,6 +1212,7 @@ where
         state: &mut ChannelActorState,
         command: AddTlcCommand,
     ) -> Result<u64, ProcessingChannelError> {
+        warn!("handling add tlc command: {:?}", &command);
         state.check_for_tlc_update(Some(command.amount), true, true)?;
         state.check_tlc_expiry(command.expiry)?;
         let tlc = state.create_outbounding_tlc(command.clone());
@@ -1248,7 +1249,7 @@ where
         state: &mut ChannelActorState,
         command: RemoveTlcCommand,
     ) -> ProcessingChannelResult {
-        eprintln!("removing tlc: {:?}", command);
+        warn!("removing tlc: {:?}", command);
         state.check_for_tlc_update(None, true, false)?;
         state.check_remove_tlc_with_reason(TLCId::Received(command.id), &command.reason)?;
         state.tlc_state.set_received_tlc_removed(
@@ -2118,7 +2119,7 @@ where
                     .handle_peer_message(&myself, state, message.clone())
                     .await
                 {
-                    error!(
+                    eprintln!(
                         "Error while processing channel message: {:?} with message: {:?}",
                         error, message
                     );
