@@ -185,6 +185,6 @@ union TlcErrData {
 
 option TlcErrDataOpt (TlcErrData);
 table TlcErr {
-    error_code: Byte32,
+    error_code: Bytes,
     extra_data: TlcErrDataOpt,
 }

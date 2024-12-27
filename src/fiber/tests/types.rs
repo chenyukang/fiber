@@ -234,3 +234,11 @@ fn test_tlc_err_packet_encryption() {
         assert_eq!(decrypted_tlc_fail_detail, tlc_fail_detail);
     }
 }
+
+#[test]
+fn test_tlc_error_code() {
+    let code = TlcErrorCode::PermanentNodeFailure;
+    let str = code.as_ref().to_string();
+    let code2 = TlcErrorCode::from_str(&str).expect("parse");
+    assert_eq!(code, code2);
+}

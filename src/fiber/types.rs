@@ -1,7 +1,7 @@
 use super::channel::{ChannelFlags, CHANNEL_DISABLED_FLAG, MESSAGE_OF_NODE2_FLAG};
 use super::config::AnnouncedNodeName;
 use super::gen::fiber::{self as molecule_fiber, PubNonce as Byte66, UdtCellDeps, Uint128Opt};
-use super::gen::gossip::{self as molecule_gossip};
+use super::gen::gossip::{self as molecule_gossip, ChannelUpdateOpt, TlcErrDataOpt};
 use super::hash_algorithm::{HashAlgorithm, UnknownHashAlgorithmError};
 use super::network::get_chain_hash;
 use super::r#gen::fiber::PubNonceOpt;
@@ -1107,69 +1107,88 @@ impl TryFrom<molecule_fiber::RemoveTlcFulfill> for RemoveTlcFulfill {
     }
 }
 
-// impl From<TlcErr> for molecule_gossip::TlcErr {
-//     fn from(tlc_err: TlcErr) -> Self {
-//         molecule_gossip::TlcErr::new_builder()
-//             .error_code(ckb_types::packed::Byte32::new(tlc_err.error_code as u32))
-//             .extra_data(
-//                 tlc_err
-//                     .extra_data
-//                     .map(|data| match data {
-//                         TlcErrData::ChannelFailed {
-//                             channel_outpoint,
-//                             channel_update,
-//                             node_id,
-//                         } => molecule_gossip::TlcErrDataBuilder::set(
-//                             molecule_gossip::ChannelFailed::new_builder()
-//                                 .channel_outpoint(channel_outpoint.into())
-//                                 .channel_update(channel_update.into())
-//                                 .node_id(node_id.into())
-//                                 .build(),
-//                         )
-//                         .build()
-//                         .to_opt(),
-//                         TlcErrData::NodeFailed { node_id } => {
-//                             molecule_gossip::TlcErrDataBuilder::set(
-//                                 molecule_gossip::NodeFailed::new_builder()
-//                                     .node_id(node_id.into())
-//                                     .build(),
-//                             )
-//                             .build()
-//                             .to_opt()
-//                         }
-//                     })
-//                     .pack(),
-//             )
-//             .build()
-//     }
-// }
+impl TryFrom<TlcErrData> for molecule_gossip::TlcErrData {
+    type Error = Error;
 
-// impl TryFrom<molecule_gossip::TlcErr> for TlcErr {
-//     type Error = Error;
+    fn try_from(tlc_err_data: TlcErrData) -> Result<Self, Self::Error> {
+        match tlc_err_data {
+            TlcErrData::ChannelFailed {
+                channel_outpoint,
+                channel_update,
+                node_id,
+            } => Ok(molecule_gossip::ChannelFailed::new_builder()
+                .channel_outpoint(channel_outpoint.into())
+                .channel_update(
+                    ChannelUpdateOpt::new_builder()
+                        .set(channel_update.map(|x| x.into()))
+                        .build(),
+                )
+                .node_id(node_id.into())
+                .build()
+                .into()),
+            TlcErrData::NodeFailed { node_id } => Ok(molecule_gossip::NodeFailed::new_builder()
+                .node_id(node_id.into())
+                .build()
+                .into()),
+        }
+    }
+}
 
-//     fn try_from(tlc_err: molecule_gossip::TlcErr) -> Result<Self, Self::Error> {
-//         Ok(TlcErr {
-//             error_code: tlc_err.error_code().into(),
-//             extra_data: tlc_err
-//                 .extra_data()
-//                 .to_opt()
-//                 .map(|data| match data.unpack() {
-//                     TlcErrData::ChannelFailed {
-//                         channel_outpoint,
-//                         channel_update,
-//                         node_id,
-//                     } => TlcErrData::ChannelFailed {
-//                         channel_outpoint: channel_outpoint.into(),
-//                         channel_update: channel_update.to_opt(),
-//                         node_id: node_id.into(),
-//                     },
-//                     TlcErrData::NodeFailed { node_id } => TlcErrData::NodeFailed {
-//                         node_id: node_id.into(),
-//                     },
-//                 }),
-//         })
-//     }
-// }
+impl TryFrom<molecule_gossip::TlcErrData> for TlcErrData {
+    type Error = Error;
+
+    fn try_from(tlc_err_data: molecule_gossip::TlcErrData) -> Result<Self, Self::Error> {
+        match tlc_err_data.to_enum() {
+            molecule_gossip::TlcErrDataUnion::ChannelFailed(channel_failed) => {
+                Ok(TlcErrData::ChannelFailed {
+                    channel_outpoint: channel_failed.channel_outpoint().into(),
+                    channel_update: channel_failed
+                        .channel_update()
+                        .to_opt()
+                        .map(|x| x.try_into().unwrap()),
+                    node_id: channel_failed.node_id().try_into()?,
+                })
+            }
+            molecule_gossip::TlcErrDataUnion::NodeFailed(node_failed) => {
+                Ok(TlcErrData::NodeFailed {
+                    node_id: node_failed.node_id().try_into()?,
+                })
+            }
+        }
+    }
+}
+
+impl TryFrom<TlcErr> for molecule_gossip::TlcErr {
+    type Error = Error;
+
+    fn try_from(tlc_err: TlcErr) -> Result<Self, Self::Error> {
+        Ok(molecule_gossip::TlcErr::new_builder()
+            .error_code(tlc_err.error_code_as_str().pack())
+            .extra_data(
+                TlcErrDataOpt::new_builder()
+                    .set(tlc_err.extra_data.map(|data| data.try_into().unwrap()))
+                    .build(),
+            )
+            .build())
+    }
+}
+
+impl TryFrom<molecule_gossip::TlcErr> for TlcErr {
+    type Error = Error;
+
+    fn try_from(tlc_err: molecule_gossip::TlcErr) -> Result<Self, Self::Error> {
+        Ok(TlcErr {
+            error_code: {
+                let s = String::from_utf8(tlc_err.error_code().unpack()).unwrap();
+                TlcErrorCode::from_str(&s).expect("parse error code failed")
+            },
+            extra_data: tlc_err
+                .extra_data()
+                .to_opt()
+                .map(|data| data.try_into().unwrap()),
+        })
+    }
+}
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1260,11 +1279,17 @@ impl TlcErr {
     }
 
     fn serialize(&self) -> Vec<u8> {
-        bincode::serialize(self).expect("serialize hop data")
+        molecule_gossip::TlcErr::try_from(self.clone())
+            .expect("TlcErr serialize")
+            .as_slice()
+            .to_vec()
     }
 
     fn deserialize(data: &[u8]) -> Option<Self> {
-        bincode::deserialize(data).ok()
+        molecule_gossip::TlcErr::from_slice(data)
+            .map(TlcErr::try_from)
+            .expect("deserialize TlcErr")
+            .ok()
     }
 }
 

@@ -8707,10 +8707,7 @@ impl ::core::default::Default for TlcErr {
     }
 }
 impl TlcErr {
-    const DEFAULT_VALUE: [u8; 44] = [
-        44, 0, 0, 0, 12, 0, 0, 0, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ];
+    const DEFAULT_VALUE: [u8; 16] = [16, 0, 0, 0, 12, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0];
     pub const FIELD_COUNT: usize = 2;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
@@ -8728,11 +8725,11 @@ impl TlcErr {
     pub fn has_extra_fields(&self) -> bool {
         Self::FIELD_COUNT != self.field_count()
     }
-    pub fn error_code(&self) -> Byte32 {
+    pub fn error_code(&self) -> Bytes {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[4..]) as usize;
         let end = molecule::unpack_number(&slice[8..]) as usize;
-        Byte32::new_unchecked(self.0.slice(start..end))
+        Bytes::new_unchecked(self.0.slice(start..end))
     }
     pub fn extra_data(&self) -> TlcErrDataOpt {
         let slice = self.as_slice();
@@ -8821,11 +8818,11 @@ impl<'r> TlcErrReader<'r> {
     pub fn has_extra_fields(&self) -> bool {
         Self::FIELD_COUNT != self.field_count()
     }
-    pub fn error_code(&self) -> Byte32Reader<'r> {
+    pub fn error_code(&self) -> BytesReader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[4..]) as usize;
         let end = molecule::unpack_number(&slice[8..]) as usize;
-        Byte32Reader::new_unchecked(&self.as_slice()[start..end])
+        BytesReader::new_unchecked(&self.as_slice()[start..end])
     }
     pub fn extra_data(&self) -> TlcErrDataOptReader<'r> {
         let slice = self.as_slice();
@@ -8884,19 +8881,19 @@ impl<'r> molecule::prelude::Reader<'r> for TlcErrReader<'r> {
         if offsets.windows(2).any(|i| i[0] > i[1]) {
             return ve!(Self, OffsetsNotMatch);
         }
-        Byte32Reader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
+        BytesReader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
         TlcErrDataOptReader::verify(&slice[offsets[1]..offsets[2]], compatible)?;
         Ok(())
     }
 }
 #[derive(Clone, Debug, Default)]
 pub struct TlcErrBuilder {
-    pub(crate) error_code: Byte32,
+    pub(crate) error_code: Bytes,
     pub(crate) extra_data: TlcErrDataOpt,
 }
 impl TlcErrBuilder {
     pub const FIELD_COUNT: usize = 2;
-    pub fn error_code(mut self, v: Byte32) -> Self {
+    pub fn error_code(mut self, v: Bytes) -> Self {
         self.error_code = v;
         self
     }
