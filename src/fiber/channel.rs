@@ -438,12 +438,20 @@ where
                 Ok(())
             }
             FiberChannelMessage::RevokeAndAck(revoke_and_ack) => {
+                eprintln!(
+                    "\n\n{:?} begin to handle revokeandack peer message: {:?}",
+                    state.local_pubkey, &revoke_and_ack
+                );
                 let need_commitment_signed =
                     state.handle_revoke_and_ack_peer_message(&self.network, revoke_and_ack)?;
                 if need_commitment_signed {
                     self.handle_commitment_signed_command(state)?;
                 }
                 self.update_tlc_status_on_ack(myself, state).await;
+                eprintln!(
+                    "{:?} end to handle revokeandack peer message",
+                    state.local_pubkey
+                );
                 Ok(())
             }
             FiberChannelMessage::ChannelReady(_channel_ready) => {
@@ -658,6 +666,10 @@ where
         state: &mut ChannelActorState,
         commitment_signed: CommitmentSigned,
     ) -> Result<(), ProcessingChannelError> {
+        eprintln!(
+            "\n\n{:?} begin to handle_commitment_signed_peer_message ...",
+            state.local_pubkey
+        );
         // build commitment tx and verify signature from remote, if passed send ACK for partner
         state.verify_commitment_signed_and_send_ack(commitment_signed, &self.network)?;
 
@@ -670,6 +682,7 @@ where
 
         // flush remove tlc for received tlcs after replying ack for peer
         self.apply_settled_remvoe_tlcs(myself, state, true).await;
+        eprintln!("end to handle_commitment_signed_peer_message ...");
         Ok(())
     }
 
@@ -1016,6 +1029,10 @@ where
         state: &mut ChannelActorState,
         remove_tlc: RemoveTlc,
     ) -> Result<(), ProcessingChannelError> {
+        eprintln!(
+            "{:?} begin to handle_remove_tlc_peer_message ...",
+            state.local_pubkey
+        );
         state.check_for_tlc_update(None, false, false)?;
         // TODO: here if we received a invalid remove tlc, it's maybe a malioucious peer,
         // maybe we need to go through shutdown process for this error
@@ -1111,6 +1128,10 @@ where
         &self,
         state: &mut ChannelActorState,
     ) -> ProcessingChannelResult {
+        eprintln!(
+            "\n\n{:?} begin to handle_commitment_signed_command",
+            state.local_pubkey
+        );
         let flags = match state.state {
             ChannelState::CollaboratingFundingTx(flags)
                 if !flags.contains(CollaboratingFundingTxFlags::COLLABRATION_COMPLETED) =>
@@ -1228,6 +1249,10 @@ where
         state: &mut ChannelActorState,
         command: RemoveTlcCommand,
     ) -> ProcessingChannelResult {
+        eprintln!(
+            "{:?} begin to handle_remove_tlc_command ...",
+            state.local_pubkey
+        );
         state.check_for_tlc_update(None, true, false)?;
         state.check_remove_tlc_with_reason(TLCId::Received(command.id), &command.reason)?;
         state
@@ -2315,6 +2340,14 @@ impl TlcInfo {
         self.status.as_inbound_status()
     }
 
+    pub fn is_remove_confirmed(&self) -> bool {
+        match self.status {
+            TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed) => true,
+            TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed) => true,
+            _ => false,
+        }
+    }
+
     fn get_hash(&self) -> ShortHash {
         self.payment_hash.as_ref()[..20]
             .try_into()
@@ -2395,10 +2428,10 @@ pub struct TlcState {
 impl TlcState {
     pub fn debug(&self) {
         for tlc in self.offered_tlcs.tlcs.iter() {
-            eprintln!("offered_tlc: {:?}", tlc.log());
+            eprintln!("offered_tlc: {:?} amount: {:?}", tlc.log(), tlc.amount);
         }
         for tlc in self.received_tlcs.tlcs.iter() {
-            eprintln!("received_tlc: {:?}", tlc.log());
+            eprintln!("received_tlc: {:?} amount: {:?}", tlc.log(), tlc.amount);
         }
     }
 
@@ -5596,6 +5629,7 @@ impl ChannelActorState {
                 ),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+        eprintln!("finished handle_revoke_and_ack_peer_message");
         Ok(need_commitment_signed)
     }
 
@@ -6236,6 +6270,11 @@ impl ChannelActorState {
         &self,
         for_remote: bool,
     ) -> ([CellOutput; 2], [Bytes; 2]) {
+        eprintln!(
+            "build_settlement_transaction_outputs for_remote: {}",
+            for_remote
+        );
+        self.tlc_state.debug();
         let pending_tlcs = self
             .tlc_state
             .offered_tlcs
@@ -6288,10 +6327,23 @@ impl ChannelActorState {
             }
         }
 
+        eprintln!(
+            "old to_local_amount: {}, old to_remote_amount: {}",
+            self.to_local_amount, self.to_remote_amount
+        );
+
         let to_local_value =
             self.to_local_amount + received_fulfilled - offered_fulfilled - offered_pending;
         let to_remote_value =
             self.to_remote_amount + offered_fulfilled - received_fulfilled - received_pending;
+
+        eprintln!("received_fulfilled: {}, offered_fulfilled: {}, offered_pending: {}, received_pending: {}",
+            received_fulfilled, offered_fulfilled, offered_pending, received_pending);
+
+        eprintln!(
+            "to_local_value: {}, to_remote_value: {}, for_remote: {}",
+            to_local_value, to_remote_value, for_remote
+        );
 
         let commitment_tx_fee =
             calculate_commitment_tx_fee(self.commitment_fee_rate, &self.funding_udt_type_script);
