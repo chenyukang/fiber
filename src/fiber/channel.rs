@@ -2093,7 +2093,7 @@ where
                     .handle_peer_message(&myself, state, message.clone())
                     .await
                 {
-                    error!(
+                    eprintln!(
                         "Error while processing channel message: {:?} with message: {:?}",
                         error, message
                     );
@@ -2299,7 +2299,10 @@ impl Debug for TlcInfo {
 
 impl TlcInfo {
     pub fn log(&self) -> String {
-        format!("id: {:?} status: {:?}", &self.tlc_id, self.status)
+        format!(
+            "id: {:?} status: {:?} amount: {:?}",
+            &self.tlc_id, self.status, self.amount
+        )
     }
 
     pub fn is_offered(&self) -> bool {
@@ -4475,6 +4478,39 @@ impl ChannelActorState {
             .collect()
     }
 
+    // Get the total amount of pending tlcs that are fulfilled
+    fn get_pending_fulfilled_tlcs_amount(&self, for_remote: bool, offered: bool) -> u128 {
+        let tlcs = if offered {
+            &self.tlc_state.offered_tlcs
+        } else {
+            &self.tlc_state.received_tlcs
+        };
+
+        let mut fulfilled = 0;
+        tlcs.tlcs.iter().for_each(|tlc| {
+            if let Some(remove_reason) = &tlc.removed_reason {
+                let mut include = false;
+                match tlc.status {
+                    TlcStatus::Inbound(InboundTlcStatus::LocalRemoved)
+                    | TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed) => {
+                        include = for_remote;
+                    }
+                    TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitPrevAck)
+                    | TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitAck)
+                    | TlcStatus::Outbound(OutboundTlcStatus::RemoteRemoved) => {
+                        include = !for_remote;
+                    }
+                    _ => {}
+                }
+                if include && matches!(remove_reason, RemoveTlcReason::RemoveTlcFulfill(_)) {
+                    fulfilled += tlc.amount;
+                }
+            }
+        });
+
+        fulfilled
+    }
+
     pub fn get_all_received_tlcs(&self) -> impl Iterator<Item = &TlcInfo> {
         self.tlc_state.all_tlcs().filter(|tlc| tlc.is_received())
     }
@@ -6247,6 +6283,9 @@ impl ChannelActorState {
         &self,
         for_remote: bool,
     ) -> ([CellOutput; 2], [Bytes; 2]) {
+        let offered_fulfilled = self.get_pending_fulfilled_tlcs_amount(for_remote, true);
+        let received_fulfilled = self.get_pending_fulfilled_tlcs_amount(for_remote, false);
+
         let pending_tlcs = self
             .tlc_state
             .offered_tlcs
@@ -6280,9 +6319,30 @@ impl ChannelActorState {
                 received_pending += info.amount;
             }
         }
-        info!("build_settlement_transaction_outputs for_remote: {} \n self.tlc_state: {:?} \n self.to_local_amount: {}, self.to_remote_amount: {}, offered_pending: {}, received_pending: {}", for_remote, self.tlc_state, self.to_local_amount, self.to_remote_amount, offered_pending, received_pending);
+
+        eprintln!(
+            "\n\nbuild_settlement_transaction_outputs {:?} for_remote: {}",
+            self.local_pubkey, for_remote
+        );
+        eprintln!("++++++++++++++++++++");
+        self.tlc_state.debug();
+        eprintln!("---------------------");
+
+        let old_to_local_value = self.to_local_amount - offered_fulfilled + received_fulfilled;
+        let old_to_remote_value = self.to_remote_amount - received_fulfilled + offered_fulfilled;
+        eprintln!(
+            "old_to_local_value: {}, old_to_remote_value: {}  offered_fulfilled: {}, received_fulfilled: {}",
+            old_to_local_value, old_to_remote_value, offered_fulfilled, received_fulfilled
+        );
+
+        eprintln!("self.to_local_amount: {}, self.to_remote_amount: {}, offered_pending: {}, received_pending: {}", self.to_local_amount, self.to_remote_amount, offered_pending, received_pending);
+
         let to_local_value = self.to_local_amount - offered_pending;
         let to_remote_value = self.to_remote_amount - received_pending;
+        eprintln!(
+            "to_local_value: {}, to_remote_value: {}",
+            to_local_value, to_remote_value
+        );
 
         let commitment_tx_fee =
             calculate_commitment_tx_fee(self.commitment_fee_rate, &self.funding_udt_type_script);
