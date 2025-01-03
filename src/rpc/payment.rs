@@ -1,7 +1,7 @@
 use crate::fiber::{
     channel::ChannelActorStateStore,
     graph::PaymentSessionStatus,
-    network::SendPaymentCommand,
+    network::{HopHint as NetworkHopHint, SendPaymentCommand},
     serde_utils::{U128Hex, U64Hex},
     types::{Hash256, Pubkey},
     NetworkActorCommand, NetworkActorMessage,
@@ -91,10 +91,40 @@ pub(crate) struct SendPaymentCommandParams {
     /// allow self payment, default is false
     allow_self_payment: Option<bool>,
 
+    /// Optional route hints to reach the destination through private channels.
+    /// A hop hint is a hint for a node to use a specific channel, for example
+    /// (pubkey, funding_txid, inbound) where pubkey is the public key of the node,
+    /// funding_txid is the funding transaction hash of the channel outpoint, and
+    /// inbound is a boolean indicating whether to use the channel to send or receive.
+    /// Note: an inproper hint may cause the payment to fail, and hop_hints maybe helpful for self payment scenario
+    /// for helping the routing algorithm to find the correct path
+    hop_hints: Option<Vec<HopHint>>,
+
     /// dry_run for payment, used for check whether we can build valid router and the fee for this payment,
     /// it's useful for the sender to double check the payment before sending it to the network,
     /// default is false
     dry_run: Option<bool>,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HopHint {
+    /// The public key of the node
+    pub pubkey: Pubkey,
+    /// The funding transaction hash of the channel outpoint
+    pub channel_funding_tx: Hash256,
+    /// inbound or outbound to use this channel
+    pub inbound: bool,
+}
+
+impl From<HopHint> for NetworkHopHint {
+    fn from(hop_hint: HopHint) -> Self {
+        NetworkHopHint {
+            pubkey: hop_hint.pubkey,
+            channel_funding_tx: hop_hint.channel_funding_tx,
+            inbound: hop_hint.inbound,
+        }
+    }
 }
 
 /// RPC module for channel management.
@@ -150,6 +180,10 @@ where
                     keysend: params.keysend,
                     udt_type_script: params.udt_type_script.clone().map(|s| s.into()),
                     allow_self_payment: params.allow_self_payment.unwrap_or(false),
+                    hop_hints: params
+                        .hop_hints
+                        .clone()
+                        .map(|hints| hints.into_iter().map(|hint| hint.into()).collect()),
                     dry_run: params.dry_run.unwrap_or(false),
                 },
                 rpc_reply,
