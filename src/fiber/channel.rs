@@ -102,7 +102,7 @@ pub const MESSAGE_OF_NODE2_FLAG: u32 = 1;
 // The channel is disabled, and no more tlcs can be added to the channel.
 pub const CHANNEL_DISABLED_FLAG: u32 = 1;
 
-const AUTO_SETDOWN_TLC_INTERVAL: Duration = Duration::from_secs(2);
+const AUTO_SETDOWN_TLC_INTERVAL: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
 pub enum ChannelActorMessage {
@@ -671,8 +671,16 @@ where
         state: &mut ChannelActorState,
         commitment_signed: CommitmentSigned,
     ) -> Result<(), ProcessingChannelError> {
+        debug!(
+            "begin to handle commitment_signed peer message: {:?}",
+            commitment_signed
+        );
         // build commitment tx and verify signature from remote, if passed send ACK for partner
-        state.verify_commitment_signed_and_send_ack(commitment_signed, &self.network)?;
+        state.verify_commitment_signed_and_send_ack(commitment_signed.clone(), &self.network)?;
+        debug!(
+            "handled commitment_signed peer message: {:?}",
+            commitment_signed
+        );
 
         let need_commitment_signed = state.tlc_state.update_for_commitment_signed();
         if need_commitment_signed {
@@ -1220,7 +1228,7 @@ where
             .send_message(NetworkActorMessage::new_command(
                 NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
                     state.get_remote_peer_id(),
-                    FiberMessage::commitment_signed(commitment_signed),
+                    FiberMessage::commitment_signed(commitment_signed.clone()),
                 )),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
@@ -1234,6 +1242,10 @@ where
             }
             CommitmentSignedFlags::ChannelReady() => {
                 state.tlc_state.set_waiting_ack(true);
+                debug!(
+                    "channel sent out commitment signed: {:?}",
+                    commitment_signed
+                );
             }
             CommitmentSignedFlags::PendingShutdown() => {
                 state.maybe_transition_to_shutdown(&self.network)?;
@@ -1280,7 +1292,7 @@ where
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
-        self.handle_commitment_signed_command(state)?;
+        self.handle_commitment_signed_command(state).unwrap();
         eprintln!(
             "finished handle add tlc command: {:?}",
             &command.payment_hash
@@ -2593,10 +2605,10 @@ impl TlcState {
     #[cfg(debug_assertions)]
     pub fn debug(&self) {
         for tlc in self.offered_tlcs.tlcs.iter() {
-            eprintln!("offered_tlc: {:?}", tlc.log());
+            debug!("offered_tlc: {:?}", tlc.log());
         }
         for tlc in self.received_tlcs.tlcs.iter() {
-            eprintln!("received_tlc: {:?}", tlc.log());
+            debug!("received_tlc: {:?}", tlc.log());
         }
     }
 
@@ -4867,7 +4879,7 @@ impl ChannelActorState {
         if is_tlc_command_message && self.tlc_state.waiting_ack {
             let now = now_timestamp_as_millis_u64();
             let instance = now - self.tlc_state.begin_waiting_time;
-            eprintln!(
+            debug!(
                 "Already waiting for TLC ack for {:?} ",
                 Duration::from_millis(instance)
             );
