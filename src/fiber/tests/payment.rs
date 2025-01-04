@@ -685,7 +685,7 @@ async fn test_send_payment_bench_test() {
         true,
     )
     .await;
-    let [mut node_0, _node_1, node_2] = nodes.try_into().expect("3 nodes");
+    let [mut node_0, node_1, node_2] = nodes.try_into().expect("3 nodes");
 
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
@@ -711,6 +711,12 @@ async fn test_send_payment_bench_test() {
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
         }
+        let res = node_0.node_info().await;
+        eprintln!("node0 node_info: {:?}", res);
+        let res = node_1.node_info().await;
+        eprintln!("node1 node_info: {:?}", res);
+        let res = node_2.node_info().await;
+        eprintln!("node2 node_info: {:?}", res);
         if all_sent.is_empty() {
             break;
         }

@@ -5,6 +5,7 @@ use crate::fiber::channel::ChannelCommandWithId;
 use crate::fiber::graph::NetworkGraphStateStore;
 use crate::fiber::graph::PaymentSession;
 use crate::fiber::graph::PaymentSessionStatus;
+use crate::fiber::network::NodeInfoResponse;
 use crate::fiber::network::SendPaymentCommand;
 use crate::fiber::network::SendPaymentResponse;
 use crate::fiber::types::EcdsaSignature;
@@ -608,6 +609,16 @@ impl NetworkNode {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    pub async fn node_info(&self) -> NodeInfoResponse {
+        let message =
+            |rpc_reply| NetworkActorMessage::Command(NetworkActorCommand::NodeInfo((), rpc_reply));
+        eprintln!("query node_info ...");
+        let res = call!(self.network_actor, message)
+            .expect("node_a alive")
+            .unwrap();
+        res
     }
 
     pub async fn update_channel_actor_state(&mut self, state: ChannelActorState) {
