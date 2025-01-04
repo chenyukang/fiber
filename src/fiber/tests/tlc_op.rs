@@ -242,6 +242,7 @@ impl Actor for TlcActor {
                     RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill {
                         payment_preimage: Default::default(),
                     }),
+                    false,
                 );
                 let peer = state.get_peer();
                 self.network

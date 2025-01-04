@@ -1301,6 +1301,12 @@ where
     }
 
     pub fn try_pending_add_tlc(&self, state: &mut ChannelActorState) {
+        debug!("now begin to try_pending_add_tlc ....");
+        if state.tlc_state.waiting_ack {
+            debug!("skipped try_pending_add_tlc ....");
+            return;
+        }
+
         let peer_id = state.get_remote_peer_id();
         let channel_id = state.get_id();
         let mut need_commitment_signed = false;
@@ -1311,7 +1317,7 @@ where
             self.network
                 .send_message(NetworkActorMessage::new_command(
                     NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
-                        peer_id,
+                        peer_id.clone(),
                         FiberMessage::add_tlc(AddTlc {
                             channel_id,
                             tlc_id: tlc.tlc_id.into(),
@@ -1329,6 +1335,32 @@ where
         }
         if need_commitment_signed {
             self.handle_commitment_signed_command(state).unwrap();
+            return;
+        }
+
+        if let Some(tlc) = state
+            .tlc_state
+            .offered_tlcs
+            .get_pending_remove_tlc_mut()
+            .next()
+        {
+            let msg = FiberMessageWithPeerId::new(
+                peer_id,
+                FiberMessage::remove_tlc(RemoveTlc {
+                    channel_id,
+                    tlc_id: tlc.tlc_id.into(),
+                    reason: tlc.removed_reason.as_ref().unwrap().clone(),
+                }),
+            );
+            self.network
+                .send_message(NetworkActorMessage::new_command(
+                    NetworkActorCommand::SendFiberMessage(msg),
+                ))
+                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+        }
+        if need_commitment_signed {
+            state.maybe_transition_to_shutdown(&self.network).unwrap();
+            self.handle_commitment_signed_command(state).unwrap();
         }
     }
 
@@ -1341,27 +1373,31 @@ where
             "event-debug: begin to handle remove tlc command: {:?}",
             &command.id
         );
-        state.check_for_tlc_update(None, true, false)?;
+        state.check_for_tlc_update(None, false, false)?;
         state.check_remove_tlc_with_reason(TLCId::Received(command.id), &command.reason)?;
+        let waiting_ack = state.tlc_state.waiting_ack;
         state
             .tlc_state
-            .set_received_tlc_removed(command.id, command.reason.clone());
-        let msg = FiberMessageWithPeerId::new(
-            state.get_remote_peer_id(),
-            FiberMessage::remove_tlc(RemoveTlc {
-                channel_id: state.get_id(),
-                tlc_id: command.id,
-                reason: command.reason,
-            }),
-        );
-        self.network
-            .send_message(NetworkActorMessage::new_command(
-                NetworkActorCommand::SendFiberMessage(msg),
-            ))
-            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+            .set_received_tlc_removed(command.id, command.reason.clone(), waiting_ack);
 
-        state.maybe_transition_to_shutdown(&self.network)?;
-        self.handle_commitment_signed_command(state)?;
+        if !waiting_ack {
+            let msg = FiberMessageWithPeerId::new(
+                state.get_remote_peer_id(),
+                FiberMessage::remove_tlc(RemoveTlc {
+                    channel_id: state.get_id(),
+                    tlc_id: command.id,
+                    reason: command.reason,
+                }),
+            );
+            self.network
+                .send_message(NetworkActorMessage::new_command(
+                    NetworkActorCommand::SendFiberMessage(msg),
+                ))
+                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+
+            state.maybe_transition_to_shutdown(&self.network)?;
+            self.handle_commitment_signed_command(state)?;
+        }
         debug!(
             "event-debug: finished handle remove tlc command: {:?}",
             &command.id
@@ -1706,9 +1742,9 @@ where
 
         // If there are more pending removes, we will retry it later
         if !state.tlc_state.get_pending_operations().is_empty() {
-            myself.send_after(AUTO_SETDOWN_TLC_INTERVAL, || {
-                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
-            });
+            // myself.send_after(AUTO_SETDOWN_TLC_INTERVAL, || {
+            //     ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
+            // });
         }
     }
 
@@ -1941,6 +1977,9 @@ where
             }
             ChannelEvent::CheckTlcRetryOperation => {
                 self.apply_retryable_tlc_operations(myself, state).await;
+            }
+            ChannelEvent::CheckPendingOpertation => {
+                self.try_pending_add_tlc(state);
             }
             ChannelEvent::PeerDisconnected => {
                 myself.stop(Some("PeerDisconnected".to_string()));
@@ -2288,6 +2327,21 @@ where
         }
     }
 
+    async fn post_start(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        // myself.send_interval(MAINTAINING_CONNECTIONS_INTERVAL, || {
+        //     NetworkActorMessage::new_command(NetworkActorCommand::MaintainConnections)
+        // });
+
+        myself.send_after(Duration::from_millis(500), || {
+            ChannelActorMessage::Event(ChannelEvent::CheckPendingOpertation)
+        });
+        Ok(())
+    }
+
     async fn handle(
         &self,
         myself: ActorRef<Self::Msg>,
@@ -2442,6 +2496,8 @@ pub enum InboundTlcStatus {
     AnnounceWaitAck,
     // We have received ACK from peer and Committed this tlc
     Committed,
+    // We have received remove_tlc for this tlc, but we haven't applied it
+    PendingRemove,
     // We have removed this tlc, but haven't received ACK from peer
     LocalRemoved,
     // We have received the ACK for the RemoveTlc, it's safe to remove this tlc
@@ -2632,6 +2688,12 @@ impl PendingTlcs {
             .filter(|tlc| tlc.status.as_outbound_status() == OutboundTlcStatus::Pending)
     }
 
+    pub fn get_pending_remove_tlc_mut(&mut self) -> impl Iterator<Item = &mut TlcInfo> {
+        self.tlcs
+            .iter_mut()
+            .filter(|tlc| tlc.status.as_inbound_status() == InboundTlcStatus::PendingRemove)
+    }
+
     pub fn get_committed_tlcs(&self) -> Vec<TlcInfo> {
         self.tlcs
             .iter()
@@ -2786,11 +2848,21 @@ impl TlcState {
         self.received_tlcs.add_tlc(tlc);
     }
 
-    pub fn set_received_tlc_removed(&mut self, tlc_id: u64, reason: RemoveTlcReason) {
+    pub fn set_received_tlc_removed(
+        &mut self,
+        tlc_id: u64,
+        reason: RemoveTlcReason,
+        waiting_ack: bool,
+    ) {
         if let Some(tlc) = self.get_mut(&TLCId::Received(tlc_id)) {
             assert_eq!(tlc.inbound_status(), InboundTlcStatus::Committed);
             tlc.removed_reason = Some(reason);
-            tlc.status = TlcStatus::Inbound(InboundTlcStatus::LocalRemoved);
+            let status = if waiting_ack {
+                InboundTlcStatus::PendingRemove
+            } else {
+                InboundTlcStatus::LocalRemoved
+            };
+            tlc.status = TlcStatus::Inbound(status);
         }
     }
 
@@ -2824,6 +2896,7 @@ impl TlcState {
                         InboundTlcStatus::AnnounceWaitPrevAck => !for_remote,
                         InboundTlcStatus::AnnounceWaitAck => true,
                         InboundTlcStatus::Committed => true,
+                        InboundTlcStatus::PendingRemove => true,
                         InboundTlcStatus::LocalRemoved => !for_remote,
                         InboundTlcStatus::RemoveAckConfirmed => false,
                     }),
@@ -3155,6 +3228,7 @@ pub enum ChannelEvent {
     CommitmentTransactionConfirmed,
     ClosingTransactionConfirmed,
     CheckTlcRetryOperation,
+    CheckPendingOpertation,
 }
 
 pub type ProcessingChannelResult = Result<(), ProcessingChannelError>;
@@ -6543,6 +6617,7 @@ impl ChannelActorState {
                     InboundTlcStatus::AnnounceWaitPrevAck => !for_remote,
                     InboundTlcStatus::AnnounceWaitAck => true,
                     InboundTlcStatus::Committed => true,
+                    InboundTlcStatus::PendingRemove => true,
                     InboundTlcStatus::LocalRemoved => true,
                     InboundTlcStatus::RemoveAckConfirmed => true,
                 }
