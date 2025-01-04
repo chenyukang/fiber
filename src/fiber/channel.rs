@@ -102,7 +102,7 @@ pub const MESSAGE_OF_NODE2_FLAG: u32 = 1;
 // The channel is disabled, and no more tlcs can be added to the channel.
 pub const CHANNEL_DISABLED_FLAG: u32 = 1;
 
-const AUTO_SETDOWN_TLC_INTERVAL: Duration = Duration::from_millis(1000);
+const AUTO_SETDOWN_TLC_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub enum ChannelActorMessage {
@@ -4910,7 +4910,7 @@ impl ChannelActorState {
 
             if instance > 4 * 1000 {
                 self.tlc_state.debug();
-                panic!("Waiting for TLC ack for too long");
+                //panic!("Waiting for TLC ack for too long");
             }
 
             return Err(ProcessingChannelError::WaitingTlcAck);

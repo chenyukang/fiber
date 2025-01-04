@@ -36,6 +36,8 @@ pub struct ExitMessage(String);
 
 #[tokio::main]
 pub async fn main() -> Result<(), ExitMessage> {
+    // console_subscriber::init();
+
     // ractor will set "id" for each actor:
     // https://github.com/slawlor/ractor/blob/67d657e4cdcb8884a9ccc9b758704cbb447ac163/ractor/src/actor/mod.rs#L701
     // here we map it with the node prefix
