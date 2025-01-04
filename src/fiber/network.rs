@@ -1672,6 +1672,7 @@ where
                         // If this is the first hop error, like the WaitingTlcAck error,
                         // we will just retry later, return Ok here for letting endpoint user
                         // know payment session is created successfully
+                        self.store.insert_payment_session(payment_session.clone());
                         myself.send_after(Duration::from_millis(500), move || {
                             NetworkActorMessage::new_event(NetworkActorEvent::RetrySendPayment(
                                 payment_hash,
