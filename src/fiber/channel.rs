@@ -4910,6 +4910,7 @@ impl ChannelActorState {
 
             if instance > 4 * 1000 {
                 self.tlc_state.debug();
+                panic!("Waiting for TLC ack for too long");
             }
 
             return Err(ProcessingChannelError::WaitingTlcAck);
