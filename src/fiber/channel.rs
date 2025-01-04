@@ -102,7 +102,7 @@ pub const MESSAGE_OF_NODE2_FLAG: u32 = 1;
 // The channel is disabled, and no more tlcs can be added to the channel.
 pub const CHANNEL_DISABLED_FLAG: u32 = 1;
 
-const AUTO_SETDOWN_TLC_INTERVAL: Duration = Duration::from_millis(1000);
+const AUTO_SETDOWN_TLC_INTERVAL: Duration = Duration::from_millis(1500);
 
 #[derive(Debug)]
 pub enum ChannelActorMessage {
@@ -454,6 +454,9 @@ where
                     self.handle_commitment_signed_command(state)?;
                 }
                 self.update_tlc_status_on_ack(myself, state).await;
+                // if !need_commitment_signed && !state.tlc_state.waiting_ack {
+                //     self.try_pending_add_tlc(state);
+                // }
                 Ok(())
             }
             FiberChannelMessage::ChannelReady(_channel_ready) => {
@@ -1262,41 +1265,71 @@ where
             "event-debug: begin to handle add tlc command: {:?}",
             &command.payment_hash
         );
-        state.check_for_tlc_update(Some(command.amount), true, true)?;
+        state.check_for_tlc_update(Some(command.amount), false, true)?;
         state.check_tlc_expiry(command.expiry)?;
         let tlc = state.create_outbounding_tlc(command.clone());
         state.check_insert_tlc(&tlc)?;
         state.tlc_state.add_offered_tlc(tlc.clone());
         state.increment_next_offered_tlc_id();
 
-        let add_tlc = AddTlc {
-            channel_id: state.get_id(),
-            tlc_id: tlc.tlc_id.into(),
-            amount: command.amount,
-            payment_hash: command.payment_hash,
-            expiry: command.expiry,
-            hash_algorithm: command.hash_algorithm,
-            onion_packet: command.onion_packet,
-        };
+        if tlc.outbound_status() == OutboundTlcStatus::LocalAnnounced {
+            // Send tlc update message to peer.
+            self.network
+                .send_message(NetworkActorMessage::new_command(
+                    NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
+                        state.get_remote_peer_id(),
+                        FiberMessage::add_tlc(AddTlc {
+                            channel_id: state.get_id(),
+                            tlc_id: tlc.tlc_id.into(),
+                            amount: command.amount,
+                            payment_hash: command.payment_hash,
+                            expiry: command.expiry,
+                            hash_algorithm: command.hash_algorithm,
+                            onion_packet: command.onion_packet,
+                        }),
+                    )),
+                ))
+                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
-        // Send tlc update message to peer.
-        let msg = FiberMessageWithPeerId::new(
-            state.get_remote_peer_id(),
-            FiberMessage::add_tlc(add_tlc.clone()),
-        );
-
-        self.network
-            .send_message(NetworkActorMessage::new_command(
-                NetworkActorCommand::SendFiberMessage(msg),
-            ))
-            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-
-        self.handle_commitment_signed_command(state).unwrap();
+            self.handle_commitment_signed_command(state).unwrap();
+        }
         debug!(
             "event-debug: finished handle add tlc command: {:?}",
             &command.payment_hash
         );
         Ok(tlc.tlc_id.into())
+    }
+
+    pub fn try_pending_add_tlc(&self, state: &mut ChannelActorState) {
+        let peer_id = state.get_remote_peer_id();
+        let channel_id = state.get_id();
+        let mut need_commitment_signed = false;
+        if let Some(tlc) = state.tlc_state.offered_tlcs.get_pending_tlc_mut().next() {
+            assert_eq!(tlc.outbound_status(), OutboundTlcStatus::Pending);
+            tlc.status = TlcStatus::Outbound(OutboundTlcStatus::LocalAnnounced);
+            // Send tlc update message to peer.
+            self.network
+                .send_message(NetworkActorMessage::new_command(
+                    NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
+                        peer_id,
+                        FiberMessage::add_tlc(AddTlc {
+                            channel_id,
+                            tlc_id: tlc.tlc_id.into(),
+                            amount: tlc.amount,
+                            payment_hash: tlc.payment_hash,
+                            expiry: tlc.expiry,
+                            hash_algorithm: tlc.hash_algorithm,
+                            onion_packet: tlc.onion_packet.clone(),
+                        }),
+                    )),
+                ))
+                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+            need_commitment_signed = true;
+            warn!("here we try to pending add_tlc: {:?}", tlc);
+        }
+        if need_commitment_signed {
+            self.handle_commitment_signed_command(state).unwrap();
+        }
     }
 
     pub fn handle_remove_tlc_command(
@@ -1544,7 +1577,7 @@ where
                             "Failed to remove tlc: {:?} with reason: {:?}, will not retry",
                             &retryable_operation, reason
                         );
-                        panic!("RemoveTlcFail should not be in pending operations");
+                        //panic!("RemoveTlcFail should not be in pending operations");
                     }
                     match self.handle_remove_tlc_command(
                         state,
@@ -1576,7 +1609,7 @@ where
                             "Failed to remove tlc: {:?} with reason: {:?}, will not retry",
                             &retryable_operation, reason
                         );
-                        panic!("RemoveTlcFail should not be in pending operations");
+                        //panic!("RemoveTlcFail should not be in pending operations");
                     }
                     // send replay remove tlc with network actor to previous hop
                     let (send, recv) = oneshot::channel::<Result<(), ProcessingChannelError>>();
@@ -1612,7 +1645,7 @@ where
                                 );
                             false
                         }
-                        Err(_) => true,
+                        Err(_) => false,
                     }
                 }
                 RetryableTlcOperation::ForwardTlc(
@@ -2279,7 +2312,6 @@ where
                         error, message
                     );
                     debug_event!(&self.network, &format!("{:?}", error));
-                    panic!("now");
                 }
             }
             ChannelActorMessage::Command(command) => {
@@ -2381,6 +2413,9 @@ impl TLCId {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub enum OutboundTlcStatus {
+    // Wait because of waiting_ack, the TLC in this state means
+    // we haven't send add_tlc peer message to partner
+    Pending,
     // Offered tlc created and sent to remote party
     LocalAnnounced,
     // Received ACK from remote party for this offered tlc
@@ -2591,6 +2626,12 @@ impl PendingTlcs {
         self.tlcs.push(tlc);
     }
 
+    pub fn get_pending_tlc_mut(&mut self) -> impl Iterator<Item = &mut TlcInfo> {
+        self.tlcs
+            .iter_mut()
+            .filter(|tlc| tlc.status.as_outbound_status() == OutboundTlcStatus::Pending)
+    }
+
     pub fn get_committed_tlcs(&self) -> Vec<TlcInfo> {
         self.tlcs
             .iter()
@@ -2766,6 +2807,7 @@ impl TlcState {
             .tlcs
             .iter()
             .filter(move |tlc| match tlc.outbound_status() {
+                OutboundTlcStatus::Pending => false,
                 OutboundTlcStatus::LocalAnnounced => for_remote,
                 OutboundTlcStatus::Committed => true,
                 OutboundTlcStatus::RemoteRemoved => for_remote,
@@ -4908,10 +4950,10 @@ impl ChannelActorState {
                 Duration::from_millis(instance)
             );
 
-            if instance > 4 * 1000 {
-                self.tlc_state.debug();
-                panic!("Waiting for TLC ack for too long");
-            }
+            // if instance > 4 * 1000 {
+            //     self.tlc_state.debug();
+            //     panic!("Waiting for TLC ack for too long");
+            // }
 
             return Err(ProcessingChannelError::WaitingTlcAck);
         }
@@ -4983,9 +5025,15 @@ impl ChannelActorState {
             "Must not have the same id in pending offered tlcs"
         );
 
+        let status = if self.tlc_state.waiting_ack {
+            OutboundTlcStatus::Pending
+        } else {
+            OutboundTlcStatus::LocalAnnounced
+        };
+
         TlcInfo {
             channel_id: self.get_id(),
-            status: TlcStatus::Outbound(OutboundTlcStatus::LocalAnnounced),
+            status: TlcStatus::Outbound(status),
             tlc_id,
             amount: command.amount,
             payment_hash: command.payment_hash,
@@ -5682,6 +5730,11 @@ impl ChannelActorState {
             "event-debug: Handling RevokeAndAck message: {:?}",
             &revoke_and_ack
         );
+        if !self.tlc_state.waiting_ack {
+            return Err(ProcessingChannelError::InvalidState(
+                "unexpected revoke_and_ack".to_string(),
+            ));
+        }
         let RevokeAndAck {
             channel_id: _,
             revocation_partial_signature,
@@ -6476,6 +6529,7 @@ impl ChannelActorState {
             .tlcs
             .iter()
             .filter(move |tlc| match tlc.outbound_status() {
+                OutboundTlcStatus::Pending => false,
                 OutboundTlcStatus::LocalAnnounced => for_remote,
                 OutboundTlcStatus::Committed => true,
                 OutboundTlcStatus::RemoteRemoved => true,
