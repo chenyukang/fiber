@@ -102,7 +102,7 @@ pub const MESSAGE_OF_NODE2_FLAG: u32 = 1;
 // The channel is disabled, and no more tlcs can be added to the channel.
 pub const CHANNEL_DISABLED_FLAG: u32 = 1;
 
-const AUTO_SETDOWN_TLC_INTERVAL: Duration = Duration::from_millis(1500);
+const AUTO_SETDOWN_TLC_INTERVAL: Duration = Duration::from_millis(400);
 
 #[derive(Debug)]
 pub enum ChannelActorMessage {
@@ -720,6 +720,7 @@ where
             .collect();
 
         for tlc_id in settled_tlcs {
+            eprintln!("now try to remove: {:?}", tlc_id);
             self.apply_remove_tlc_operation(myself, state, tlc_id)
                 .await
                 .expect("expect remove tlc success");
@@ -1088,6 +1089,7 @@ where
                     ProcessingChannelError::InternalError("insert preimage failed".to_string())
                 })?;
         }
+        eprintln!("removing tlc peer message: {:?}", remove_tlc.tlc_id);
         Ok(())
     }
 
@@ -1301,9 +1303,9 @@ where
     }
 
     pub fn try_pending_add_tlc(&self, state: &mut ChannelActorState) {
-        debug!("now begin to try_pending_add_tlc ....");
+        eprintln!("now begin to try_pending_add_tlc ....");
         if state.tlc_state.waiting_ack {
-            debug!("skipped try_pending_add_tlc ....");
+            eprintln!("skipped try_pending_add_tlc ....");
             return;
         }
 
@@ -1340,10 +1342,11 @@ where
 
         if let Some(tlc) = state
             .tlc_state
-            .offered_tlcs
+            .received_tlcs
             .get_pending_remove_tlc_mut()
             .next()
         {
+            tlc.status = TlcStatus::Inbound(InboundTlcStatus::LocalRemoved);
             let msg = FiberMessageWithPeerId::new(
                 peer_id,
                 FiberMessage::remove_tlc(RemoveTlc {
@@ -1397,6 +1400,7 @@ where
 
             state.maybe_transition_to_shutdown(&self.network)?;
             self.handle_commitment_signed_command(state)?;
+            eprintln!("finished remove_tlc ...");
         }
         debug!(
             "event-debug: finished handle remove tlc command: {:?}",
@@ -1602,18 +1606,15 @@ where
         state: &mut ChannelActorState,
     ) {
         let pending_tlc_ops = state.tlc_state.get_pending_operations();
-        for op in pending_tlc_ops.iter() {
-            eprintln!("Begin to applying retryable tlc operation: {:?}", &op);
-        }
         for retryable_operation in pending_tlc_ops.into_iter() {
             let need_retry = match retryable_operation {
                 RetryableTlcOperation::RemoveTlc(tlc_id, ref reason) => {
+                    eprintln!("now begin to remove: {:?}", reason);
                     if matches!(reason, RemoveTlcReason::RemoveTlcFail(_)) {
                         error!(
                             "Failed to remove tlc: {:?} with reason: {:?}, will not retry",
                             &retryable_operation, reason
                         );
-                        //panic!("RemoveTlcFail should not be in pending operations");
                     }
                     match self.handle_remove_tlc_command(
                         state,
@@ -1645,10 +1646,9 @@ where
                             "Failed to remove tlc: {:?} with reason: {:?}, will not retry",
                             &retryable_operation, reason
                         );
-                        //panic!("RemoveTlcFail should not be in pending operations");
                     }
                     // send replay remove tlc with network actor to previous hop
-                    let (send, recv) = oneshot::channel::<Result<(), ProcessingChannelError>>();
+                    let (send, _recv) = oneshot::channel::<Result<(), ProcessingChannelError>>();
                     let port = RpcReplyPort::from(send);
                     self.network
                         .send_message(NetworkActorMessage::new_command(
@@ -1664,25 +1664,7 @@ where
                             }),
                         ))
                         .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                    match recv.await {
-                        Ok(Ok(_)) => false,
-                        Ok(Err(ProcessingChannelError::WaitingTlcAck)) => {
-                            error!(
-                                    "Failed to relay remove tlc: {:?} because of WaitingTlcAck, retry it later",
-                                    &retryable_operation
-                                );
-                            state.tlc_state.debug();
-                            true
-                        }
-                        Ok(Err(err)) => {
-                            error!(
-                                    "Failed to relay remove tlc: {:?} with reason: {:?}, will not retry",
-                                    &retryable_operation, err
-                                );
-                            false
-                        }
-                        Err(_) => false,
-                    }
+                    true
                 }
                 RetryableTlcOperation::ForwardTlc(
                     payment_hash,
@@ -1733,18 +1715,11 @@ where
             }
         }
 
-        if state.tlc_state.get_pending_operations().is_empty() {
-            eprintln!("All retryable tlc operations are applied successfully !!!");
-        }
-        for op in state.tlc_state.get_pending_operations().iter() {
-            eprintln!("After apply there is retryable tlc operation: {:?}", &op);
-        }
-
         // If there are more pending removes, we will retry it later
         if !state.tlc_state.get_pending_operations().is_empty() {
-            // myself.send_after(AUTO_SETDOWN_TLC_INTERVAL, || {
-            //     ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
-            // });
+            myself.send_after(AUTO_SETDOWN_TLC_INTERVAL, || {
+                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
+            });
         }
     }
 
@@ -2332,13 +2307,9 @@ where
         myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        // myself.send_interval(MAINTAINING_CONNECTIONS_INTERVAL, || {
-        //     NetworkActorMessage::new_command(NetworkActorCommand::MaintainConnections)
+        // myself.send_interval(Duration::from_millis(1000), || {
+        //     ChannelActorMessage::Event(ChannelEvent::CheckPendingOpertation)
         // });
-
-        myself.send_after(Duration::from_millis(500), || {
-            ChannelActorMessage::Event(ChannelEvent::CheckPendingOpertation)
-        });
         Ok(())
     }
 
@@ -2855,13 +2826,17 @@ impl TlcState {
         waiting_ack: bool,
     ) {
         if let Some(tlc) = self.get_mut(&TLCId::Received(tlc_id)) {
-            assert_eq!(tlc.inbound_status(), InboundTlcStatus::Committed);
-            tlc.removed_reason = Some(reason);
+            assert!(matches!(
+                tlc.inbound_status(),
+                InboundTlcStatus::Committed | InboundTlcStatus::LocalRemoved
+            ));
+            tlc.removed_reason = Some(reason.clone());
             let status = if waiting_ack {
                 InboundTlcStatus::PendingRemove
             } else {
                 InboundTlcStatus::LocalRemoved
             };
+            eprintln!("remove tlc with status: {:?}, reason: {:?}", status, reason);
             tlc.status = TlcStatus::Inbound(status);
         }
     }
@@ -4646,7 +4621,7 @@ impl ChannelActorState {
             self.to_local_amount = to_local_amount;
             self.to_remote_amount = to_remote_amount;
 
-            debug!("Updated local balance to {} and remote balance to {} by removing tlc {:?} with reason {:?}",
+            eprintln!("Updated local balance to {} and remote balance to {} by removing tlc {:?} with reason {:?}",
                             to_local_amount, to_remote_amount, tlc_id, reason);
         }
         self.tlc_state.apply_remove_tlc(tlc_id);
@@ -4984,6 +4959,7 @@ impl ChannelActorState {
                     "TLC is already removed".to_string(),
                 ));
             }
+            eprintln!("now remove tlc with reason: {:?}", tlc);
             if (tlc.is_offered() && tlc.outbound_status() != OutboundTlcStatus::Committed)
                 || (tlc.is_received() && tlc.inbound_status() != InboundTlcStatus::Committed)
             {
