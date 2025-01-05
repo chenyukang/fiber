@@ -1399,10 +1399,8 @@ where
                 return reply.send(Err(tlc_error)).expect("send add tlc response");
             }
         }
-        debug!("got add tlc response ......");
         let add_tlc_res = recv.await.expect("recv error").map(|res| res.tlc_id);
         reply.send(add_tlc_res.clone()).expect("send error");
-        debug!("send add tlc response ......: {:?}", add_tlc_res);
     }
 
     fn get_tlc_error(

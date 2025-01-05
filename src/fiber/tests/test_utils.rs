@@ -606,8 +606,10 @@ impl NetworkNode {
             if status == PaymentSessionStatus::Success {
                 eprintln!("Payment success: {:?}\n\n", payment_hash);
                 break;
+            } else {
+                eprintln!("status for {:?} is : {:?}", payment_hash, status);
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }
 

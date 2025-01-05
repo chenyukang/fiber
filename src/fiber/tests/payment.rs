@@ -691,7 +691,7 @@ async fn test_send_payment_bench_test() {
 
     let mut all_sent = HashSet::new();
 
-    for i in 1..=12 {
+    for i in 1..=15 {
         let payment = node_0.send_payment_keysend(&node_2, 1000).await.unwrap();
         eprintln!("payment: {:?}", payment);
         all_sent.insert(payment.payment_hash);
@@ -814,5 +814,4 @@ async fn test_send_payment_three_nodes_send_each_other_bench_test() {
         node_0.wait_until_success(payment1.payment_hash).await;
         node_2.wait_until_success(payment2.payment_hash).await;
     }
-    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 }
