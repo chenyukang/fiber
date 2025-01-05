@@ -502,6 +502,7 @@ pub struct SendOnionPacketCommand {
     pub peeled_onion_packet: PeeledPaymentOnionPacket,
     pub previous_tlc: Option<(Hash256, u64)>,
     pub payment_hash: Hash256,
+    pub wait_add_tlc: bool,
 }
 
 impl NetworkActorMessage {
@@ -1366,6 +1367,7 @@ where
             peeled_onion_packet,
             previous_tlc,
             payment_hash,
+            wait_add_tlc,
         } = command;
 
         let info = peeled_onion_packet.current.clone();
@@ -1407,8 +1409,12 @@ where
         // we have already checked the channel_id is valid,
         match state.send_command_to_channel(*channel_id, command).await {
             Ok(()) => {
-                let add_tlc_res = recv.await.expect("recv error").map(|res| res.tlc_id);
-                reply.send(add_tlc_res).expect("send error");
+                if wait_add_tlc {
+                    let add_tlc_res = recv.await.expect("recv error").map(|res| res.tlc_id);
+                    reply.send(add_tlc_res).expect("send error");
+                } else {
+                    reply.send(Ok(u64::MAX)).expect("send error");
+                }
             }
             Err(err) => {
                 error!(
@@ -1583,7 +1589,6 @@ where
     ) -> Result<PaymentSession, Error> {
         let session_key = Privkey::from_slice(KeyPair::generate_random_key().as_ref());
         assert_ne!(hops[0].funding_tx_hash, Hash256::default());
-        let first_channel_outpoint = OutPoint::new(hops[0].funding_tx_hash.into(), 0);
 
         payment_session
             .session_key
@@ -1613,6 +1618,7 @@ where
             peeled_onion_packet,
             previous_tlc: None,
             payment_hash: payment_data.payment_hash,
+            wait_add_tlc: true,
         };
 
         self.handle_send_onion_packet_command(state, command, rpc_reply)
@@ -1638,8 +1644,8 @@ where
                 }
                 return Err(Error::SendPaymentFirstHopError(err, need_to_retry));
             }
-            Ok(tlc_id) => {
-                payment_session.set_inflight_status(first_channel_outpoint, tlc_id);
+            Ok(_) => {
+                payment_session.set_inflight_status();
                 self.store.insert_payment_session(payment_session.clone());
                 return Ok(payment_session.clone());
             }
