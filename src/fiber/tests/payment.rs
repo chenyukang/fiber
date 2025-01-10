@@ -1524,3 +1524,65 @@ async fn test_send_payment_middle_hop_balance_is_not_enough() {
         .expect("got error")
         .contains("Failed to build route"));
 }
+
+#[tokio::test]
+async fn test_send_payment_middle_hop_stop_and_restart() {
+    // https://github.com/nervosnetwork/fiber/issues/464
+    init_tracing();
+    let _span = tracing::info_span!("node", node = "test").entered();
+    let (nodes, channels) = create_n_nodes_with_index_and_amounts_with_established_channel(
+        &[
+            ((0, 1), (MIN_RESERVED_CKB + 1000000, MIN_RESERVED_CKB)),
+            ((1, 2), (MIN_RESERVED_CKB + 1000000, MIN_RESERVED_CKB)),
+            ((2, 3), (MIN_RESERVED_CKB + 1000000, MIN_RESERVED_CKB)),
+        ],
+        4,
+        true,
+    )
+    .await;
+    let [mut node_0, mut node_1, mut node_2, node_3] = nodes.try_into().expect("3 nodes");
+
+    node_2.stop().await;
+
+    let res = node_0
+        .send_payment_keysend(&node_3, 1000, false)
+        .await
+        .unwrap();
+    eprintln!("res: {:?}", res);
+
+    // path is still 0 -> 1 -> 2 -> 3,
+    node_0.wait_until_failed(res.payment_hash).await;
+    let result = node_0.get_payment_result(res.payment_hash).await;
+    eprintln!("debug result: {:?}", result);
+    assert!(result
+        .failed_error
+        .expect("got error")
+        .contains("Failed to build route"));
+
+    node_2.start().await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+
+    // now node_2 don't boradcast the channel update to node_0 and send_payment will fail
+    let res = node_0.send_payment_keysend(&node_3, 1000, false).await;
+    assert!(res.is_err());
+
+    // manually enable the channel on node_1 and node_0
+    node_1.enable_channel(channels[1]).await;
+    node_0.enable_channel_on_graph(channels[1]).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+
+    // we can send small amount payment, after node_2 restarted and boradcast the channel update
+    // to node_0
+    let res = node_0
+        .send_payment_keysend(&node_3, 10, false)
+        .await
+        .unwrap();
+    eprintln!("res: {:?}", res);
+    node_0.wait_until_success(res.payment_hash).await;
+
+    // but we still can not send large amount payment, we need to wait for some time
+    // untile the time_factor in history decay
+
+    let res = node_0.send_payment_keysend(&node_3, 500, false).await;
+    assert!(res.is_err());
+}

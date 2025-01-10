@@ -349,7 +349,10 @@ where
         channel_info.update_of_node2 = channel_update_of_node2;
     }
 
-    fn load_channel_info_mut(&mut self, channel_outpoint: &OutPoint) -> Option<&mut ChannelInfo> {
+    pub(crate) fn load_channel_info_mut(
+        &mut self,
+        channel_outpoint: &OutPoint,
+    ) -> Option<&mut ChannelInfo> {
         if !self.channels.contains_key(channel_outpoint) {
             if let Some((timestamp, channel_announcement)) =
                 self.store.get_latest_channel_announcement(channel_outpoint)
@@ -409,14 +412,20 @@ where
     }
 
     fn process_channel_update(&mut self, channel_update: ChannelUpdate) -> Option<Cursor> {
+        eprintln!(
+            "process_channel_update {:?} self.source: {:?}",
+            &channel_update, self.source
+        );
         let channel_outpoint = &channel_update.channel_outpoint;
         // The channel update message may have smaller timestamp than channel announcement.
         // So it is possible that the channel announcement is not loaded into the graph yet,
         // when we receive the channel update message.
         let channel = self.load_channel_info_mut(channel_outpoint)?;
         let update_info = if channel_update.is_update_of_node_1() {
+            eprintln!("got update of node1 {:?}", &channel_update);
             &mut channel.update_of_node1
         } else {
+            eprintln!("got update of node2 {:?}", &channel_update);
             &mut channel.update_of_node2
         };
 
@@ -434,11 +443,12 @@ where
                     channel_update.timestamp,
                     BroadcastMessageID::ChannelUpdate(channel_update.channel_outpoint.clone()),
                 );
-                trace!(
+                eprintln!(
                     "Saving new channel update to the graph: {:?}",
                     &channel_update
                 );
                 *update_info = Some(ChannelUpdateInfo::from(channel_update));
+                eprintln!("update_info {:?}", update_info);
                 return Some(cursor);
             }
         }
@@ -613,11 +623,20 @@ where
 
     pub(crate) fn mark_channel_failed(&mut self, channel_outpoint: &OutPoint) {
         if let Some(channel) = self.channels.get_mut(channel_outpoint) {
+            eprintln!("mark channel failed with outpoint: {:?}", channel_outpoint);
             if let Some(info) = channel.update_of_node2.as_mut() {
                 info.enabled = false;
+                eprintln!(
+                    "mark update of node1: {:?} self.source: {:?}",
+                    info, self.source
+                );
             }
             if let Some(info) = channel.update_of_node1.as_mut() {
                 info.enabled = false;
+                eprintln!(
+                    "mark update of node2: {:?} self.source: {:?}",
+                    info, self.source
+                );
             }
         }
     }

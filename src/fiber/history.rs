@@ -187,6 +187,7 @@ impl InternalResult {
         let len = nodes.len();
         assert!(len >= 2);
         let error_code = tlc_err.error_code;
+        eprintln!("error_code: {:?} index: {:?}", error_code, index);
         if index == 0 {
             // we get error from the source node
             match error_code {
@@ -483,8 +484,13 @@ where
             // if we don't have the history, we assume the probability is 1.0
             return 1.0;
         }
+        eprintln!(
+            "debug capacity: {:?} success_amount: {:?} fail_amount: {:?} amount: {:?}",
+            capacity, success_amount, fail_amount, amount
+        );
         let ret = self.get_channel_probability(capacity, success_amount, fail_amount, amount);
         assert!(ret >= 0.0 && ret <= 1.0);
+        eprintln!("debug return probability: {:?}", ret);
         ret
     }
 
@@ -562,7 +568,12 @@ where
         let fail_amount = fail_amount.min(capacity);
         let success_amount = success_amount.min(capacity);
 
-        if fail_amount == success_amount {
+        // eprintln!(
+        //     "debug now fail_amount: {:?} success_amount: {:?}",
+        //     fail_amount, success_amount
+        // );
+
+        if fail_amount == success_amount && fail_amount >= capacity {
             // if the graph has latest information
             // we don't continue to calculate the probability
             if amount < capacity {

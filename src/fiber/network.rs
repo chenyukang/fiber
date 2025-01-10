@@ -1553,17 +1553,16 @@ where
             TlcErrorCode::PermanentChannelFailure
             | TlcErrorCode::ChannelDisabled
             | TlcErrorCode::UnknownNextPeer => {
-                let channel_outpoint = tcl_error_detail
-                    .error_channel_outpoint()
-                    .expect("expect channel outpoint");
-                debug!("mark channel failed: {:?}", channel_outpoint);
-                let mut graph = self.network_graph.write().await;
-                graph.mark_channel_failed(&channel_outpoint);
+                if let Some(channel_outpoint) = tcl_error_detail.error_channel_outpoint() {
+                    let mut graph = self.network_graph.write().await;
+                    graph.mark_channel_failed(&channel_outpoint);
+                }
             }
             TlcErrorCode::PermanentNodeFailure => {
-                let node_id = tcl_error_detail.error_node_id().expect("expect node id");
-                let mut graph = self.network_graph.write().await;
-                graph.mark_node_failed(node_id);
+                if let Some(node_id) = tcl_error_detail.error_node_id() {
+                    let mut graph = self.network_graph.write().await;
+                    graph.mark_node_failed(node_id);
+                }
             }
             _ => {}
         }

@@ -717,6 +717,42 @@ impl NetworkNode {
         self.update_channel_actor_state(channel_actor_state).await;
     }
 
+    pub async fn enable_channel(&mut self, channel_id: Hash256) {
+        let mut channel_actor_state = self.get_channel_actor_state(channel_id);
+        let mut public_info = channel_actor_state.public_channel_info.unwrap();
+        public_info.enabled = true;
+        channel_actor_state.public_channel_info = Some(public_info);
+        eprintln!(
+            "set channel {:?} enabled with outpoint: {:?}",
+            channel_id,
+            OutPoint::new(
+                channel_actor_state
+                    .funding_tx
+                    .clone()
+                    .unwrap()
+                    .calc_tx_hash()
+                    .into(),
+                0
+            )
+        );
+        self.update_channel_actor_state(channel_actor_state).await;
+    }
+
+    pub async fn enable_channel_on_graph(&mut self, channel_id: Hash256) {
+        let funding_tx = self.channels_tx_map.get(&channel_id).unwrap();
+        let channel_outpoint = OutPoint::new(funding_tx.clone().into(), 0);
+        let mut graph = self.network_graph.write().await;
+        let channel_info = graph.load_channel_info_mut(&channel_outpoint).unwrap();
+        if let Some(mut update_of_node1) = channel_info.update_of_node1.take() {
+            update_of_node1.enabled = true;
+            channel_info.update_of_node1 = Some(update_of_node1);
+        }
+        if let Some(mut update_of_node2) = channel_info.update_of_node2.take() {
+            update_of_node2.enabled = true;
+            channel_info.update_of_node2 = Some(update_of_node2);
+        }
+    }
+
     pub fn get_payment_session(&self, payment_hash: Hash256) -> Option<PaymentSession> {
         self.store.get_payment_session(payment_hash)
     }
