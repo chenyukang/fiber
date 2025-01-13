@@ -899,9 +899,10 @@ where
                     continue;
                 }
 
-                let fee = if from == source {
+                let fee = if to == target {
                     0
                 } else {
+                    eprintln!("fee_rate: {:?}", channel_update.fee_rate);
                     calculate_tlc_forward_fee(
                         next_hop_received_amount,
                         channel_update.fee_rate as u128,
