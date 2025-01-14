@@ -50,6 +50,7 @@ pub fn now_timestamp_as_millis_u64() -> u64 {
 pub fn gen_rand_sha256_hash() -> Hash256 {
     let mut rng = rand::thread_rng();
     let mut result = [0u8; 32];
+    eprintln!("gen_rand_sha256_hash");
     rng.fill(&mut result[..]);
     result.into()
 }
