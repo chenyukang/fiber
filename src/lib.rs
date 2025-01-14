@@ -29,7 +29,9 @@ pub mod tasks;
 
 use git_version::git_version;
 
-const GIT_VERSION: &str = git_version!();
+const GIT_VERSION: &str = git_version!(fallback = "unknown");
+
+pub use ractor::async_trait;
 
 pub fn get_git_versin() -> &'static str {
     GIT_VERSION
