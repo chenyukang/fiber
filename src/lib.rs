@@ -34,6 +34,7 @@ const GIT_VERSION: &str = git_version!(fallback = "unknown");
 pub fn get_git_version() -> &'static str {
     GIT_VERSION
 }
+pub use ractor::async_trait;
 
 pub fn get_node_prefix() -> &'static str {
     static INSTANCE: once_cell::sync::OnceCell<String> = once_cell::sync::OnceCell::new();
