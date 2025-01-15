@@ -46,10 +46,12 @@ impl Migration for MigrationObj {
             // there maybe some existing nodes didn't set correct db version,
             // if we can deserialize the data correctly, just skip it.
             if let Ok(_) = bincode::deserialize::<ChannelActorStateV030>(&v) {
+                eprintln!("skip for v030 : {:?}", k);
                 continue;
             }
 
             if let Ok(_) = bincode::deserialize::<ChannelActorStateV021>(&v) {
+                eprintln!("skip for v021 : {:?}", k);
                 continue;
             }
 
@@ -116,6 +118,8 @@ impl Migration for MigrationObj {
                 reestablishing: old_channel_state.reestablishing,
                 created_at: old_channel_state.created_at,
             };
+
+            eprintln!("write new channel state to db 1: {:?}", k);
 
             let new_channel_state_bytes =
                 bincode::serialize(&new_channel_state).expect("serialize to new channel state");
