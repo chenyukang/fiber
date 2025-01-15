@@ -3,6 +3,8 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
+    println!("cargo:rerun-if-changed=src/migrations");
+
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("migrations.rs");
 
@@ -25,7 +27,6 @@ fn main() {
     }
 
     let mut code = String::new();
-    code.push_str("use std::sync::Arc;\n");
     code.push_str("pub fn add_migrations(db_migrate: &mut DbMigrate) {\n");
 
     for migration in migrations {
