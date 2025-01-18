@@ -894,27 +894,8 @@ async fn test_network_send_payment_send_each_other() {
     assert_eq!(res2.status, PaymentSessionStatus::Created);
     let payment_hash2 = res2.payment_hash;
 
-    // sleep for 2 seconds to make sure the payment is processed
-    tokio::time::sleep(tokio::time::Duration::from_millis(4000)).await;
-
-    let message = |rpc_reply| -> NetworkActorMessage {
-        NetworkActorMessage::Command(NetworkActorCommand::GetPayment(payment_hash1, rpc_reply))
-    };
-    let res = call!(node_a.network_actor, message)
-        .expect("node_a alive")
-        .unwrap();
-    assert_eq!(res.status, PaymentSessionStatus::Success);
-    assert_eq!(res.failed_error, None);
-
-    let message = |rpc_reply| -> NetworkActorMessage {
-        NetworkActorMessage::Command(NetworkActorCommand::GetPayment(payment_hash2, rpc_reply))
-    };
-    let res = call!(node_b.network_actor, message)
-        .expect("node_a alive")
-        .unwrap();
-
-    assert_eq!(res.status, PaymentSessionStatus::Success);
-    assert_eq!(res.failed_error, None);
+    node_a.wait_until_success(payment_hash1).await;
+    node_b.wait_until_success(payment_hash2).await;
 
     let node_a_new_balance = node_a.get_local_balance_from_channel(new_channel_id);
     let node_b_new_balance = node_b.get_local_balance_from_channel(new_channel_id);

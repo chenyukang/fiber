@@ -2436,7 +2436,7 @@ pub enum OutboundTlcStatus {
     RemoteRemoved,
     // We received another RemoveTlc message from peer when we are waiting for the ack of the last one.
     // So we need another ACK to confirm the removal.
-    RemoveWaitPrevAck,
+    // RemoveWaitPrevAck,
     // We have sent commitment signed to peer and waiting ACK for confirming this RemoveTlc
     RemoveWaitAck,
     // We have received the ACK for the RemoveTlc, it's safe to remove this tlc
@@ -2827,7 +2827,7 @@ impl TlcState {
                 OutboundTlcStatus::LocalAnnounced => for_remote,
                 OutboundTlcStatus::Committed => true,
                 OutboundTlcStatus::RemoteRemoved => for_remote,
-                OutboundTlcStatus::RemoveWaitPrevAck => for_remote,
+                //OutboundTlcStatus::RemoveWaitPrevAck => for_remote,
                 OutboundTlcStatus::RemoveWaitAck => false,
                 OutboundTlcStatus::RemoveAckConfirmed => false,
             })
@@ -2850,12 +2850,12 @@ impl TlcState {
         for tlc in self.offered_tlcs.tlcs.iter_mut() {
             match tlc.outbound_status() {
                 OutboundTlcStatus::RemoteRemoved => {
-                    let status = if self.waiting_ack {
-                        OutboundTlcStatus::RemoveWaitPrevAck
-                    } else {
-                        OutboundTlcStatus::RemoveWaitAck
-                    };
-                    tlc.status = TlcStatus::Outbound(status);
+                    // let status = if self.waiting_ack {
+                    //     OutboundTlcStatus::RemoveWaitPrevAck
+                    // } else {
+                    //     OutboundTlcStatus::RemoveWaitAck
+                    // };
+                    tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitAck);
                 }
                 _ => {}
             }
@@ -2883,9 +2883,9 @@ impl TlcState {
                 OutboundTlcStatus::LocalAnnounced => {
                     tlc.status = TlcStatus::Outbound(OutboundTlcStatus::Committed);
                 }
-                OutboundTlcStatus::RemoveWaitPrevAck => {
-                    tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitAck);
-                }
+                // OutboundTlcStatus::RemoveWaitPrevAck => {
+                //     tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitAck);
+                // }
                 OutboundTlcStatus::RemoveWaitAck => {
                     tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed);
                 }
@@ -2917,7 +2917,7 @@ impl TlcState {
                 status,
                 OutboundTlcStatus::LocalAnnounced
                     | OutboundTlcStatus::RemoteRemoved
-                    | OutboundTlcStatus::RemoveWaitPrevAck
+                    //| OutboundTlcStatus::RemoveWaitPrevAck
                     | OutboundTlcStatus::RemoveWaitAck
             )
         }) || self.received_tlcs.tlcs.iter().any(|tlc| {
@@ -6672,7 +6672,7 @@ impl ChannelActorState {
                 OutboundTlcStatus::LocalAnnounced => for_remote,
                 OutboundTlcStatus::Committed => true,
                 OutboundTlcStatus::RemoteRemoved => true,
-                OutboundTlcStatus::RemoveWaitPrevAck => true,
+                //OutboundTlcStatus::RemoveWaitPrevAck => true,
                 OutboundTlcStatus::RemoveWaitAck => true,
                 OutboundTlcStatus::RemoveAckConfirmed => true,
             })
@@ -6695,8 +6695,7 @@ impl ChannelActorState {
             eprintln!("tlc info: {:?}", info);
             if info.is_offered() {
                 offered_pending += info.amount;
-                if (info.outbound_status() == OutboundTlcStatus::RemoveWaitAck
-                    || info.outbound_status() == OutboundTlcStatus::RemoveAckConfirmed)
+                if (info.outbound_status() == OutboundTlcStatus::RemoveAckConfirmed)
                     && info
                         .removed_reason
                         .as_ref()
@@ -6810,8 +6809,8 @@ impl ChannelActorState {
 
         let deterministic_verify_ctx = self.get_deterministic_verify_context();
         eprintln!(
-            "verify funding_tx_partial_signature: {:?} deterministic_verify_ctx: {:?}",
-            funding_tx_partial_signature, deterministic_verify_ctx
+            "verify funding_tx_partial_signature: {:?}",
+            funding_tx_partial_signature
         );
         eprintln!("commitment_tx hash: {:?}", commitment_tx.hash().as_slice());
         deterministic_verify_ctx.verify(
