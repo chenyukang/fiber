@@ -2511,7 +2511,7 @@ pub enum OutboundTlcStatus {
     // We have received the ACK for the RemoveTlc
     RemoveAckConfirmed,
     // We have waited another ACK for the RemoveTlc, it's safe to remove this tlc
-    RemoveApplyConfirmed,
+    // RemoveApplyConfirmed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -2530,7 +2530,7 @@ pub enum InboundTlcStatus {
     // We have received the ACK for the RemoveTlc, it's safe to remove this tlc
     RemoveAckConfirmed,
     // We have waited another ACK for the RemoveTlc, it's safe to remove this tlc
-    RemoveApplyConfirmed,
+    // RemoveApplyConfirmed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -2633,16 +2633,15 @@ impl TlcInfo {
 
     pub fn is_remove_comfirmed(&self) -> bool {
         match self.status {
-            TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed)
-            | TlcStatus::Outbound(OutboundTlcStatus::RemoveApplyConfirmed) => true,
-            TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed)
-            | TlcStatus::Inbound(InboundTlcStatus::RemoveApplyConfirmed) => true,
+            TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed) => true,
+            TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed) => true,
             _ => false,
         }
     }
 
     pub fn is_fail_remove_confirmed(&self) -> bool {
         matches!(self.removed_reason, Some(RemoveTlcReason::RemoveTlcFail(_)))
+            && self.is_remove_comfirmed()
     }
 
     fn get_hash(&self) -> ShortHash {
@@ -2887,7 +2886,7 @@ impl TlcState {
             .offered_tlcs
             .tlcs
             .iter()
-            .filter(|info| info.outbound_status() == OutboundTlcStatus::RemoveApplyConfirmed)
+            .filter(|info| info.is_fail_remove_confirmed())
             .map(|info| info.tlc_id)
             .collect::<Vec<_>>();
 
@@ -2904,7 +2903,7 @@ impl TlcState {
             .received_tlcs
             .tlcs
             .iter()
-            .filter(|info| info.inbound_status() == InboundTlcStatus::RemoveApplyConfirmed)
+            .filter(|info| info.is_fail_remove_confirmed())
             .map(|info| info.tlc_id)
             .collect::<Vec<_>>();
 
@@ -2943,7 +2942,7 @@ impl TlcState {
                 OutboundTlcStatus::RemoveWaitPrevAck => for_remote,
                 OutboundTlcStatus::RemoveWaitAck => false,
                 OutboundTlcStatus::RemoveAckConfirmed => false,
-                OutboundTlcStatus::RemoveApplyConfirmed => false,
+                //OutboundTlcStatus::RemoveApplyConfirmed => false,
             })
             .chain(
                 self.received_tlcs
@@ -2956,7 +2955,7 @@ impl TlcState {
                         InboundTlcStatus::Committed => true,
                         InboundTlcStatus::LocalRemoved => !for_remote,
                         InboundTlcStatus::RemoveAckConfirmed => false,
-                        InboundTlcStatus::RemoveApplyConfirmed => false,
+                        //InboundTlcStatus::RemoveApplyConfirmed => false,
                     }),
             )
     }
@@ -3008,12 +3007,12 @@ impl TlcState {
                     );
                     tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed);
                 }
-                OutboundTlcStatus::RemoveAckConfirmed
-                    if matches!(tlc.removed_reason, Some(RemoveTlcReason::RemoveTlcFail(_))) =>
-                {
-                    eprintln!("set remove apply confirmed outbound: {:?}", tlc);
-                    tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoveApplyConfirmed);
-                }
+                // OutboundTlcStatus::RemoveAckConfirmed
+                //     if matches!(tlc.removed_reason, Some(RemoveTlcReason::RemoveTlcFail(_))) =>
+                // {
+                //     eprintln!("set remove apply confirmed outbound: {:?}", tlc);
+                //     tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoveApplyConfirmed);
+                // }
                 _ => {}
             }
         }
@@ -3034,12 +3033,12 @@ impl TlcState {
                     );
                     tlc.status = TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed);
                 }
-                InboundTlcStatus::RemoveAckConfirmed
-                    if matches!(tlc.removed_reason, Some(RemoveTlcReason::RemoveTlcFail(_))) =>
-                {
-                    eprintln!("set remove apply confirmed inbound: {:?}", tlc);
-                    tlc.status = TlcStatus::Inbound(InboundTlcStatus::RemoveApplyConfirmed);
-                }
+                // InboundTlcStatus::RemoveAckConfirmed
+                //     if matches!(tlc.removed_reason, Some(RemoveTlcReason::RemoveTlcFail(_))) =>
+                // {
+                //     eprintln!("set remove apply confirmed inbound: {:?}", tlc);
+                //     tlc.status = TlcStatus::Inbound(InboundTlcStatus::RemoveApplyConfirmed);
+                // }
                 _ => {}
             }
         }
@@ -6066,40 +6065,40 @@ impl ChannelActorState {
         Ok(need_commitment_signed)
     }
 
-    fn clean_up_failed_tlcs(&mut self) {
-        let pending_tlcs = self
-            .tlc_state
-            .received_tlcs
-            .tlcs
-            .iter()
-            .chain(self.tlc_state.offered_tlcs.tlcs.iter());
+    // fn clean_up_failed_tlcs(&mut self) {
+    //     let pending_tlcs = self
+    //         .tlc_state
+    //         .received_tlcs
+    //         .tlcs
+    //         .iter()
+    //         .chain(self.tlc_state.offered_tlcs.tlcs.iter());
 
-        // let pending_tlcs = if inbound {
-        //     state.tlc_state.offered_tlcs.tlcs.iter()
-        // } else {
-        //     state.tlc_state.received_tlcs.tlcs.iter()
-        // };
+    //     // let pending_tlcs = if inbound {
+    //     //     state.tlc_state.offered_tlcs.tlcs.iter()
+    //     // } else {
+    //     //     state.tlc_state.received_tlcs.tlcs.iter()
+    //     // };
 
-        let apply_removed_tlcs: Vec<_> = pending_tlcs
-            .filter(|tlc| {
-                matches!(tlc.removed_reason, Some(RemoveTlcReason::RemoveTlcFail(_)))
-                    && matches!(
-                        tlc.status,
-                        TlcStatus::Inbound(InboundTlcStatus::RemoveApplyConfirmed)
-                            | TlcStatus::Outbound(OutboundTlcStatus::RemoveApplyConfirmed)
-                    )
-            })
-            .map(|tlc| tlc.tlc_id)
-            .collect();
-        for tlc_id in apply_removed_tlcs {
-            eprintln!(
-                "node: {:?} clean up failed tlc: {:?}",
-                self.get_local_peer_id(),
-                self.tlc_state.get_mut(&tlc_id).unwrap()
-            );
-            self.tlc_state.apply_remove_tlc(tlc_id);
-        }
-    }
+    //     let apply_removed_tlcs: Vec<_> = pending_tlcs
+    //         .filter(|tlc| {
+    //             matches!(tlc.removed_reason, Some(RemoveTlcReason::RemoveTlcFail(_)))
+    //                 && matches!(
+    //                     tlc.status,
+    //                     TlcStatus::Inbound(InboundTlcStatus::RemoveApplyConfirmed)
+    //                         | TlcStatus::Outbound(OutboundTlcStatus::RemoveApplyConfirmed)
+    //                 )
+    //         })
+    //         .map(|tlc| tlc.tlc_id)
+    //         .collect();
+    //     for tlc_id in apply_removed_tlcs {
+    //         eprintln!(
+    //             "node: {:?} clean up failed tlc: {:?}",
+    //             self.get_local_peer_id(),
+    //             self.tlc_state.get_mut(&tlc_id).unwrap()
+    //         );
+    //         self.tlc_state.apply_remove_tlc(tlc_id);
+    //     }
+    // }
 
     async fn handle_reestablish_channel_message(
         &mut self,
@@ -6856,7 +6855,7 @@ impl ChannelActorState {
                 OutboundTlcStatus::RemoveWaitPrevAck => true,
                 OutboundTlcStatus::RemoveWaitAck => true,
                 OutboundTlcStatus::RemoveAckConfirmed => true,
-                OutboundTlcStatus::RemoveApplyConfirmed => true,
+                //OutboundTlcStatus::RemoveApplyConfirmed => true,
             })
             .chain(self.tlc_state.received_tlcs.tlcs.iter().filter(move |tlc| {
                 match tlc.inbound_status() {
@@ -6866,7 +6865,7 @@ impl ChannelActorState {
                     InboundTlcStatus::Committed => true,
                     InboundTlcStatus::LocalRemoved => true,
                     InboundTlcStatus::RemoveAckConfirmed => true,
-                    InboundTlcStatus::RemoveApplyConfirmed => true,
+                    //InboundTlcStatus::RemoveApplyConfirmed => true,
                 }
             }));
 
