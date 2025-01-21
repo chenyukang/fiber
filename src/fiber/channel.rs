@@ -2551,13 +2551,12 @@ impl TlcInfo {
         self.created_at
     }
 
-    pub fn is_pending(&self) -> bool {
+    pub fn is_not_pending(&self, for_remote: bool) -> bool {
         match self.status {
-            TlcStatus::Outbound(OutboundTlcStatus::LocalAnnounced)
-            | TlcStatus::Inbound(InboundTlcStatus::RemoteAnnounced)
-            | TlcStatus::Inbound(InboundTlcStatus::AnnounceWaitPrevAck)
-            | TlcStatus::Inbound(InboundTlcStatus::AnnounceWaitAck) => true,
-            _ => false,
+            TlcStatus::Outbound(OutboundTlcStatus::LocalAnnounced) => for_remote,
+            TlcStatus::Inbound(InboundTlcStatus::RemoteAnnounced)
+            | TlcStatus::Inbound(InboundTlcStatus::AnnounceWaitPrevAck) => !for_remote,
+            _ => true,
         }
     }
 
@@ -3058,6 +3057,8 @@ pub struct ChannelActorState {
     // The amount of CKB/UDT that the remote owns in the channel.
     // This value will only change after we have resolved a tlc.
     pub to_remote_amount: u128,
+    //  The total amount
+    pub total_amount: u128,
 
     // these two amounts used to keep the minimal ckb amount for the two parties
     // TLC operations will not affect these two amounts, only used to keep the commitment transactions
@@ -3883,6 +3884,7 @@ impl ChannelActorState {
             funding_udt_type_script,
             to_local_amount: local_value,
             to_remote_amount: remote_value,
+            total_amount: local_value + remote_value,
             commitment_fee_rate,
             commitment_delay_epoch,
             funding_fee_rate,
@@ -3956,6 +3958,7 @@ impl ChannelActorState {
             is_acceptor: false,
             to_local_amount,
             to_remote_amount: 0,
+            total_amount: to_local_amount,
             commitment_fee_rate,
             commitment_delay_epoch,
             funding_fee_rate,
@@ -4301,19 +4304,23 @@ impl ChannelActorState {
         self.local_reserved_ckb_amount + self.remote_reserved_ckb_amount
     }
 
-    fn get_total_ckb_amount(&self) -> u64 {
-        self.to_local_amount as u64
-            + self.to_remote_amount as u64
-            + self.get_total_reserved_ckb_amount()
-            + self.total_pending_ckb_amount() as u64
+    fn get_total_ckb_amount(&self, for_remote: Option<bool>) -> u64 {
+        if let Some(for_remote) = for_remote {
+            self.to_local_amount as u64
+                + self.to_remote_amount as u64
+                + self.get_total_reserved_ckb_amount()
+                + self.total_pending_ckb_amount(for_remote) as u64
+        } else {
+            self.total_amount as u64 + self.get_total_reserved_ckb_amount()
+        }
     }
 
-    fn total_pending_ckb_amount(&self) -> u128 {
+    fn total_pending_ckb_amount(&self, for_remote: bool) -> u128 {
         self.tlc_state
             .offered_tlcs
             .tlcs
             .iter()
-            .filter(|tlc| !tlc.is_pending())
+            .filter(|tlc| tlc.is_not_pending(for_remote))
             .map(|tlc| tlc.amount)
             .sum::<u128>()
             + self
@@ -4321,7 +4328,7 @@ impl ChannelActorState {
                 .received_tlcs
                 .tlcs
                 .iter()
-                .filter(|tlc| !tlc.is_pending())
+                .filter(|tlc| tlc.is_not_pending(for_remote))
                 .map(|tlc| tlc.amount)
                 .sum::<u128>()
     }
@@ -4368,7 +4375,7 @@ impl ChannelActorState {
                 let output_data = self.get_total_udt_amount().to_le_bytes().pack();
                 (output, output_data)
             } else {
-                let capacity = self.get_total_ckb_amount() - commitment_tx_fee;
+                let capacity = self.get_total_ckb_amount(None) - commitment_tx_fee;
                 let output = CellOutput::new_builder()
                     .lock(lock_script.clone())
                     .capacity(capacity.pack())
@@ -5396,6 +5403,7 @@ impl ChannelActorState {
         ));
 
         self.to_remote_amount = accept_channel.funding_amount;
+        self.total_amount = self.to_local_amount + self.to_remote_amount;
         self.remote_reserved_ckb_amount = accept_channel.reserved_ckb_amount;
 
         self.commit_remote_nonce(accept_channel.next_local_nonce.clone());
@@ -5884,7 +5892,7 @@ impl ChannelActorState {
                 let output_data = self.get_total_udt_amount().to_le_bytes().pack();
                 (output, output_data)
             } else {
-                let capacity = self.get_total_ckb_amount() - commitment_tx_fee;
+                let capacity = self.get_total_ckb_amount(None) - commitment_tx_fee;
                 let output = CellOutput::new_builder()
                     .lock(lock_script.clone())
                     .capacity(capacity.pack())
@@ -6201,7 +6209,7 @@ impl ChannelActorState {
             let is_udt_amount_ok = udt_amount == self.get_total_udt_amount();
             return Ok(is_udt_amount_ok);
         } else {
-            let is_complete = current_capacity == self.get_total_ckb_amount();
+            let is_complete = current_capacity == self.get_total_ckb_amount(None);
             Ok(is_complete)
         }
     }
@@ -6692,7 +6700,7 @@ impl ChannelActorState {
             let output_data = self.get_total_udt_amount().to_le_bytes().pack();
             (output, output_data)
         } else {
-            let capacity = self.get_total_ckb_amount() - commitment_tx_fee;
+            let capacity = self.get_total_ckb_amount(Some(for_remote)) - commitment_tx_fee;
             let output = CellOutput::new_builder()
                 .lock(commitment_lock_script)
                 .capacity(capacity.pack())
@@ -6764,7 +6772,6 @@ impl ChannelActorState {
                     InboundTlcStatus::AnnounceWaitAck => true,
                     InboundTlcStatus::Committed => true,
                     InboundTlcStatus::LocalRemoved => true,
-                    //InboundTlcStatus::RemoveAckPending => true,
                     InboundTlcStatus::RemoveAckConfirmed => true,
                 }
             }));
