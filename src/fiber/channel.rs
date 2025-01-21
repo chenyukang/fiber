@@ -1067,7 +1067,7 @@ where
         state.check_insert_tlc(&tlc_info)?;
         state.tlc_state.add_received_tlc(tlc_info);
         state.increment_next_received_tlc_id();
-        state.to_remote_amount -= add_tlc.amount;
+        //state.to_remote_amount -= add_tlc.amount;
         Ok(())
     }
 
@@ -1265,8 +1265,8 @@ where
             state.get_remote_peer_id(),
             FiberMessage::add_tlc(add_tlc.clone()),
         );
-        state.to_local_amount -= command.amount;
-        state.update_graph_for_local_channel_change(&self.network);
+        //state.to_local_amount -= command.amount;
+        //state.update_graph_for_local_channel_change(&self.network);
         self.network
             .send_message(NetworkActorMessage::new_command(
                 NetworkActorCommand::SendFiberMessage(msg),
@@ -2551,6 +2551,16 @@ impl TlcInfo {
         self.created_at
     }
 
+    pub fn is_pending(&self) -> bool {
+        match self.status {
+            TlcStatus::Outbound(OutboundTlcStatus::LocalAnnounced)
+            | TlcStatus::Inbound(InboundTlcStatus::RemoteAnnounced)
+            | TlcStatus::Inbound(InboundTlcStatus::AnnounceWaitPrevAck)
+            | TlcStatus::Inbound(InboundTlcStatus::AnnounceWaitAck) => true,
+            _ => false,
+        }
+    }
+
     pub fn flip_mut(&mut self) {
         self.tlc_id.flip_mut();
     }
@@ -2894,11 +2904,14 @@ impl TlcState {
     //     }
     // }
 
-    pub fn update_for_revoke_and_ack_peer_message(&mut self) -> bool {
+    pub fn update_for_revoke_and_ack_peer_message(&mut self) -> (bool, u128, u128) {
         self.set_waiting_ack(false);
+        let mut committed_local_tlc_amount = 0;
+        let mut committed_remote_tlc_amount = 0;
         for tlc in self.offered_tlcs.tlcs.iter_mut() {
             match tlc.outbound_status() {
                 OutboundTlcStatus::LocalAnnounced => {
+                    committed_local_tlc_amount += tlc.amount;
                     tlc.status = TlcStatus::Outbound(OutboundTlcStatus::Committed);
                 }
                 OutboundTlcStatus::RemoveWaitPrevAck => {
@@ -2918,6 +2931,7 @@ impl TlcState {
                     tlc.status = TlcStatus::Inbound(InboundTlcStatus::AnnounceWaitAck);
                 }
                 InboundTlcStatus::AnnounceWaitAck => {
+                    committed_remote_tlc_amount += tlc.amount;
                     tlc.status = TlcStatus::Inbound(InboundTlcStatus::Committed);
                 }
                 InboundTlcStatus::LocalRemoved => {
@@ -2926,7 +2940,11 @@ impl TlcState {
                 _ => {}
             }
         }
-        self.need_another_commitment_signed()
+        (
+            self.need_another_commitment_signed(),
+            committed_local_tlc_amount,
+            committed_remote_tlc_amount,
+        )
     }
 
     pub fn need_another_commitment_signed(&self) -> bool {
@@ -4295,6 +4313,7 @@ impl ChannelActorState {
             .offered_tlcs
             .tlcs
             .iter()
+            .filter(|tlc| !tlc.is_pending())
             .map(|tlc| tlc.amount)
             .sum::<u128>()
             + self
@@ -4302,6 +4321,7 @@ impl ChannelActorState {
                 .received_tlcs
                 .tlcs
                 .iter()
+                .filter(|tlc| !tlc.is_pending())
                 .map(|tlc| tlc.amount)
                 .sum::<u128>()
     }
@@ -5963,7 +5983,11 @@ impl ChannelActorState {
             "node: {:?} handle_revoke_and_ack_peer_message",
             self.local_pubkey
         );
-        let need_commitment_signed = self.tlc_state.update_for_revoke_and_ack_peer_message();
+        let (need_commitment_signed, committed_local_amount, committed_remote_amount) =
+            self.tlc_state.update_for_revoke_and_ack_peer_message();
+        self.to_local_amount -= committed_local_amount;
+        self.to_remote_amount -= committed_remote_amount;
+
         network
             .send_message(NetworkActorMessage::new_notification(
                 NetworkServiceEvent::RevokeAndAckReceived(
@@ -6726,7 +6750,7 @@ impl ChannelActorState {
             .tlcs
             .iter()
             .filter(move |tlc| match tlc.outbound_status() {
-                OutboundTlcStatus::LocalAnnounced => true,
+                OutboundTlcStatus::LocalAnnounced => for_remote,
                 OutboundTlcStatus::Committed => true,
                 OutboundTlcStatus::RemoteRemoved => true,
                 OutboundTlcStatus::RemoveWaitPrevAck => true,
@@ -6735,8 +6759,8 @@ impl ChannelActorState {
             })
             .chain(self.tlc_state.received_tlcs.tlcs.iter().filter(move |tlc| {
                 match tlc.inbound_status() {
-                    InboundTlcStatus::RemoteAnnounced => true,
-                    InboundTlcStatus::AnnounceWaitPrevAck => true,
+                    InboundTlcStatus::RemoteAnnounced => !for_remote,
+                    InboundTlcStatus::AnnounceWaitPrevAck => !for_remote,
                     InboundTlcStatus::AnnounceWaitAck => true,
                     InboundTlcStatus::Committed => true,
                     InboundTlcStatus::LocalRemoved => true,
@@ -6791,8 +6815,8 @@ impl ChannelActorState {
         eprintln!("received_fullfilled: {:?}, offered_pending: {:?}, offered_fullfilled: {:?}, received_pending: {:?}",
             received_fullfilled, offered_pending, offered_fullfilled, received_pending
         );
-        let to_local_value = self.to_local_amount + offered_pending + received_fullfilled;
-        let to_remote_value = self.to_remote_amount + received_pending + offered_fullfilled;
+        let to_local_value = self.to_local_amount + received_fullfilled;
+        let to_remote_value = self.to_remote_amount + offered_fullfilled;
 
         let commitment_tx_fee =
             calculate_commitment_tx_fee(self.commitment_fee_rate, &self.funding_udt_type_script);
