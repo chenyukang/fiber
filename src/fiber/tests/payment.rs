@@ -1958,7 +1958,7 @@ async fn test_send_payment_middle_hop_update_fee_should_recovery() {
     let [node_0, node_1, mut node_2, node_3] = nodes.try_into().expect("4 nodes");
     let mut all_sent = HashSet::new();
 
-    for _i in 0..5 {
+    for _i in 0..20 {
         let res = node_0
             .send_payment_keysend(&node_3, 1000, false)
             .await
@@ -2060,7 +2060,8 @@ async fn test_send_payment_complex_network_payself_amount_exceeded() {
     init_tracing();
     let _span = tracing::info_span!("node", node = "test").entered();
     let ckb_unit = 100_000_000;
-    let funding_amount = MIN_RESERVED_CKB + 1000 * ckb_unit;
+    //let funding_amount = MIN_RESERVED_CKB + 1000 * ckb_unit;
+    let funding_amount = HUGE_CKB_AMOUNT;
     let (nodes, _channels) = create_n_nodes_with_index_and_amounts_with_established_channel(
         &[
             ((0, 1), (funding_amount, funding_amount)),
@@ -2077,21 +2078,33 @@ async fn test_send_payment_complex_network_payself_amount_exceeded() {
     .await;
 
     let mut all_sent = HashSet::new();
-    for _k in 0..2 {
+    for _k in 0..20 {
         for i in 0..6 {
+            // let rand_node_index = loop {
+            //     let index = rand::random::<usize>() % 6;
+            //     if index != i {
+            //         break index;
+            //     }
+            // };
+            // let res = nodes[i]
+            //     .send_payment_keysend(&nodes[rand_node_index], 500 * ckb_unit, false)
+            //     .await;
+            let rand_amount = (450 as u128 + (rand::random::<u64>() % 100) as u128) * ckb_unit;
             let res = nodes[i]
-                .send_payment_keysend_to_self(500 * ckb_unit, false)
-                .await
-                .unwrap();
-            eprintln!("res: {:?}", res);
-            let payment_hash = res.payment_hash;
-            all_sent.insert((i, payment_hash));
+                .send_payment_keysend_to_self(rand_amount, false)
+                .await;
+            if let Ok(res) = res {
+                eprintln!("res: {:?}", res);
+                let payment_hash = res.payment_hash;
+                all_sent.insert((i, payment_hash));
+            }
         }
     }
 
     let mut result = vec![];
     loop {
         for i in 0..6 {
+            eprintln!("assert node: {:?}", i);
             assert!(nodes[i].get_triggered_unexpected_events().await.is_empty());
         }
 

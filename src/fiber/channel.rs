@@ -2328,11 +2328,13 @@ where
             }
             ChannelActorMessage::Command(command) => {
                 if let Err(err) = self.handle_command(&myself, state, command).await {
-                    error!(
-                        "{:?} Error while processing channel command: {:?}",
-                        state.get_local_peer_id(),
-                        err
-                    );
+                    if !matches!(err, ProcessingChannelError::WaitingTlcAck) {
+                        error!(
+                            "{:?} Error while processing channel command: {:?}",
+                            state.get_local_peer_id(),
+                            err
+                        );
+                    }
                 }
             }
             ChannelActorMessage::Event(e) => {
@@ -2730,6 +2732,34 @@ impl PendingTlcs {
             .cloned()
             .collect()
     }
+
+    pub fn get_oldest_failed_tlcs(&self) -> Vec<TLCId> {
+        let mut failed_tlcs = self
+            .tlcs
+            .iter()
+            .filter(|tlc| {
+                matches!(tlc.removed_reason, Some(RemoveTlcReason::RemoveTlcFail(_)))
+                    && matches!(
+                        tlc.status,
+                        TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed)
+                            | TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed)
+                            | TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitAck)
+                    )
+            })
+            .map(|tlc| (tlc.tlc_id, tlc.removed_confirmed_at.unwrap_or(u64::MAX)))
+            .collect::<Vec<_>>();
+
+        let keep_failed_num = 2;
+        if failed_tlcs.len() >= keep_failed_num {
+            failed_tlcs.sort_by(|a, b| a.1.cmp(&b.1));
+            failed_tlcs[0..failed_tlcs.len() - keep_failed_num]
+                .iter()
+                .map(|(tlc_id, _)| *tlc_id)
+                .collect()
+        } else {
+            return Vec::new();
+        }
+    }
 }
 
 #[derive(Default, Clone, Debug, Serialize, Deserialize)]
@@ -2949,7 +2979,7 @@ impl TlcState {
         self.need_another_commitment_signed()
     }
 
-    pub fn update_for_revoke_and_ack(&mut self, commitment_numbers: CommitmentNumbers) -> bool {
+    pub fn update_for_revoke_and_ack(&mut self, _commitment_numbers: CommitmentNumbers) -> bool {
         self.set_waiting_ack(false);
         for tlc in self.offered_tlcs.tlcs.iter_mut() {
             match tlc.outbound_status() {
@@ -2961,7 +2991,7 @@ impl TlcState {
                 }
                 OutboundTlcStatus::RemoveWaitAck => {
                     tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed);
-                    tlc.removed_confirmed_at = Some(commitment_numbers.get_local());
+                    tlc.removed_confirmed_at = Some(now_timestamp_as_millis_u64());
                 }
                 _ => {}
             }
@@ -2977,7 +3007,7 @@ impl TlcState {
                 }
                 InboundTlcStatus::LocalRemoved => {
                     tlc.status = TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed);
-                    tlc.removed_confirmed_at = Some(commitment_numbers.get_remote());
+                    tlc.removed_confirmed_at = Some(now_timestamp_as_millis_u64());
                 }
                 _ => {}
             }
@@ -4697,27 +4727,20 @@ impl ChannelActorState {
     }
 
     pub fn clean_up_failed_tlcs(&mut self) {
-        let mut failed_tlcs: Vec<_> = self
-            .tlc_state
-            .received_tlcs
-            .tlcs
-            .iter()
-            .chain(self.tlc_state.offered_tlcs.tlcs.iter())
-            .filter(|tlc| {
-                matches!(tlc.removed_reason, Some(RemoveTlcReason::RemoveTlcFail(_)))
-                    && matches!(
-                        tlc.status,
-                        TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed)
-                            | TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed)
-                            | TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitAck)
-                    )
-            })
-            .map(|tlc| (tlc.tlc_id, tlc.removed_confirmed_at.unwrap_or(u64::MAX)))
-            .collect();
+        let failed_offered_tlcs = self.tlc_state.offered_tlcs.get_oldest_failed_tlcs();
+        let failed_received_tlcs = self.tlc_state.received_tlcs.get_oldest_failed_tlcs();
 
-        if failed_tlcs.len() >= 3 {
-            failed_tlcs.sort_by(|a, b| a.1.cmp(&b.1));
-            self.tlc_state.apply_remove_tlc(failed_tlcs[0].0);
+        for tlc_id in failed_offered_tlcs
+            .iter()
+            .chain(failed_received_tlcs.iter())
+        {
+            let tlc_info = self.tlc_state.get_mut(tlc_id).unwrap().clone();
+            eprintln!(
+                "node: {:?} remove failed tlcs {:?}",
+                self.get_local_peer_id(),
+                tlc_info
+            );
+            self.tlc_state.apply_remove_tlc(*tlc_id);
         }
     }
 
@@ -6800,7 +6823,19 @@ impl ChannelActorState {
         let mut offered_fullfilled = 0;
         let mut received_pending = 0;
         let mut received_fullfilled = 0;
+        eprintln!(
+            "node: {:?} build_settlement_transaction_outputs: {:?}",
+            self.get_local_peer_id(),
+            for_remote
+        );
         for info in pending_tlcs {
+            if !matches!(
+                info.status,
+                TlcStatus::Outbound(OutboundTlcStatus::Committed)
+                    | TlcStatus::Inbound(InboundTlcStatus::Committed)
+            ) {
+                eprintln!("tlc info: {:?}", info);
+            }
             if info.is_offered() {
                 offered_pending += info.amount;
                 if (info.outbound_status() == OutboundTlcStatus::RemoveWaitAck
@@ -6811,6 +6846,7 @@ impl ChannelActorState {
                         .map(|r| matches!(r, RemoveTlcReason::RemoveTlcFulfill(_)))
                         .unwrap_or_default()
                 {
+                    eprintln!("offered_fullfilled + : {:?}", info.amount);
                     offered_fullfilled += info.amount;
                 }
             } else {
@@ -6822,11 +6858,18 @@ impl ChannelActorState {
                         .map(|r| matches!(r, RemoveTlcReason::RemoveTlcFulfill(_)))
                         .unwrap_or_default()
                 {
+                    eprintln!("received_fullfilled + : {:?}", info.amount);
                     received_fullfilled += info.amount;
                 }
             }
         }
-
+        eprintln!(
+            "self.to_local_amount: {:?}, self.to_remote_amount: {:?}",
+            self.to_local_amount, self.to_remote_amount
+        );
+        eprintln!("received_fullfilled: {:?}, offered_pending: {:?}, offered_fullfilled: {:?}, received_pending: {:?}",
+            received_fullfilled, offered_pending, offered_fullfilled, received_pending
+        );
         let to_local_value = self.to_local_amount + received_fullfilled - offered_pending;
         let to_remote_value = self.to_remote_amount + offered_fullfilled - received_pending;
 
@@ -6870,6 +6913,9 @@ impl ChannelActorState {
                         .pack(),
                 )
                 .build();
+            eprintln!("to_local_value: {:?}, local_reserved_ckb_amount: {:?}, commitment_tx_fee: {:?}, for_remote: {:?}",
+                to_local_value, self.local_reserved_ckb_amount, commitment_tx_fee, for_remote
+            );
             let to_local_output_data = Bytes::default();
 
             let to_remote_output = CellOutput::new_builder()
@@ -6879,7 +6925,10 @@ impl ChannelActorState {
                         .pack(),
                 )
                 .build();
-
+            eprintln!(
+                "to_remote_value: {:?}, remote_reserved_ckb_amount: {:?}, commitment_tx_fee: {:?}, for_remote: {:?}",
+                to_remote_value, self.remote_reserved_ckb_amount, commitment_tx_fee, for_remote
+            );
             let to_remote_output_data = Bytes::default();
             if for_remote {
                 (
@@ -6942,7 +6991,17 @@ impl ChannelActorState {
             .concat(),
         );
         let verify_ctx = self.get_verify_context();
-        verify_ctx.verify(commitment_tx_partial_signature, message.as_slice())?;
+        eprintln!(
+            "for remote: {:?} node: {:?}, verify commitment_tx_partial_signature: {:?}, message: {:?}",
+            false,
+            self.get_local_peer_id(),
+            commitment_tx_partial_signature,
+            message
+        );
+        verify_ctx
+            .verify(commitment_tx_partial_signature, message.as_slice())
+            .unwrap();
+        eprintln!("verify successfully ....");
 
         Ok(PartiallySignedCommitmentTransaction {
             version: self.get_current_commitment_number(false),
@@ -6997,7 +7056,15 @@ impl ChannelActorState {
         );
 
         let sign_ctx = self.get_sign_context(true);
+
         let commitment_tx_partial_signature = sign_ctx.sign(message.as_slice())?;
+        eprintln!(
+            "for_remote: {:?} node: {:?}, sign commitment_tx_partial_signature: {:?}, message: {:?}",
+            true,
+            self.get_local_peer_id(),
+            commitment_tx_partial_signature,
+            message
+        );
 
         Ok((
             funding_tx_partial_signature,
