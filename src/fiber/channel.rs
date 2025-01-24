@@ -4629,20 +4629,20 @@ impl ChannelActorState {
             )));
         }
         let payment_hash = tlc.payment_hash;
-        let tlc_infos: Vec<_> = self
+        let mut tlc_infos = self
             .tlc_state
             .all_tlcs()
             .filter(|tlc| tlc.payment_hash == payment_hash)
-            .map(|info| info.clone())
-            .collect();
-        if !tlc_infos.is_empty() {
-            if tlc_infos.iter().all(|t| t.is_fail_remove_confirmed()) {
+            .peekable();
+
+        if tlc_infos.peek().is_some() {
+            if tlc_infos.all(|t| t.is_fail_remove_confirmed()) {
                 // If all the tlcs with the same payment hash are confirmed to be failed,
                 // then it's safe to insert the new tlc, the old tlcs will be removed later.
             } else {
                 return Err(ProcessingChannelError::RepeatedProcessing(format!(
-                    "Trying to insert tlc with duplicate payment hash {:?} with tlcs {:?}",
-                    payment_hash, tlc_infos
+                    "Trying to insert tlc with duplicate payment hash {:?}",
+                    payment_hash
                 )));
             }
         }
