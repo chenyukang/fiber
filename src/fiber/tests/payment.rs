@@ -2105,7 +2105,7 @@ async fn run_complex_network_with_params(
     .await;
 
     let mut all_sent = HashSet::new();
-    for _k in 0..3 {
+    for _k in 0..40 {
         for i in 0..6 {
             let payment_amount = payment_amount_gen();
             let res = nodes[i]
@@ -2130,11 +2130,11 @@ async fn run_complex_network_with_params(
 
         for (i, payment_hash) in all_sent.clone().into_iter() {
             let status = nodes[i].get_payment_status(payment_hash).await;
+            eprintln!("payment_hash: {:?} got status : {:?}", payment_hash, status);
             if matches!(
                 status,
                 PaymentSessionStatus::Success | PaymentSessionStatus::Failed
             ) {
-                eprintln!("payment_hash: {:?} got status : {:?}", payment_hash, status);
                 result.push((payment_hash, status));
                 all_sent.remove(&(i, payment_hash));
             }
@@ -2142,6 +2142,20 @@ async fn run_complex_network_with_params(
         }
         if all_sent.is_empty() {
             break;
+        }
+    }
+
+    for i in 0..6 {
+        if let Ok(res) = nodes[i]
+            .send_payment_keysend_to_self(500 * 100_000_00, false)
+            .await
+        {
+            let unexpected_events = nodes[i].get_triggered_unexpected_events().await;
+            if !unexpected_events.is_empty() {
+                eprintln!("node_{} got unexpected events: {:?}", i, unexpected_events);
+                unreachable!("unexpected events");
+            }
+            nodes[i].wait_until_success(res.payment_hash).await;
         }
     }
 
@@ -2167,7 +2181,8 @@ async fn test_send_payment_complex_network_payself_amount_exceeded() {
     // the channel amount is not enough, so payments maybe be failed
     let ckb_unit = 100_000_000;
     let res = run_complex_network_with_params(MIN_RESERVED_CKB + 1000 * ckb_unit, || {
-        (450 as u128 + (rand::random::<u64>() % 100) as u128) * ckb_unit
+        //(450 as u128 + (rand::random::<u64>() % 100) as u128) * ckb_unit
+        500 * 100_000_00
     })
     .await;
     let failed_count = res
