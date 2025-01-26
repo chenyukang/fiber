@@ -1012,6 +1012,11 @@ where
                 return Err(ProcessingChannelError::FinalIncorrectPaymentHash);
             }
         } else {
+            eprintln!(
+                "anan state now: {:?}, is_tlc_forwarding_enabled: {:?}",
+                state.is_public(),
+                state.is_tlc_forwarding_enabled()
+            );
             if state.is_public() && state.is_tlc_forwarding_enabled() {
                 if add_tlc.expiry
                     < peeled_onion_packet.current.expiry + state.local_tlc_info.tlc_expiry_delta
