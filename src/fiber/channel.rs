@@ -1363,10 +1363,17 @@ where
             let transaction = state
                 .latest_commitment_transaction
                 .clone()
-                .expect("latest_commitment_transaction should exist when channel is in ChannelReady of ShuttingDown state");
+                .expect("latest_commitment_transaction should exist when channel is in ChannelReady of ShuttingDown state")
+                .into_view();
+
             self.network
                 .send_message(NetworkActorMessage::new_event(
-                    NetworkActorEvent::CommitmentTransactionPending(transaction, state.get_id()),
+                    NetworkActorEvent::ClosingTransactionPending(
+                        state.get_id(),
+                        self.get_remote_peer_id(),
+                        transaction,
+                        true,
+                    ),
                 ))
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
@@ -1375,7 +1382,6 @@ where
             ));
             return Ok(());
         }
-
         let flags = match state.state {
             ChannelState::ChannelReady() => {
                 debug!("Handling shutdown command in ChannelReady state");
@@ -1941,26 +1947,29 @@ where
                 state.update_state(ChannelState::AwaitingChannelReady(flags));
                 state.maybe_channel_is_ready(&self.network).await;
             }
-            ChannelEvent::CommitmentTransactionConfirmed => {
-                match state.state {
-                    ChannelState::ShuttingDown(flags)
-                        if flags.contains(ShuttingDownFlags::WAITING_COMMITMENT_CONFIRMATION) => {}
-                    _ => {
-                        return Err(ProcessingChannelError::InvalidState(format!(
-                            "Expecting commitment transaction confirmed event in state ShuttingDown, but got state {:?}", &state.state)
-                        ));
-                    }
-                };
-                state.update_state(ChannelState::Closed(CloseFlags::UNCOOPERATIVE));
-                debug!("Channel closed with uncooperative close");
-            }
             ChannelEvent::CheckTlcRetryOperation => {
                 self.apply_retryable_tlc_operations(myself, state).await;
             }
             ChannelEvent::PeerDisconnected => {
                 myself.stop(Some("PeerDisconnected".to_string()));
             }
-            ChannelEvent::ClosingTransactionConfirmed => {
+            ChannelEvent::ClosingTransactionConfirmed(force) => {
+                if force {
+                    match state.state {
+                        ChannelState::ShuttingDown(flags)
+                            if flags
+                                .contains(ShuttingDownFlags::WAITING_COMMITMENT_CONFIRMATION) => {}
+                        _ => {
+                            return Err(ProcessingChannelError::InvalidState(format!(
+                            "Expecting commitment transaction confirmed event in state ShuttingDown, but got state {:?}", &state.state)
+                        ));
+                        }
+                    };
+                    state.update_state(ChannelState::Closed(CloseFlags::UNCOOPERATIVE));
+                    debug!("Channel closed with uncooperative close");
+                    return Ok(());
+                }
+
                 // Broadcast the channel update message which disables the channel.
                 if state.is_public() {
                     let update = state.generate_disabled_channel_update(&self.network).await;
@@ -3324,8 +3333,7 @@ pub struct ClosedChannel {}
 pub enum ChannelEvent {
     PeerDisconnected,
     FundingTransactionConfirmed(H256, u32, u64),
-    CommitmentTransactionConfirmed,
-    ClosingTransactionConfirmed,
+    ClosingTransactionConfirmed(bool),
     CheckTlcRetryOperation,
 }
 
@@ -5485,6 +5493,7 @@ impl ChannelActorState {
                             self.get_id(),
                             self.get_remote_peer_id(),
                             tx,
+                            false,
                         ),
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
