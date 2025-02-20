@@ -90,6 +90,10 @@ table Shutdown {
     close_script: Script,
 }
 
+table ShutdownForce {
+    channel_id:   Byte32,
+}
+
 struct ClosingSigned {
     channel_id:         Byte32,
     partial_signature:  Byte32,
@@ -194,6 +198,7 @@ union FiberMessage {
     AddTlc,
     RemoveTlc,
     RevokeAndAck,
+    ShutdownForce,
     Shutdown,
     ClosingSigned,
     ReestablishChannel,

@@ -7128,6 +7128,242 @@ impl molecule::prelude::Builder for ShutdownBuilder {
     }
 }
 #[derive(Clone)]
+pub struct ShutdownForce(molecule::bytes::Bytes);
+impl ::core::fmt::LowerHex for ShutdownForce {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl ::core::fmt::Debug for ShutdownForce {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl ::core::fmt::Display for ShutdownForce {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} {{ ", Self::NAME)?;
+        write!(f, "{}: {}", "channel_id", self.channel_id())?;
+        let extra_count = self.count_extra_fields();
+        if extra_count != 0 {
+            write!(f, ", .. ({} fields)", extra_count)?;
+        }
+        write!(f, " }}")
+    }
+}
+impl ::core::default::Default for ShutdownForce {
+    fn default() -> Self {
+        let v = molecule::bytes::Bytes::from_static(&Self::DEFAULT_VALUE);
+        ShutdownForce::new_unchecked(v)
+    }
+}
+impl ShutdownForce {
+    const DEFAULT_VALUE: [u8; 40] = [
+        40, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+    pub const FIELD_COUNT: usize = 1;
+    pub fn total_size(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn field_count(&self) -> usize {
+        if self.total_size() == molecule::NUMBER_SIZE {
+            0
+        } else {
+            (molecule::unpack_number(&self.as_slice()[molecule::NUMBER_SIZE..]) as usize / 4) - 1
+        }
+    }
+    pub fn count_extra_fields(&self) -> usize {
+        self.field_count() - Self::FIELD_COUNT
+    }
+    pub fn has_extra_fields(&self) -> bool {
+        Self::FIELD_COUNT != self.field_count()
+    }
+    pub fn channel_id(&self) -> Byte32 {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[4..]) as usize;
+        if self.has_extra_fields() {
+            let end = molecule::unpack_number(&slice[8..]) as usize;
+            Byte32::new_unchecked(self.0.slice(start..end))
+        } else {
+            Byte32::new_unchecked(self.0.slice(start..))
+        }
+    }
+    pub fn as_reader<'r>(&'r self) -> ShutdownForceReader<'r> {
+        ShutdownForceReader::new_unchecked(self.as_slice())
+    }
+}
+impl molecule::prelude::Entity for ShutdownForce {
+    type Builder = ShutdownForceBuilder;
+    const NAME: &'static str = "ShutdownForce";
+    fn new_unchecked(data: molecule::bytes::Bytes) -> Self {
+        ShutdownForce(data)
+    }
+    fn as_bytes(&self) -> molecule::bytes::Bytes {
+        self.0.clone()
+    }
+    fn as_slice(&self) -> &[u8] {
+        &self.0[..]
+    }
+    fn from_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        ShutdownForceReader::from_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn from_compatible_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        ShutdownForceReader::from_compatible_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn new_builder() -> Self::Builder {
+        ::core::default::Default::default()
+    }
+    fn as_builder(self) -> Self::Builder {
+        Self::new_builder().channel_id(self.channel_id())
+    }
+}
+#[derive(Clone, Copy)]
+pub struct ShutdownForceReader<'r>(&'r [u8]);
+impl<'r> ::core::fmt::LowerHex for ShutdownForceReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl<'r> ::core::fmt::Debug for ShutdownForceReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl<'r> ::core::fmt::Display for ShutdownForceReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} {{ ", Self::NAME)?;
+        write!(f, "{}: {}", "channel_id", self.channel_id())?;
+        let extra_count = self.count_extra_fields();
+        if extra_count != 0 {
+            write!(f, ", .. ({} fields)", extra_count)?;
+        }
+        write!(f, " }}")
+    }
+}
+impl<'r> ShutdownForceReader<'r> {
+    pub const FIELD_COUNT: usize = 1;
+    pub fn total_size(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn field_count(&self) -> usize {
+        if self.total_size() == molecule::NUMBER_SIZE {
+            0
+        } else {
+            (molecule::unpack_number(&self.as_slice()[molecule::NUMBER_SIZE..]) as usize / 4) - 1
+        }
+    }
+    pub fn count_extra_fields(&self) -> usize {
+        self.field_count() - Self::FIELD_COUNT
+    }
+    pub fn has_extra_fields(&self) -> bool {
+        Self::FIELD_COUNT != self.field_count()
+    }
+    pub fn channel_id(&self) -> Byte32Reader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[4..]) as usize;
+        if self.has_extra_fields() {
+            let end = molecule::unpack_number(&slice[8..]) as usize;
+            Byte32Reader::new_unchecked(&self.as_slice()[start..end])
+        } else {
+            Byte32Reader::new_unchecked(&self.as_slice()[start..])
+        }
+    }
+}
+impl<'r> molecule::prelude::Reader<'r> for ShutdownForceReader<'r> {
+    type Entity = ShutdownForce;
+    const NAME: &'static str = "ShutdownForceReader";
+    fn to_entity(&self) -> Self::Entity {
+        Self::Entity::new_unchecked(self.as_slice().to_owned().into())
+    }
+    fn new_unchecked(slice: &'r [u8]) -> Self {
+        ShutdownForceReader(slice)
+    }
+    fn as_slice(&self) -> &'r [u8] {
+        self.0
+    }
+    fn verify(slice: &[u8], compatible: bool) -> molecule::error::VerificationResult<()> {
+        use molecule::verification_error as ve;
+        let slice_len = slice.len();
+        if slice_len < molecule::NUMBER_SIZE {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE, slice_len);
+        }
+        let total_size = molecule::unpack_number(slice) as usize;
+        if slice_len != total_size {
+            return ve!(Self, TotalSizeNotMatch, total_size, slice_len);
+        }
+        if slice_len < molecule::NUMBER_SIZE * 2 {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE * 2, slice_len);
+        }
+        let offset_first = molecule::unpack_number(&slice[molecule::NUMBER_SIZE..]) as usize;
+        if offset_first % molecule::NUMBER_SIZE != 0 || offset_first < molecule::NUMBER_SIZE * 2 {
+            return ve!(Self, OffsetsNotMatch);
+        }
+        if slice_len < offset_first {
+            return ve!(Self, HeaderIsBroken, offset_first, slice_len);
+        }
+        let field_count = offset_first / molecule::NUMBER_SIZE - 1;
+        if field_count < Self::FIELD_COUNT {
+            return ve!(Self, FieldCountNotMatch, Self::FIELD_COUNT, field_count);
+        } else if !compatible && field_count > Self::FIELD_COUNT {
+            return ve!(Self, FieldCountNotMatch, Self::FIELD_COUNT, field_count);
+        };
+        let mut offsets: Vec<usize> = slice[molecule::NUMBER_SIZE..offset_first]
+            .chunks_exact(molecule::NUMBER_SIZE)
+            .map(|x| molecule::unpack_number(x) as usize)
+            .collect();
+        offsets.push(total_size);
+        if offsets.windows(2).any(|i| i[0] > i[1]) {
+            return ve!(Self, OffsetsNotMatch);
+        }
+        Byte32Reader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct ShutdownForceBuilder {
+    pub(crate) channel_id: Byte32,
+}
+impl ShutdownForceBuilder {
+    pub const FIELD_COUNT: usize = 1;
+    pub fn channel_id(mut self, v: Byte32) -> Self {
+        self.channel_id = v;
+        self
+    }
+}
+impl molecule::prelude::Builder for ShutdownForceBuilder {
+    type Entity = ShutdownForce;
+    const NAME: &'static str = "ShutdownForceBuilder";
+    fn expected_length(&self) -> usize {
+        molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1) + self.channel_id.as_slice().len()
+    }
+    fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
+        let mut total_size = molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1);
+        let mut offsets = Vec::with_capacity(Self::FIELD_COUNT);
+        offsets.push(total_size);
+        total_size += self.channel_id.as_slice().len();
+        writer.write_all(&molecule::pack_number(total_size as molecule::Number))?;
+        for offset in offsets.into_iter() {
+            writer.write_all(&molecule::pack_number(offset as molecule::Number))?;
+        }
+        writer.write_all(self.channel_id.as_slice())?;
+        Ok(())
+    }
+    fn build(&self) -> Self::Entity {
+        let mut inner = Vec::with_capacity(self.expected_length());
+        self.write(&mut inner)
+            .unwrap_or_else(|_| panic!("{} build should be ok", Self::NAME));
+        ShutdownForce::new_unchecked(inner.into())
+    }
+}
+#[derive(Clone)]
 pub struct ClosingSigned(molecule::bytes::Bytes);
 impl ::core::fmt::LowerHex for ClosingSigned {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -11417,7 +11653,7 @@ impl FiberMessage {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    pub const ITEMS_COUNT: usize = 18;
+    pub const ITEMS_COUNT: usize = 19;
     pub fn item_id(&self) -> molecule::Number {
         molecule::unpack_number(self.as_slice())
     }
@@ -11438,10 +11674,11 @@ impl FiberMessage {
             11 => AddTlc::new_unchecked(inner).into(),
             12 => RemoveTlc::new_unchecked(inner).into(),
             13 => RevokeAndAck::new_unchecked(inner).into(),
-            14 => Shutdown::new_unchecked(inner).into(),
-            15 => ClosingSigned::new_unchecked(inner).into(),
-            16 => ReestablishChannel::new_unchecked(inner).into(),
-            17 => AnnouncementSignatures::new_unchecked(inner).into(),
+            14 => ShutdownForce::new_unchecked(inner).into(),
+            15 => Shutdown::new_unchecked(inner).into(),
+            16 => ClosingSigned::new_unchecked(inner).into(),
+            17 => ReestablishChannel::new_unchecked(inner).into(),
+            18 => AnnouncementSignatures::new_unchecked(inner).into(),
             _ => panic!("{}: invalid data", Self::NAME),
         }
     }
@@ -11498,7 +11735,7 @@ impl<'r> ::core::fmt::Display for FiberMessageReader<'r> {
     }
 }
 impl<'r> FiberMessageReader<'r> {
-    pub const ITEMS_COUNT: usize = 18;
+    pub const ITEMS_COUNT: usize = 19;
     pub fn item_id(&self) -> molecule::Number {
         molecule::unpack_number(self.as_slice())
     }
@@ -11519,10 +11756,11 @@ impl<'r> FiberMessageReader<'r> {
             11 => AddTlcReader::new_unchecked(inner).into(),
             12 => RemoveTlcReader::new_unchecked(inner).into(),
             13 => RevokeAndAckReader::new_unchecked(inner).into(),
-            14 => ShutdownReader::new_unchecked(inner).into(),
-            15 => ClosingSignedReader::new_unchecked(inner).into(),
-            16 => ReestablishChannelReader::new_unchecked(inner).into(),
-            17 => AnnouncementSignaturesReader::new_unchecked(inner).into(),
+            14 => ShutdownForceReader::new_unchecked(inner).into(),
+            15 => ShutdownReader::new_unchecked(inner).into(),
+            16 => ClosingSignedReader::new_unchecked(inner).into(),
+            17 => ReestablishChannelReader::new_unchecked(inner).into(),
+            18 => AnnouncementSignaturesReader::new_unchecked(inner).into(),
             _ => panic!("{}: invalid data", Self::NAME),
         }
     }
@@ -11562,10 +11800,11 @@ impl<'r> molecule::prelude::Reader<'r> for FiberMessageReader<'r> {
             11 => AddTlcReader::verify(inner_slice, compatible),
             12 => RemoveTlcReader::verify(inner_slice, compatible),
             13 => RevokeAndAckReader::verify(inner_slice, compatible),
-            14 => ShutdownReader::verify(inner_slice, compatible),
-            15 => ClosingSignedReader::verify(inner_slice, compatible),
-            16 => ReestablishChannelReader::verify(inner_slice, compatible),
-            17 => AnnouncementSignaturesReader::verify(inner_slice, compatible),
+            14 => ShutdownForceReader::verify(inner_slice, compatible),
+            15 => ShutdownReader::verify(inner_slice, compatible),
+            16 => ClosingSignedReader::verify(inner_slice, compatible),
+            17 => ReestablishChannelReader::verify(inner_slice, compatible),
+            18 => AnnouncementSignaturesReader::verify(inner_slice, compatible),
             _ => ve!(Self, UnknownItem, Self::ITEMS_COUNT, item_id),
         }?;
         Ok(())
@@ -11574,7 +11813,7 @@ impl<'r> molecule::prelude::Reader<'r> for FiberMessageReader<'r> {
 #[derive(Clone, Debug, Default)]
 pub struct FiberMessageBuilder(pub(crate) FiberMessageUnion);
 impl FiberMessageBuilder {
-    pub const ITEMS_COUNT: usize = 18;
+    pub const ITEMS_COUNT: usize = 19;
     pub fn set<I>(mut self, v: I) -> Self
     where
         I: ::core::convert::Into<FiberMessageUnion>,
@@ -11616,6 +11855,7 @@ pub enum FiberMessageUnion {
     AddTlc(AddTlc),
     RemoveTlc(RemoveTlc),
     RevokeAndAck(RevokeAndAck),
+    ShutdownForce(ShutdownForce),
     Shutdown(Shutdown),
     ClosingSigned(ClosingSigned),
     ReestablishChannel(ReestablishChannel),
@@ -11637,6 +11877,7 @@ pub enum FiberMessageUnionReader<'r> {
     AddTlc(AddTlcReader<'r>),
     RemoveTlc(RemoveTlcReader<'r>),
     RevokeAndAck(RevokeAndAckReader<'r>),
+    ShutdownForce(ShutdownForceReader<'r>),
     Shutdown(ShutdownReader<'r>),
     ClosingSigned(ClosingSignedReader<'r>),
     ReestablishChannel(ReestablishChannelReader<'r>),
@@ -11691,6 +11932,9 @@ impl ::core::fmt::Display for FiberMessageUnion {
             }
             FiberMessageUnion::RevokeAndAck(ref item) => {
                 write!(f, "{}::{}({})", Self::NAME, RevokeAndAck::NAME, item)
+            }
+            FiberMessageUnion::ShutdownForce(ref item) => {
+                write!(f, "{}::{}({})", Self::NAME, ShutdownForce::NAME, item)
             }
             FiberMessageUnion::Shutdown(ref item) => {
                 write!(f, "{}::{}({})", Self::NAME, Shutdown::NAME, item)
@@ -11758,6 +12002,9 @@ impl<'r> ::core::fmt::Display for FiberMessageUnionReader<'r> {
             FiberMessageUnionReader::RevokeAndAck(ref item) => {
                 write!(f, "{}::{}({})", Self::NAME, RevokeAndAck::NAME, item)
             }
+            FiberMessageUnionReader::ShutdownForce(ref item) => {
+                write!(f, "{}::{}({})", Self::NAME, ShutdownForce::NAME, item)
+            }
             FiberMessageUnionReader::Shutdown(ref item) => {
                 write!(f, "{}::{}({})", Self::NAME, Shutdown::NAME, item)
             }
@@ -11796,6 +12043,7 @@ impl FiberMessageUnion {
             FiberMessageUnion::AddTlc(ref item) => write!(f, "{}", item),
             FiberMessageUnion::RemoveTlc(ref item) => write!(f, "{}", item),
             FiberMessageUnion::RevokeAndAck(ref item) => write!(f, "{}", item),
+            FiberMessageUnion::ShutdownForce(ref item) => write!(f, "{}", item),
             FiberMessageUnion::Shutdown(ref item) => write!(f, "{}", item),
             FiberMessageUnion::ClosingSigned(ref item) => write!(f, "{}", item),
             FiberMessageUnion::ReestablishChannel(ref item) => write!(f, "{}", item),
@@ -11820,6 +12068,7 @@ impl<'r> FiberMessageUnionReader<'r> {
             FiberMessageUnionReader::AddTlc(ref item) => write!(f, "{}", item),
             FiberMessageUnionReader::RemoveTlc(ref item) => write!(f, "{}", item),
             FiberMessageUnionReader::RevokeAndAck(ref item) => write!(f, "{}", item),
+            FiberMessageUnionReader::ShutdownForce(ref item) => write!(f, "{}", item),
             FiberMessageUnionReader::Shutdown(ref item) => write!(f, "{}", item),
             FiberMessageUnionReader::ClosingSigned(ref item) => write!(f, "{}", item),
             FiberMessageUnionReader::ReestablishChannel(ref item) => write!(f, "{}", item),
@@ -11895,6 +12144,11 @@ impl ::core::convert::From<RemoveTlc> for FiberMessageUnion {
 impl ::core::convert::From<RevokeAndAck> for FiberMessageUnion {
     fn from(item: RevokeAndAck) -> Self {
         FiberMessageUnion::RevokeAndAck(item)
+    }
+}
+impl ::core::convert::From<ShutdownForce> for FiberMessageUnion {
+    fn from(item: ShutdownForce) -> Self {
+        FiberMessageUnion::ShutdownForce(item)
     }
 }
 impl ::core::convert::From<Shutdown> for FiberMessageUnion {
@@ -11987,6 +12241,11 @@ impl<'r> ::core::convert::From<RevokeAndAckReader<'r>> for FiberMessageUnionRead
         FiberMessageUnionReader::RevokeAndAck(item)
     }
 }
+impl<'r> ::core::convert::From<ShutdownForceReader<'r>> for FiberMessageUnionReader<'r> {
+    fn from(item: ShutdownForceReader<'r>) -> Self {
+        FiberMessageUnionReader::ShutdownForce(item)
+    }
+}
 impl<'r> ::core::convert::From<ShutdownReader<'r>> for FiberMessageUnionReader<'r> {
     fn from(item: ShutdownReader<'r>) -> Self {
         FiberMessageUnionReader::Shutdown(item)
@@ -12025,6 +12284,7 @@ impl FiberMessageUnion {
             FiberMessageUnion::AddTlc(item) => item.as_bytes(),
             FiberMessageUnion::RemoveTlc(item) => item.as_bytes(),
             FiberMessageUnion::RevokeAndAck(item) => item.as_bytes(),
+            FiberMessageUnion::ShutdownForce(item) => item.as_bytes(),
             FiberMessageUnion::Shutdown(item) => item.as_bytes(),
             FiberMessageUnion::ClosingSigned(item) => item.as_bytes(),
             FiberMessageUnion::ReestablishChannel(item) => item.as_bytes(),
@@ -12047,6 +12307,7 @@ impl FiberMessageUnion {
             FiberMessageUnion::AddTlc(item) => item.as_slice(),
             FiberMessageUnion::RemoveTlc(item) => item.as_slice(),
             FiberMessageUnion::RevokeAndAck(item) => item.as_slice(),
+            FiberMessageUnion::ShutdownForce(item) => item.as_slice(),
             FiberMessageUnion::Shutdown(item) => item.as_slice(),
             FiberMessageUnion::ClosingSigned(item) => item.as_slice(),
             FiberMessageUnion::ReestablishChannel(item) => item.as_slice(),
@@ -12069,10 +12330,11 @@ impl FiberMessageUnion {
             FiberMessageUnion::AddTlc(_) => 11,
             FiberMessageUnion::RemoveTlc(_) => 12,
             FiberMessageUnion::RevokeAndAck(_) => 13,
-            FiberMessageUnion::Shutdown(_) => 14,
-            FiberMessageUnion::ClosingSigned(_) => 15,
-            FiberMessageUnion::ReestablishChannel(_) => 16,
-            FiberMessageUnion::AnnouncementSignatures(_) => 17,
+            FiberMessageUnion::ShutdownForce(_) => 14,
+            FiberMessageUnion::Shutdown(_) => 15,
+            FiberMessageUnion::ClosingSigned(_) => 16,
+            FiberMessageUnion::ReestablishChannel(_) => 17,
+            FiberMessageUnion::AnnouncementSignatures(_) => 18,
         }
     }
     pub fn item_name(&self) -> &str {
@@ -12091,6 +12353,7 @@ impl FiberMessageUnion {
             FiberMessageUnion::AddTlc(_) => "AddTlc",
             FiberMessageUnion::RemoveTlc(_) => "RemoveTlc",
             FiberMessageUnion::RevokeAndAck(_) => "RevokeAndAck",
+            FiberMessageUnion::ShutdownForce(_) => "ShutdownForce",
             FiberMessageUnion::Shutdown(_) => "Shutdown",
             FiberMessageUnion::ClosingSigned(_) => "ClosingSigned",
             FiberMessageUnion::ReestablishChannel(_) => "ReestablishChannel",
@@ -12113,6 +12376,7 @@ impl FiberMessageUnion {
             FiberMessageUnion::AddTlc(item) => item.as_reader().into(),
             FiberMessageUnion::RemoveTlc(item) => item.as_reader().into(),
             FiberMessageUnion::RevokeAndAck(item) => item.as_reader().into(),
+            FiberMessageUnion::ShutdownForce(item) => item.as_reader().into(),
             FiberMessageUnion::Shutdown(item) => item.as_reader().into(),
             FiberMessageUnion::ClosingSigned(item) => item.as_reader().into(),
             FiberMessageUnion::ReestablishChannel(item) => item.as_reader().into(),
@@ -12138,6 +12402,7 @@ impl<'r> FiberMessageUnionReader<'r> {
             FiberMessageUnionReader::AddTlc(item) => item.as_slice(),
             FiberMessageUnionReader::RemoveTlc(item) => item.as_slice(),
             FiberMessageUnionReader::RevokeAndAck(item) => item.as_slice(),
+            FiberMessageUnionReader::ShutdownForce(item) => item.as_slice(),
             FiberMessageUnionReader::Shutdown(item) => item.as_slice(),
             FiberMessageUnionReader::ClosingSigned(item) => item.as_slice(),
             FiberMessageUnionReader::ReestablishChannel(item) => item.as_slice(),
@@ -12160,10 +12425,11 @@ impl<'r> FiberMessageUnionReader<'r> {
             FiberMessageUnionReader::AddTlc(_) => 11,
             FiberMessageUnionReader::RemoveTlc(_) => 12,
             FiberMessageUnionReader::RevokeAndAck(_) => 13,
-            FiberMessageUnionReader::Shutdown(_) => 14,
-            FiberMessageUnionReader::ClosingSigned(_) => 15,
-            FiberMessageUnionReader::ReestablishChannel(_) => 16,
-            FiberMessageUnionReader::AnnouncementSignatures(_) => 17,
+            FiberMessageUnionReader::ShutdownForce(_) => 14,
+            FiberMessageUnionReader::Shutdown(_) => 15,
+            FiberMessageUnionReader::ClosingSigned(_) => 16,
+            FiberMessageUnionReader::ReestablishChannel(_) => 17,
+            FiberMessageUnionReader::AnnouncementSignatures(_) => 18,
         }
     }
     pub fn item_name(&self) -> &str {
@@ -12182,6 +12448,7 @@ impl<'r> FiberMessageUnionReader<'r> {
             FiberMessageUnionReader::AddTlc(_) => "AddTlc",
             FiberMessageUnionReader::RemoveTlc(_) => "RemoveTlc",
             FiberMessageUnionReader::RevokeAndAck(_) => "RevokeAndAck",
+            FiberMessageUnionReader::ShutdownForce(_) => "ShutdownForce",
             FiberMessageUnionReader::Shutdown(_) => "Shutdown",
             FiberMessageUnionReader::ClosingSigned(_) => "ClosingSigned",
             FiberMessageUnionReader::ReestablishChannel(_) => "ReestablishChannel",
@@ -12256,6 +12523,11 @@ impl From<RemoveTlc> for FiberMessage {
 }
 impl From<RevokeAndAck> for FiberMessage {
     fn from(value: RevokeAndAck) -> Self {
+        Self::new_builder().set(value).build()
+    }
+}
+impl From<ShutdownForce> for FiberMessage {
+    fn from(value: ShutdownForce) -> Self {
         Self::new_builder().set(value).build()
     }
 }

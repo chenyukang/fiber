@@ -953,6 +953,29 @@ impl TryFrom<molecule_fiber::TxAckRBF> for TxAckRBF {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShutdownForce {
+    pub channel_id: Hash256,
+}
+
+impl From<ShutdownForce> for molecule_fiber::ShutdownForce {
+    fn from(tx_ack_rbf: ShutdownForce) -> Self {
+        molecule_fiber::ShutdownForce::new_builder()
+            .channel_id(tx_ack_rbf.channel_id.into())
+            .build()
+    }
+}
+
+impl TryFrom<molecule_fiber::ShutdownForce> for ShutdownForce {
+    type Error = Error;
+
+    fn try_from(tx_ack_rbf: molecule_fiber::ShutdownForce) -> Result<Self, Self::Error> {
+        Ok(ShutdownForce {
+            channel_id: tx_ack_rbf.channel_id().into(),
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Shutdown {
     pub channel_id: Hash256,
@@ -2363,6 +2386,12 @@ impl FiberMessage {
             announcement_signatures,
         ))
     }
+
+    pub fn shutdown_force(channel_id: Hash256) -> Self {
+        FiberMessage::ChannelNormalOperation(FiberChannelMessage::ShutdownForce(ShutdownForce {
+            channel_id,
+        }))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -2377,6 +2406,7 @@ pub enum FiberChannelMessage {
     TxInitRBF(TxInitRBF),
     TxAckRBF(TxAckRBF),
     Shutdown(Shutdown),
+    ShutdownForce(ShutdownForce),
     ClosingSigned(ClosingSigned),
     UpdateTlcInfo(UpdateTlcInfo),
     AddTlc(AddTlc),
@@ -2399,6 +2429,7 @@ impl Display for FiberChannelMessage {
             FiberChannelMessage::TxInitRBF(_) => write!(f, "TxInitRBF"),
             FiberChannelMessage::TxAckRBF(_) => write!(f, "TxAckRBF"),
             FiberChannelMessage::Shutdown(_) => write!(f, "Shutdown"),
+            FiberChannelMessage::ShutdownForce(_) => write!(f, "ShutdownForce"),
             FiberChannelMessage::ClosingSigned(_) => write!(f, "ClosingSigned"),
             FiberChannelMessage::UpdateTlcInfo(_) => write!(f, "UpdateTlcInfo"),
             FiberChannelMessage::AddTlc(_) => write!(f, "AddTlc"),
@@ -2425,6 +2456,7 @@ impl FiberChannelMessage {
             FiberChannelMessage::TxInitRBF(tx_init_rbf) => tx_init_rbf.channel_id,
             FiberChannelMessage::TxAckRBF(tx_ack_rbf) => tx_ack_rbf.channel_id,
             FiberChannelMessage::Shutdown(shutdown) => shutdown.channel_id,
+            FiberChannelMessage::ShutdownForce(shutdown) => shutdown.channel_id,
             FiberChannelMessage::ClosingSigned(closing_signed) => closing_signed.channel_id,
             FiberChannelMessage::UpdateTlcInfo(update_tlc_info) => update_tlc_info.channel_id,
             FiberChannelMessage::AddTlc(add_tlc) => add_tlc.channel_id,
@@ -3420,6 +3452,9 @@ impl From<FiberMessage> for molecule_fiber::FiberMessageUnion {
                 FiberChannelMessage::TxAckRBF(tx_ack_rbf) => {
                     molecule_fiber::FiberMessageUnion::TxAckRBF(tx_ack_rbf.into())
                 }
+                FiberChannelMessage::ShutdownForce(shutdown_force) => {
+                    molecule_fiber::FiberMessageUnion::ShutdownForce(shutdown_force.into())
+                }
                 FiberChannelMessage::Shutdown(shutdown) => {
                     molecule_fiber::FiberMessageUnion::Shutdown(shutdown.into())
                 }
@@ -3504,6 +3539,11 @@ impl TryFrom<molecule_fiber::FiberMessageUnion> for FiberMessage {
             molecule_fiber::FiberMessageUnion::TxAckRBF(tx_ack_rbf) => {
                 FiberMessage::ChannelNormalOperation(FiberChannelMessage::TxAckRBF(
                     tx_ack_rbf.try_into()?,
+                ))
+            }
+            molecule_fiber::FiberMessageUnion::ShutdownForce(shutdown_force) => {
+                FiberMessage::ChannelNormalOperation(FiberChannelMessage::ShutdownForce(
+                    shutdown_force.try_into()?,
                 ))
             }
             molecule_fiber::FiberMessageUnion::Shutdown(shutdown) => {

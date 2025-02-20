@@ -518,6 +518,17 @@ where
             FiberChannelMessage::RemoveTlc(remove_tlc) => {
                 self.handle_remove_tlc_peer_message(state, remove_tlc)
             }
+            FiberChannelMessage::ShutdownForce(_) => {
+                // peer already submitted a force shutdown, we should set proper state
+                // to avoid meaningless operations.
+                state.update_state(ChannelState::ShuttingDown(
+                    ShuttingDownFlags::PEER_SENT_FORCE_SHUTDOWN,
+                ));
+                if state.tlc_state.waiting_ack {
+                    state.tlc_state.set_waiting_ack(false);
+                }
+                Ok(())
+            }
             FiberChannelMessage::Shutdown(shutdown) => {
                 self.handle_shutdown_peer_message(state, shutdown)
             }
@@ -1258,13 +1269,6 @@ where
         state: &mut ChannelActorState,
         command: AddTlcCommand,
     ) -> Result<u64, ProcessingChannelError> {
-        if !state.local_tlc_info.enabled {
-            return Err(ProcessingChannelError::InvalidState(format!(
-                "TLC forwarding is not enabled for channel {}",
-                state.get_id()
-            )));
-        }
-
         state.check_for_tlc_update(Some(command.amount), true, true)?;
         state.check_tlc_expiry(command.expiry)?;
         state.check_tlc_forward_amount(
@@ -1373,6 +1377,15 @@ where
                 ))
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
+            self.network
+                .send_message(NetworkActorMessage::new_command(
+                    NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
+                        state.get_remote_peer_id(),
+                        FiberMessage::shutdown_force(state.get_id()),
+                    )),
+                ))
+                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+
             state.update_state(ChannelState::ShuttingDown(
                 ShuttingDownFlags::WAITING_COMMITMENT_CONFIRMATION,
             ));
@@ -1406,21 +1419,19 @@ where
                 ))
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
-            let shutdown_info = ShutdownInfo {
+            state.local_shutdown_info = Some(ShutdownInfo {
                 close_script: command.close_script,
                 fee_rate: command.fee_rate.as_u64(),
                 signature: None,
-            };
-            state.local_shutdown_info = Some(shutdown_info);
+            });
             state.update_state(ChannelState::ShuttingDown(
                 flags | ShuttingDownFlags::OUR_SHUTDOWN_SENT,
             ));
+
             debug!(
                 "Channel state updated to {:?} after processing shutdown command",
                 &state.state
             );
-            eprintln!("now here ....");
-
             state.maybe_transition_to_shutdown(&self.network)
         }
     }
@@ -1684,7 +1695,6 @@ where
                             error,
                         )
                         .await;
-                        eprintln!("forward tlc error, remove tlc_Op: {:?}", tlc_op);
                         state.tlc_state.remove_pending_tlc_operation(tlc_op);
                     }
                 }
@@ -2347,15 +2357,12 @@ where
                 }
             }
             ChannelActorMessage::Command(command) => {
-                //error!("exe command {}", command);
                 if let Err(err) = self.handle_command(&myself, state, command).await {
-                    if !matches!(err, ProcessingChannelError::WaitingTlcAck) {
-                        error!(
-                            "{:?} Error while processing channel command: {:?}",
-                            state.get_local_peer_id(),
-                            err,
-                        );
-                    }
+                    error!(
+                        "{:?} Error while processing channel command: {:?}",
+                        state.get_local_peer_id(),
+                        err,
+                    );
                 }
             }
             ChannelActorMessage::Event(e) => {
@@ -3457,6 +3464,8 @@ bitflags! {
         const DROPPING_PENDING = 1 << 2;
         /// Indicates we have submitted a commitment transaction, waiting for confirmation
         const WAITING_COMMITMENT_CONFIRMATION = 1 << 3;
+        /// Indicates that the peer has already sent a force shutdown
+        const PEER_SENT_FORCE_SHUTDOWN = 1 << 4;
     }
 
     #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -5174,6 +5183,12 @@ impl ChannelActorState {
         }
 
         if let Some(add_amount) = add_tlc_amount {
+            if is_tlc_command_message && !self.local_tlc_info.enabled {
+                return Err(ProcessingChannelError::InvalidState(format!(
+                    "TLC forwarding is not enabled for channel {}",
+                    self.get_id()
+                )));
+            }
             self.check_tlc_limits(add_amount, is_sent)?;
         }
 
