@@ -1624,6 +1624,11 @@ where
                                 // here we just make sure the forward tlc is sent, we don't need to wait for the result
                                 // retry it if necessary until we get ForwardTlcResult
                                 // self.set_forward_tlc_status(state, *payment_hash, false);
+                                eprintln!(
+                                    "peer {} forwarding tlc success: {:?}",
+                                    state.get_local_peer_id(),
+                                    payment_hash
+                                );
                                 *try_one_time = false;
                                 true
                             }
@@ -1671,6 +1676,12 @@ where
                         state.tlc_state.remove_pending_tlc_operation(tlc_op);
                     }
                     _ => {
+                        eprintln!(
+                            "peer: {:?} got forward tlc result: {:?} error_code: {:?}",
+                            state.get_local_peer_id(),
+                            result.payment_hash,
+                            tlc_err.error_code
+                        );
                         let error = ProcessingChannelError::TlcForwardingError(tlc_err)
                             .with_shared_secret(peeled_onion.shared_secret);
                         self.process_add_tlc_error(
@@ -1808,6 +1819,11 @@ where
             ChannelCommand::AddTlc(command, reply) => {
                 let res = self.handle_add_tlc_command(state, command.clone());
                 let error_info = if let Err(ref err) = res {
+                    eprintln!(
+                        "peer {:?} add tlc command failed: {:?}",
+                        state.get_local_peer_id(),
+                        command.payment_hash
+                    );
                     Some((err.clone(), self.get_tlc_error(state, err).await))
                 } else {
                     None
@@ -2344,12 +2360,22 @@ where
             }
             ChannelActorMessage::Command(command) => {
                 if let Err(err) = self.handle_command(&myself, state, command).await {
-                    error!(
-                        "{:?} Error while processing channel command: {:?}",
-                        state.get_local_peer_id(),
-                        err,
-                    );
+                    if !matches!(err, ProcessingChannelError::WaitingTlcAck) {
+                        error!(
+                            "{:?} Error while processing channel command: {:?}, state: {:?}",
+                            state.get_local_peer_id(),
+                            err,
+                            state.state
+                        );
+                    }
                 }
+                //if let Err(err) = self.handle_command(&myself, state, command).await {
+                // error!(
+                //     "{:?} Error while processing channel command: {:?}",
+                //     state.get_local_peer_id(),
+                //     err,
+                // );
+                //}
             }
             ChannelActorMessage::Event(e) => {
                 if let Err(err) = self.handle_event(&myself, state, e).await {
@@ -2777,10 +2803,10 @@ impl TlcState {
     #[cfg(debug_assertions)]
     pub fn debug(&self) {
         for tlc in self.offered_tlcs.tlcs.iter() {
-            debug!("offered_tlc: {:?}", tlc.log());
+            eprintln!("offered_tlc: {:?}\n", tlc.log());
         }
         for tlc in self.received_tlcs.tlcs.iter() {
-            debug!("received_tlc: {:?}", tlc.log());
+            eprintln!("received_tlc: {:?}\n", tlc.log());
         }
     }
 
@@ -5695,7 +5721,9 @@ impl ChannelActorState {
             }
             ChannelState::ChannelReady() => CommitmentSignedFlags::ChannelReady(),
             ChannelState::ShuttingDown(flags) => {
-                if flags.contains(ShuttingDownFlags::AWAITING_PENDING_TLCS) {
+                if flags.contains(ShuttingDownFlags::AWAITING_PENDING_TLCS)
+                    || flags.contains(ShuttingDownFlags::OUR_SHUTDOWN_SENT)
+                {
                     debug!(
                         "Signing commitment transactions while shutdown is pending, current state {:?}",
                         &self.state

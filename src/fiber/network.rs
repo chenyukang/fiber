@@ -1105,16 +1105,16 @@ where
                     if channel_actor_state.should_disconnect_peer_awaiting_response()
                         && !channel_actor_state.is_closed()
                     {
-                        debug!(
-                            "Channel {} from peer {:?} is inactive for a time, closing it",
+                        eprintln!(
+                            "Debug channel {} from peer {:?} is inactive for a time, closing it",
                             channel_id,
                             channel_actor_state.get_remote_peer_id()
                         );
-                        myself.send_message(NetworkActorMessage::new_command(
-                            NetworkActorCommand::DisconnectPeer(
-                                channel_actor_state.get_remote_peer_id(),
-                            ),
-                        ))?;
+                        // myself.send_message(NetworkActorMessage::new_command(
+                        //     NetworkActorCommand::DisconnectPeer(
+                        //         channel_actor_state.get_remote_peer_id(),
+                        //     ),
+                        // ))?;
                     }
                 }
             }
@@ -1435,6 +1435,10 @@ where
         let (send, _recv) = oneshot::channel::<Result<AddTlcResponse, TlcErr>>();
         // explicitly don't wait for the response, we will handle the result in AddTlcResult
         let rpc_reply = RpcReplyPort::from(send);
+        eprintln!(
+            "now begin to send onion packet to channel: {:?}",
+            payment_hash
+        );
         let command = ChannelCommand::AddTlc(
             AddTlcCommand {
                 amount: info.amount,
@@ -1662,6 +1666,7 @@ where
             .await
         {
             Err(error_detail) => {
+                eprintln!("got error_detail: {:?}", error_detail);
                 self.update_graph_with_tlc_fail(&state.network, &error_detail)
                     .await;
                 let need_to_retry = self
@@ -1681,6 +1686,11 @@ where
                 return Err(Error::SendPaymentFirstHopError(err, need_to_retry));
             }
             Ok(_) => {
+                eprintln!(
+                    "now insert payment_session: {:?} with times: {:?}",
+                    payment_session.payment_hash(),
+                    payment_session.retried_times
+                );
                 self.store.insert_payment_session(payment_session.clone());
                 return Ok(payment_session.clone());
             }
@@ -1733,16 +1743,20 @@ where
             return;
         }
 
-        let need_to_retry = if matches!(channel_error, ProcessingChannelError::WaitingTlcAck) {
-            payment_session.last_error = Some("WaitingTlcAck".to_string());
-            self.store.insert_payment_session(payment_session.clone());
-            true
-        } else {
-            self.network_graph
-                .write()
-                .await
-                .record_payment_fail(&payment_session, tlc_err.clone())
-        };
+        let (need_to_retry, error) =
+            if matches!(channel_error, ProcessingChannelError::WaitingTlcAck) {
+                (true, "WaitingTlcAck".to_string())
+            } else {
+                let retry = self
+                    .network_graph
+                    .write()
+                    .await
+                    .record_payment_fail(&payment_session, tlc_err.clone());
+                (retry, channel_error.to_string())
+            };
+        payment_session.last_error = Some(error);
+        self.store.insert_payment_session(payment_session.clone());
+
         if need_to_retry {
             let _ = self.try_payment_session(myself, state, payment_hash).await;
         } else {
@@ -1781,6 +1795,7 @@ where
 
         let payment_data = payment_session.request.clone();
         if payment_session.can_retry() {
+            eprintln!("payment_session: {:?}", payment_session.last_error);
             if payment_session.last_error != Some("WaitingTlcAck".to_string()) {
                 payment_session.retried_times += 1;
             }
@@ -1789,6 +1804,10 @@ where
                 .build_payment_route(&mut payment_session, &payment_data)
                 .await?;
 
+            eprintln!(
+                "peer {:?} retry payment session: {:?} times: {:?}",
+                state.peer_id, payment_hash, payment_session.retried_times
+            );
             match self
                 .send_payment_onion_packet(state, &mut payment_session, &payment_data, hops_info)
                 .await
