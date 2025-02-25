@@ -1110,11 +1110,11 @@ where
                             channel_id,
                             channel_actor_state.get_remote_peer_id()
                         );
-                        // myself.send_message(NetworkActorMessage::new_command(
-                        //     NetworkActorCommand::DisconnectPeer(
-                        //         channel_actor_state.get_remote_peer_id(),
-                        //     ),
-                        // ))?;
+                        myself.send_message(NetworkActorMessage::new_command(
+                            NetworkActorCommand::DisconnectPeer(
+                                channel_actor_state.get_remote_peer_id(),
+                            ),
+                        ))?;
                     }
                 }
             }
