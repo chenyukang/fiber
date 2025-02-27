@@ -1110,11 +1110,11 @@ where
                             channel_id,
                             channel_actor_state.get_remote_peer_id()
                         );
-                        myself.send_message(NetworkActorMessage::new_command(
-                            NetworkActorCommand::DisconnectPeer(
-                                channel_actor_state.get_remote_peer_id(),
-                            ),
-                        ))?;
+                        // myself.send_message(NetworkActorMessage::new_command(
+                        //     NetworkActorCommand::DisconnectPeer(
+                        //         channel_actor_state.get_remote_peer_id(),
+                        //     ),
+                        // ))?;
                     }
                 }
             }
@@ -2534,18 +2534,18 @@ where
             return Ok(actor.clone());
         }
 
-        if let Some(channel_actor_state) = self.store.get_channel_actor_state(&channel_id) {
-            // this function is also called from `send_message_to_channel_actor`,
-            // which may happened when peer received a message from a channel that is not in the channel map.
-            // we should not restart the channel actor in a closed state.
-            if channel_actor_state.is_closed() {
-                return Err(Error::ChannelError(ProcessingChannelError::InvalidState(
-                    format!("Channel {:x} is already closed", &channel_id),
-                )));
-            }
-        } else {
-            return Err(Error::ChannelNotFound(channel_id));
-        }
+        // if let Some(channel_actor_state) = self.store.get_channel_actor_state(&channel_id) {
+        //     // this function is also called from `send_message_to_channel_actor`,
+        //     // which may happened when peer received a message from a channel that is not in the channel map.
+        //     // we should not restart the channel actor in a closed state.
+        //     if channel_actor_state.is_closed() {
+        //         return Err(Error::ChannelError(ProcessingChannelError::InvalidState(
+        //             format!("Channel {:x} is already closed", &channel_id),
+        //         )));
+        //     }
+        // } else {
+        //     return Err(Error::ChannelNotFound(channel_id));
+        // }
 
         let remote_pubkey =
             self.get_peer_pubkey(peer_id)

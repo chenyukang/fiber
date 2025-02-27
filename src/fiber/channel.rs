@@ -1061,7 +1061,7 @@ where
 
     async fn handle_shutdown_peer_message(
         &self,
-        myself: &ActorRef<ChannelActorMessage>,
+        _myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
         shutdown: Shutdown,
     ) -> Result<(), ProcessingChannelError> {
@@ -1122,20 +1122,20 @@ where
 
         state.update_state(ChannelState::ShuttingDown(flags));
 
-        let pending_ack_tlcs = state.get_ack_pending_tlcs();
-        // if there are still some TLCs are waiting for ACK, they will never be acked
-        // so we need to remove them from the channel and setting WaitingTlcAck to false
-        if !pending_ack_tlcs.is_empty() {
-            state.set_waiting_ack(&self.network, false);
-            for tlc in pending_ack_tlcs.iter() {
-                let reason = RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
-                    TlcErr::new(TlcErrorCode::TemporaryChannelFailure),
-                    &tlc.shared_secret,
-                ));
-                self.register_retryable_tlc_remove(myself, state, tlc.tlc_id, reason)
-                    .await;
-            }
-        }
+        // let pending_ack_tlcs = state.get_ack_pending_tlcs();
+        // // if there are still some TLCs are waiting for ACK, they will never be acked
+        // // so we need to remove them from the channel and setting WaitingTlcAck to false
+        // if !pending_ack_tlcs.is_empty() {
+        //     state.set_waiting_ack(&self.network, false);
+        //     for tlc in pending_ack_tlcs.iter() {
+        //         let reason = RemoveTlcReason::RemoveTlcFail(TlcErrPacket::new(
+        //             TlcErr::new(TlcErrorCode::TemporaryChannelFailure),
+        //             &tlc.shared_secret,
+        //         ));
+        //         self.register_retryable_tlc_remove(myself, state, tlc.tlc_id, reason)
+        //             .await;
+        //     }
+        // }
         state.maybe_transition_to_shutdown(&self.network)?;
 
         Ok(())
@@ -1404,50 +1404,49 @@ where
                 ShuttingDownFlags::WAITING_COMMITMENT_CONFIRMATION,
             ));
             return Ok(());
-        } else {
-            let flags = match state.state {
-                ChannelState::ChannelReady() => {
-                    debug!("Handling shutdown command in ChannelReady state");
-                    ShuttingDownFlags::empty()
-                }
-                _ => {
-                    debug!("Handling shutdown command in state {:?}", &state.state);
-                    return Err(ProcessingChannelError::InvalidState(format!(
-                        "Trying to send shutdown message while in invalid state {:?}",
-                        &state.state
-                    )));
-                }
-            };
-
-            state.check_shutdown_fee_rate(command.fee_rate, &command.close_script)?;
-            self.network
-                .send_message(NetworkActorMessage::new_command(
-                    NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
-                        self.get_remote_peer_id(),
-                        FiberMessage::shutdown(Shutdown {
-                            channel_id: state.get_id(),
-                            close_script: command.close_script.clone(),
-                            fee_rate: command.fee_rate,
-                        }),
-                    )),
-                ))
-                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-
-            state.local_shutdown_info = Some(ShutdownInfo {
-                close_script: command.close_script,
-                fee_rate: command.fee_rate.as_u64(),
-                signature: None,
-            });
-            state.update_state(ChannelState::ShuttingDown(
-                flags | ShuttingDownFlags::OUR_SHUTDOWN_SENT,
-            ));
-
-            debug!(
-                "Channel state updated to {:?} after processing shutdown command",
-                &state.state
-            );
-            state.maybe_transition_to_shutdown(&self.network)
         }
+        let flags = match state.state {
+            ChannelState::ChannelReady() => {
+                debug!("Handling shutdown command in ChannelReady state");
+                ShuttingDownFlags::empty()
+            }
+            _ => {
+                debug!("Handling shutdown command in state {:?}", &state.state);
+                return Err(ProcessingChannelError::InvalidState(format!(
+                    "Trying to send shutdown message while in invalid state {:?}",
+                    &state.state
+                )));
+            }
+        };
+
+        state.check_shutdown_fee_rate(command.fee_rate, &command.close_script)?;
+        self.network
+            .send_message(NetworkActorMessage::new_command(
+                NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
+                    self.get_remote_peer_id(),
+                    FiberMessage::shutdown(Shutdown {
+                        channel_id: state.get_id(),
+                        close_script: command.close_script.clone(),
+                        fee_rate: command.fee_rate,
+                    }),
+                )),
+            ))
+            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+
+        state.local_shutdown_info = Some(ShutdownInfo {
+            close_script: command.close_script,
+            fee_rate: command.fee_rate.as_u64(),
+            signature: None,
+        });
+        state.update_state(ChannelState::ShuttingDown(
+            flags | ShuttingDownFlags::OUR_SHUTDOWN_SENT,
+        ));
+
+        debug!(
+            "Channel state updated to {:?} after processing shutdown command",
+            &state.state
+        );
+        state.maybe_transition_to_shutdown(&self.network)
     }
 
     pub async fn handle_update_command(
@@ -5585,9 +5584,7 @@ impl ChannelActorState {
                     shutdown_tx_size(&self.funding_udt_type_script, shutdown_scripts)
                 );
 
-                self.update_state(ChannelState::ShuttingDown(
-                    ShuttingDownFlags::WAITING_COMMITMENT_CONFIRMATION,
-                ));
+                self.update_state(ChannelState::Closed(CloseFlags::COOPERATIVE));
 
                 network
                     .send_message(NetworkActorMessage::new_event(

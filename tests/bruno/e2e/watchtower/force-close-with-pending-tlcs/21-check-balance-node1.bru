@@ -35,6 +35,10 @@ script:pre-request {
   req.setBody(body);
 }
 
+script:post-response {
+  console.log("step21 result: ", res.body);
+}
+
 assert {
   Number(BigInt(bru.getVar("NODE1_BALANCE")) - BigInt(res.body.result.capacity)): lt 6005000
 }
