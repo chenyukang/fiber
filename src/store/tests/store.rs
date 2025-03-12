@@ -30,6 +30,7 @@ use musig2::SecNonce;
 use secp256k1::SecretKey;
 use secp256k1::{Keypair, Secp256k1};
 use std::collections::HashMap;
+use std::time::Duration;
 use std::time::SystemTime;
 
 fn gen_rand_key_pair() -> Keypair {
@@ -88,6 +89,16 @@ fn test_store_invoice() {
         .add_attr(Attribute::FinalHtlcTimeout(5))
         .build()
         .unwrap();
+    let invoice2 = InvoiceBuilder::new(Currency::Fibb)
+        .amount(Some(1280))
+        .payment_preimage(preimage)
+        .fallback_address("address".to_string())
+        .add_attr(Attribute::FinalHtlcTimeout(5))
+        .add_attr(Attribute::ExpiryTime(Duration::from_millis(1000)))
+        .build()
+        .unwrap();
+    eprintln!("payment_hash1: {:?}", invoice.payment_hash());
+    eprintln!("payment_hash2: {:?}", invoice2.payment_hash());
 
     let hash = invoice.payment_hash();
     store
