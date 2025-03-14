@@ -119,8 +119,14 @@ fn init_or_send_udt(
     let mut builder = SudtTransactionBuilder::new(configuration, iterator, &issuer, owner_mode)?;
     builder.set_sudt_type_script(generate_udt_type_script(udt_kind, issuer_address));
     builder.add_output(&receiver, sudt_amount);
+    eprintln!("begin build owner_mode: {:?}", owner_mode);
 
-    let mut tx_with_groups = builder.build(&Default::default())?;
+    let res = builder.build(&Default::default());
+    if let Err(ref err) = res {
+        eprintln!("err: {:?}", err);
+    }
+    let mut tx_with_groups = res.unwrap();
+    eprintln!("now tx_with_groups ...");
 
     let private_keys = vec![sender_info.1.clone()];
 
@@ -331,6 +337,7 @@ fn generate_nodes_config() {
 fn init_udt_accounts() -> Result<(), Box<dyn StdErr>> {
     let udt_owner = get_nodes_info("deployer");
     for udt in UDT_KINDS {
+        eprintln!("init udt: {:?}", udt);
         init_or_send_udt(
             udt,
             &udt_owner.0,
@@ -372,6 +379,7 @@ fn build_gensis_block() -> BlockView {
 }
 
 fn main() -> Result<(), Box<dyn StdErr>> {
+    eprintln!("now begin to run ");
     generate_nodes_config();
     init_udt_accounts()?;
     Ok(())
