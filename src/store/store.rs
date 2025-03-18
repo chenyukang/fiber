@@ -77,6 +77,10 @@ impl Store {
         Ok(Self { db })
     }
 
+    pub fn new_with_db(db: Arc<DB>) -> Self {
+        Self { db: db.clone() }
+    }
+
     fn open_db(path: &Path) -> Result<Arc<DB>, String> {
         // add more migrations here
         let mut options = Options::default();
@@ -169,6 +173,7 @@ pub(crate) fn deserialize_from<'a, T>(slice: &'a [u8], field_name: &str) -> T
 where
     T: serde::Deserialize<'a>,
 {
+    eprintln!("describe from {:?}", field_name);
     bincode::deserialize(slice)
         .unwrap_or_else(|e| panic!("deserialization of {} failed: {}", field_name, e))
 }
