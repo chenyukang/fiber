@@ -4,9 +4,10 @@ use crate::{
         gen::{fiber as molecule_fiber, gossip},
         hash_algorithm::HashAlgorithm,
         types::{
-            secp256k1_instance, AddTlc, BroadcastMessage, BroadcastMessageID, Cursor, Hash256,
-            NodeAnnouncement, PaymentHopData, PeeledOnionPacket, Privkey, Pubkey, TlcErr,
-            TlcErrPacket, TlcErrorCode, NO_SHARED_SECRET,
+            pack_hop_data, secp256k1_instance, unpack_hop_data, AddTlc, BroadcastMessage,
+            BroadcastMessageID, Cursor, Hash256, NodeAnnouncement, PaymentHopData,
+            PeeledOnionPacket, Privkey, Pubkey, TlcErr, TlcErrPacket, TlcErrorCode,
+            NO_SHARED_SECRET,
         },
         PaymentCustomRecords,
     },
@@ -345,4 +346,33 @@ fn test_custom_records_serialize_deserialize() {
 
     let bincode_serialize = bincode::serialize(&custom).expect("serialize");
     let _deserialized: Custom = bincode::deserialize(&bincode_serialize).expect("deserialize");
+}
+
+#[test]
+fn test_verify_payment_hop_data() {
+    let hop_data = PaymentHopData {
+        amount: 1000,
+        expiry: 1000,
+        next_hop: None,
+        funding_tx_hash: Hash256::default(),
+        hash_algorithm: HashAlgorithm::Sha256,
+        payment_preimage: Some([1; 32].into()),
+        custom_records: None,
+    };
+
+    let data = pack_hop_data(&hop_data);
+    eprintln!("data: {:?}", data);
+    let _unpacked: PaymentHopData = unpack_hop_data(&data).expect("unpack error");
+
+    // data from v0.4.0
+    let data = vec![
+        0, 0, 0, 0, 0, 0, 0, 117, 117, 0, 0, 0, 28, 0, 0, 0, 44, 0, 0, 0, 52, 0, 0, 0, 84, 0, 0, 0,
+        85, 0, 0, 0, 117, 0, 0, 0, 232, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 232, 3, 0, 0,
+        0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    let _unpacked: PaymentHopData = unpack_hop_data(&data).expect("unpack error");
+    // eprintln!("unpacked: {:?}", unpacked);
 }
