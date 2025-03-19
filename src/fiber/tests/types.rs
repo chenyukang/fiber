@@ -4,9 +4,10 @@ use crate::{
         gen::{fiber as molecule_fiber, gossip},
         hash_algorithm::HashAlgorithm,
         types::{
-            secp256k1_instance, AddTlc, BroadcastMessage, BroadcastMessageID, Cursor, Hash256,
-            NodeAnnouncement, PaymentHopData, PeeledOnionPacket, Privkey, Pubkey, TlcErr,
-            TlcErrPacket, TlcErrorCode, NO_SHARED_SECRET,
+            pack_hop_data, secp256k1_instance, unpack_hop_data, AddTlc, BroadcastMessage,
+            BroadcastMessageID, Cursor, Hash256, NodeAnnouncement, PaymentHopData,
+            PeeledOnionPacket, Privkey, Pubkey, TlcErr, TlcErrPacket, TlcErrorCode,
+            NO_SHARED_SECRET,
         },
     },
     gen_rand_channel_outpoint, gen_rand_fiber_private_key, gen_rand_fiber_public_key,
@@ -308,4 +309,30 @@ fn test_verify_hard_coded_node_announcement() {
         };
         assert!(node_announcement.verify())
     }
+}
+
+#[test]
+fn test_verify_payment_hop_data() {
+    let hop_data = PaymentHopData {
+        amount: 1000,
+        expiry: 1000,
+        next_hop: None,
+        funding_tx_hash: Hash256::default(),
+        hash_algorithm: HashAlgorithm::Sha256,
+        payment_preimage: Some([1; 32].into()),
+    };
+
+    let data = pack_hop_data(&hop_data);
+    eprintln!("data: {:?}", data);
+
+    // let data = vec![
+    //     0, 0, 0, 0, 0, 0, 0, 117, 117, 0, 0, 0, 28, 0, 0, 0, 44, 0, 0, 0, 52, 0, 0, 0, 84, 0, 0, 0,
+    //     85, 0, 0, 0, 117, 0, 0, 0, 232, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 232, 3, 0, 0,
+    //     0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    //     1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    //     0, 0, 0, 0, 0, 0, 0, 0, 0,
+    // ];
+
+    let unpacked: PaymentHopData = unpack_hop_data(&data).expect("unpack");
+    eprintln!("unpacked: {:?}", unpacked);
 }
