@@ -893,7 +893,7 @@ where
                 }
             }
             NetworkActorEvent::ChannelReady(channel_id, peer_id, channel_outpoint) => {
-                info!(
+                eprintln!(
                     "Channel ({:?}) to peer {:?} is now ready",
                     channel_id, peer_id
                 );
@@ -2757,7 +2757,7 @@ where
             self.network.get_cell(),
         )
         .await?;
-        info!("channel {:x} reestablished successfully", &channel_id);
+        eprintln!("channel {:x} reestablished successfully", &channel_id);
         self.on_channel_created(channel_id, peer_id, channel.clone());
 
         Ok(channel)
@@ -2852,6 +2852,7 @@ where
         actor: ActorRef<ChannelActorMessage>,
     ) {
         if let Some(session) = self.get_peer_session(peer_id) {
+            eprintln!("now channel {:?} created here", &id);
             self.channels.insert(id, actor.clone());
             self.session_channels_map
                 .entry(session)
@@ -2927,6 +2928,10 @@ where
 
     async fn on_channel_actor_stopped(&mut self, channel_id: Hash256, reason: StopReason) {
         // all check passed, now begin to remove from memory and DB
+        eprintln!(
+            "channel actor stopped: {:?} reason: {:?}",
+            &channel_id, reason
+        );
         self.channels.remove(&channel_id);
         for (_peer_id, (session_id, _)) in self.peer_session_map.iter() {
             if let Some(session_channels) = self.session_channels_map.get_mut(session_id) {
@@ -3370,8 +3375,12 @@ where
                 }
             }
             NetworkActorMessage::Command(command) => {
+                let command_msg = format!("{:?}", command);
                 if let Err(err) = self.handle_command(myself, state, command).await {
-                    error!("Failed to handle fiber network command: {}", err);
+                    error!(
+                        "Failed to handle fiber network command: {} command: {:?}",
+                        err, command_msg
+                    );
                 }
             }
             NetworkActorMessage::Notification(event) => {

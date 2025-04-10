@@ -9,6 +9,7 @@ fn rerun_if_changed(path_str: &str) -> bool {
         || path.starts_with("migrate")
         || path.starts_with("docker")
         || path.starts_with("docs")
+        || path.starts_with("config")
         || path.starts_with("test")
         || path.starts_with(".github")
         || path.ends_with("tests.rs")
@@ -24,7 +25,7 @@ fn rerun_if_changed(path_str: &str) -> bool {
 
     !matches!(
         path_str,
-        "COPYING" | "Makefile" | "clippy.toml" | "rustfmt.toml" | "rust-toolchain"
+        "COPYING" | "Makefile" | "clippy.toml" | "rustfmt.toml" | "rust-toolchain" | "typos.toml"
     )
 }
 
@@ -133,7 +134,7 @@ fn main() {
             get_commit_date().unwrap_or_default()
         );
 
-        println!("cargo:rerun-if-changed=build.rs");
+        //println!("cargo:rerun-if-changed=build.rs");
 
         let git_head = std::process::Command::new("git")
             .args(["rev-parse", "--git-dir"])

@@ -364,7 +364,7 @@ where
                         .await?;
                 }
                 _ => {
-                    debug!("Ignoring message while reestablishing: {:?}", message);
+                    eprintln!("Ignoring message while reestablishing: {:?}", message);
                 }
             }
             return Ok(());
@@ -1167,11 +1167,11 @@ where
                     .update_invoice_status(&tlc_info.payment_hash, CkbInvoiceStatus::Paid)
                     .expect("update invoice status failed");
             }
-            if tlc_info.previous_tlc.is_none() {
-                self.store
-                    .remove_payment_preimage(&tlc_info.payment_hash)
-                    .expect("remove preimage failed");
-            }
+            // if tlc_info.previous_tlc.is_none() {
+            //     self.store
+            //         .remove_payment_preimage(&tlc_info.payment_hash)
+            //         .expect("remove preimage failed");
+            // }
         }
 
         if let (
@@ -6302,6 +6302,7 @@ impl ChannelActorState {
                             && matches!(info.outbound_status(), OutboundTlcStatus::LocalAnnounced)
                         {
                             // resend AddTlc message
+                            eprintln!("Resend AddTlc message for tlc_id: {:?}", info.tlc_id);
                             network
                                 .send_message(NetworkActorMessage::new_command(
                                     NetworkActorCommand::SendFiberMessage(
@@ -6327,6 +6328,7 @@ impl ChannelActorState {
                                 && matches!(info.inbound_status(), InboundTlcStatus::LocalRemoved)
                             {
                                 // resend RemoveTlc message
+                                eprintln!("Resend RemoveTlc message for tlc_id: {:?}", info.tlc_id);
                                 network
                                     .send_message(NetworkActorMessage::new_command(
                                         NetworkActorCommand::SendFiberMessage(
