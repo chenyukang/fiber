@@ -4865,7 +4865,7 @@ async fn test_node_reestablish_resend_remove_tlc() {
     assert_eq!(node_b_balance, new_node_b_balance);
 
     node_a.start().await;
-    node_b.expect_debug_event("resend remove tlc").await;
+    //node_b.expect_debug_event("resend remove tlc").await;
     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
 
     // assert balance changed since remove tlc is processed by node_a after node_b resending remove tlc

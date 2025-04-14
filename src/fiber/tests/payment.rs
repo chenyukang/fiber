@@ -3029,7 +3029,6 @@ async fn test_send_payment_sync_up_new_channel_is_added() {
 #[tokio::test]
 // This test implies a bug when reconnecting a peer under the condition of multiple TLC operation
 // skip temporarily until the bug is fixed
-#[ignore]
 async fn test_send_payment_remove_tlc_with_preimage_will_retry() {
     init_tracing();
     let _span = tracing::info_span!("node", node = "test").entered();
@@ -3083,6 +3082,10 @@ async fn test_send_payment_remove_tlc_with_preimage_will_retry() {
     // so all the payments should be succeeded after all
     loop {
         for payment_hash in payments.clone().iter() {
+            //eprintln!("node_0: {:?}", node_0.get_peer_id());
+            //eprintln!("node_1: {:?}", node_1.get_peer_id());
+            assert!(node_0.get_triggered_unexpected_events().await.is_empty());
+            assert!(node_1.get_triggered_unexpected_events().await.is_empty());
             let status = node_0.get_payment_status(*payment_hash).await;
             eprintln!("payment_hash: {:?} got status : {:?}", payment_hash, status);
             if status == PaymentSessionStatus::Success {
