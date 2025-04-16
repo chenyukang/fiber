@@ -3041,7 +3041,7 @@ async fn test_send_payment_remove_tlc_with_preimage_will_retry() {
         4,
     )
     .await;
-    let [mut node_0, mut node_1, _node_2, node_3] = nodes.try_into().expect("4 nodes");
+    let [mut node_0, mut node_1, node_2, node_3] = nodes.try_into().expect("4 nodes");
 
     let mut payments = HashSet::new();
 
@@ -3086,6 +3086,8 @@ async fn test_send_payment_remove_tlc_with_preimage_will_retry() {
             //eprintln!("node_1: {:?}", node_1.get_peer_id());
             assert!(node_0.get_triggered_unexpected_events().await.is_empty());
             assert!(node_1.get_triggered_unexpected_events().await.is_empty());
+            //assert!(node_2.get_triggered_unexpected_events().await.is_empty());
+            //assert!(node_3.get_triggered_unexpected_events().await.is_empty());
             let status = node_0.get_payment_status(*payment_hash).await;
             eprintln!("payment_hash: {:?} got status : {:?}", payment_hash, status);
             if status == PaymentSessionStatus::Success {

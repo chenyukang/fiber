@@ -3139,19 +3139,6 @@ impl TlcState {
         }
     }
 
-    pub fn update_wait_prev_ack(&mut self) {
-        for tlc in self.offered_tlcs.tlcs.iter_mut() {
-            if tlc.outbound_status() == OutboundTlcStatus::RemoveWaitPrevAck {
-                tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitAck);
-            }
-        }
-        for tlc in self.received_tlcs.tlcs.iter_mut() {
-            if tlc.inbound_status() == InboundTlcStatus::AnnounceWaitPrevAck {
-                tlc.status = TlcStatus::Inbound(InboundTlcStatus::AnnounceWaitAck);
-            }
-        }
-    }
-
     pub fn need_another_commitment_signed(&self) -> bool {
         self.offered_tlcs.tlcs.iter().any(|tlc| {
             let status = tlc.outbound_status();
@@ -4870,10 +4857,6 @@ impl ChannelActorState {
         self.commitment_numbers.remote = number;
     }
 
-    fn set_local_commitment_number(&mut self, number: u64) {
-        self.commitment_numbers.local = number;
-    }
-
     pub fn increment_local_commitment_number(&mut self) {
         self.commitment_numbers.increment_local();
     }
@@ -6428,7 +6411,9 @@ impl ChannelActorState {
                     actual_remote_commitment_number,
                 );
 
-                if actual_local_commitment_number == expected_local_commitment_number {
+                if actual_local_commitment_number == expected_local_commitment_number
+                    && expected_remote_commitment_number == actual_remote_commitment_number
+                {
                     // resend AddTlc, RemoveTlc and CommitmentSigned messages if needed
                     self.set_waiting_ack(myself, false);
 
@@ -6500,27 +6485,24 @@ impl ChannelActorState {
                         self.get_local_peer_id(),
                         waiting_ack
                     );
-                }
-
-                if self.resend_order == RAACommitmentOrder::CommitmentFirst
-                    && need_resend_commitment_signed
-                {
-                    eprintln!(
-                        "Resend AddTlc and RemoveTlc messages if needed: {}",
-                        need_resend_commitment_signed
-                    );
-                    network
-                        .send_message(NetworkActorMessage::new_command(
-                            NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                                channel_id: self.get_id(),
-                                command: ChannelCommand::CommitmentSigned(),
-                            }),
-                        ))
-                        .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                    //need_resend_commitment_signed = false;
-                }
-
-                if expected_remote_commitment_number == actual_remote_commitment_number + 1 {
+                    if need_resend_commitment_signed
+                        || self.tlc_state.need_another_commitment_signed()
+                    {
+                        eprintln!(
+                            "Resend AddTlc and RemoveTlc messages if needed: {}",
+                            need_resend_commitment_signed
+                        );
+                        network
+                            .send_message(NetworkActorMessage::new_command(
+                                NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
+                                    channel_id: self.get_id(),
+                                    command: ChannelCommand::CommitmentSigned(),
+                                }),
+                            ))
+                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                        //need_resend_commitment_signed = false;
+                    }
+                } else if expected_remote_commitment_number == actual_remote_commitment_number + 1 {
                     // Resetting our remote commitment number to the actual remote commitment number
                     // and resend the RevokeAndAck message.
                     eprintln!(
@@ -6553,17 +6535,6 @@ impl ChannelActorState {
                             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                     }
                 }
-
-                // if need_resend_commitment_signed {
-                //     network
-                //         .send_message(NetworkActorMessage::new_command(
-                //             NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                //                 channel_id: self.get_id(),
-                //                 command: ChannelCommand::CommitmentSigned(),
-                //             }),
-                //         ))
-                //         .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                // }
 
                 self.on_reestablished_channel_ready(myself).await;
                 debug_event!(network, "Reestablished channel in ChannelReady");
