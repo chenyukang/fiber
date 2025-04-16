@@ -4789,7 +4789,7 @@ async fn test_node_reestablish_resend_remove_tlc() {
     let node_a_funding_amount = 100000000000;
     let node_b_funding_amount = 6200000000;
 
-    let (mut node_a, mut node_b, new_channel_id, _) =
+    let (mut node_a, node_b, new_channel_id, _) =
         NetworkNode::new_2_nodes_with_established_channel(
             node_a_funding_amount,
             node_b_funding_amount,

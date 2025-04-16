@@ -3032,22 +3032,23 @@ async fn test_send_payment_sync_up_new_channel_is_added() {
 async fn test_send_payment_remove_tlc_with_preimage_will_retry() {
     init_tracing();
     let _span = tracing::info_span!("node", node = "test").entered();
-    let (nodes, _channels) = create_n_nodes_network(
+    let (nodes, channels) = create_n_nodes_network(
         &[
             ((0, 1), (HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT)),
             ((1, 2), (HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT)),
-            ((2, 3), (HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT)),
+            //((2, 3), (HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT)),
         ],
-        4,
+        3,
     )
     .await;
-    let [mut node_0, mut node_1, node_2, node_3] = nodes.try_into().expect("4 nodes");
+    let [mut node_0, mut node_1, node_2] = nodes.try_into().expect("4 nodes");
 
     let mut payments = HashSet::new();
 
     for _i in 0..5 {
+        let amount = rand::random::<u128>() % 1000 + 1;
         let res = node_0
-            .send_payment_keysend(&node_3, 1000, false)
+            .send_payment_keysend(&node_2, amount, false)
             .await
             .unwrap();
         payments.insert(res.payment_hash);
@@ -3086,7 +3087,7 @@ async fn test_send_payment_remove_tlc_with_preimage_will_retry() {
             //eprintln!("node_1: {:?}", node_1.get_peer_id());
             assert!(node_0.get_triggered_unexpected_events().await.is_empty());
             assert!(node_1.get_triggered_unexpected_events().await.is_empty());
-            //assert!(node_2.get_triggered_unexpected_events().await.is_empty());
+            assert!(node_2.get_triggered_unexpected_events().await.is_empty());
             //assert!(node_3.get_triggered_unexpected_events().await.is_empty());
             let status = node_0.get_payment_status(*payment_hash).await;
             eprintln!("payment_hash: {:?} got status : {:?}", payment_hash, status);
@@ -3097,6 +3098,23 @@ async fn test_send_payment_remove_tlc_with_preimage_will_retry() {
         }
         if payments.is_empty() {
             break;
+        }
+        if payments.len() <= 2 {
+            let node0_state = node_0.get_channel_actor_state(channels[0]);
+            eprintln!("peer {:?} node_0_state:", node_0.get_peer_id());
+            node0_state.tlc_state.debug();
+
+            let node1_state = node_1.get_channel_actor_state(channels[0]);
+            eprintln!("peer {:?} node_1_state:", node_1.get_peer_id());
+            node1_state.tlc_state.debug();
+
+            let node1_right_state = node_1.get_channel_actor_state(channels[1]);
+            eprintln!("peer {:?} node1_right_state:", node_1.get_peer_id());
+            node1_right_state.tlc_state.debug();
+
+            let node2_state = node_2.get_channel_actor_state(channels[1]);
+            eprintln!("peer {:?} node_2_state:", node_2.get_peer_id());
+            node2_state.tlc_state.debug();
         }
     }
 }

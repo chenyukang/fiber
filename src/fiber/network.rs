@@ -1130,15 +1130,28 @@ where
             }
             NetworkActorCommand::CheckChannels => {
                 let now = now_timestamp_as_millis_u64();
+                eprintln!("peer {:?} CheckChannels ticked", state.peer_id);
                 for (_peer_id, channel_id, channel_state) in self.store.get_channel_states(None) {
+                    eprintln!(
+                        "peer {:?} CheckChannels channel {:?} state {:?}",
+                        state.peer_id, channel_id, channel_state
+                    );
                     if matches!(channel_state, ChannelState::ChannelReady) {
                         if let Some(actor_state) = self.store.get_channel_actor_state(&channel_id) {
+                            if actor_state.reestablishing {
+                                continue;
+                            }
                             for tlc in actor_state.tlc_state.received_tlcs.get_committed_tlcs() {
+                                eprintln!(
+                                    "peer {:?} now check tlc {:?}",
+                                    state.peer_id, tlc.payment_hash
+                                );
                                 if let Some(payment_preimage) =
                                     self.store.get_invoice_preimage(&tlc.payment_hash)
                                 {
-                                    debug!(
-                                        "Found payment preimage for channel {:?} tlc {:?}",
+                                    eprintln!(
+                                        "{:?} Found payment preimage for channel {:?} tlc {:?}",
+                                        state.peer_id,
                                         channel_id,
                                         tlc.id()
                                     );
@@ -1171,7 +1184,7 @@ where
                                         )
                                         .await
                                     {
-                                        error!(
+                                        eprintln!(
                                             "Failed to remove tlc {:?} for channel {:?}: {}",
                                             tlc.id(),
                                             channel_id,
