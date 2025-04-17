@@ -1224,6 +1224,12 @@ where
             }
         } else {
             // relay RemoveTlc to previous channel if needed
+            eprintln!(
+                "peer {:?} {:?} register relay remove tlc to previous channel: {:?}",
+                state.get_local_peer_id(),
+                tlc_info.payment_hash,
+                tlc_info.tlc_id
+            );
             self.try_to_relay_remove_tlc(myself, state, &tlc_info, remove_reason)
                 .await;
         }
@@ -1236,9 +1242,13 @@ where
         state: &mut ChannelActorState,
     ) -> ProcessingChannelResult {
         eprintln!(
-            "peer {:?} begin to handle commitment_signed command",
-            state.get_local_peer_id()
+            "peer {:?} begin to handle commitment_signed command, waiting_ack: {:?}",
+            state.get_local_peer_id(),
+            state.tlc_state.waiting_ack
         );
+        if state.tlc_state.waiting_ack {
+            return Err(ProcessingChannelError::WaitingTlcAck);
+        }
         let flags = match state.state {
             ChannelState::CollaboratingFundingTx(flags)
                 if !flags.contains(CollaboratingFundingTxFlags::COLLABORATION_COMPLETED) =>
@@ -1378,7 +1388,11 @@ where
         state: &mut ChannelActorState,
         command: RemoveTlcCommand,
     ) -> ProcessingChannelResult {
-        //eprintln!("begin to handle remove tlc command: {:?}", &command);
+        eprintln!(
+            "peer {:?} begin to handle remove tlc command: {:?}",
+            state.get_local_peer_id(),
+            &command
+        );
         state.check_for_tlc_update(None, true, false)?;
         state.check_remove_tlc_with_reason(TLCId::Received(command.id), &command.reason)?;
         let payment_hash = state
@@ -1640,6 +1654,11 @@ where
         pending_tlc_ops.retain_mut(|retryable_operation| {
             match retryable_operation {
                 RetryableTlcOperation::RemoveTlc(tlc_id, ref reason) => {
+                    eprintln!(
+                        "peer {:?} payment hash : {:?} here to remove_tlc command",
+                        state.get_local_peer_id(),
+                        tlc_id
+                    );
                     match self.handle_remove_tlc_command(
                         myself,
                         state,
@@ -1659,14 +1678,33 @@ where
                         .get_channel_actor_state(channel_id)
                         .expect("channel state not found");
                     let tlc_info = prev_channel_state.tlc_state.get(&TLCId::Received(*tlc_id));
+                    let peer = state.get_local_peer_id();
                     if tlc_info.is_none_or(|tlc| tlc.removed_reason.is_some()) {
                         // the tlc has been removed, we can remove the operation
+                        if tlc_info.is_some() {
+                            eprintln!(
+                                "peer {:?} payment hash : {:?} relay remove need to retry",
+                                peer,
+                                tlc_info.unwrap().payment_hash
+                            );
+                        }
                         false
                     } else {
                         // send relay remove tlc with network actor to previous hop
                         let (send, _recv) =
                             oneshot::channel::<Result<(), ProcessingChannelError>>();
                         let port = RpcReplyPort::from(send);
+                        eprintln!(
+                            "peer {:?} payment hash : {:?} begin relay remove tlc prev_reestablishing: {:?}  self.state: {:?}",
+                            peer,
+                            tlc_info.unwrap().payment_hash,
+                            prev_channel_state.reestablishing,
+                            state.reestablishing
+                        );
+                        if prev_channel_state.reestablishing {
+                            // if the previous channel is reestablishing, we need to retry it later
+                            return true;
+                        }
                         self.network
                             .send_message(NetworkActorMessage::new_command(
                                 NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
@@ -1682,6 +1720,11 @@ where
                             ))
                             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                         // the previous hop will automatically retry if there is Waiting_Ack error
+                        eprintln!(
+                            "peer {:?} payment hash : {:?} relay remove tried to send, keep retrying",
+                            peer,
+                            tlc_info.unwrap().payment_hash
+                        );
                         true
                     }
                 }
@@ -1704,6 +1747,8 @@ where
                         // we need to decide whether to retry it until we get ForwardTlcResult
                         true
                     } else {
+                        let peer= state.get_local_peer_id();
+                        eprintln!("peer {:?} payment_hash : {:?} try to forward tlc", peer, payment_hash);
                         match self.network.send_message(NetworkActorMessage::Command(
                             NetworkActorCommand::SendPaymentOnionPacket(SendOnionPacketCommand {
                                 peeled_onion_packet: peeled_onion_packet.clone(),
@@ -1756,6 +1801,12 @@ where
             _ => None,
         }) {
             if let Some((channel_err, tlc_err)) = result.error_info {
+                eprintln!(
+                    "peer {:?} payment_hash {:?} got forward result: {:?}",
+                    state.get_local_peer_id(),
+                    result.payment_hash,
+                    channel_err
+                );
                 match channel_err {
                     ProcessingChannelError::WaitingTlcAck => {
                         // if we get WaitingTlcAck error, we will retry it later
@@ -1780,6 +1831,11 @@ where
                     }
                 }
             } else {
+                eprintln!(
+                    "peer {:?} payment_hash {:?} finished forward result",
+                    state.get_local_peer_id(),
+                    result.payment_hash,
+                );
                 // if we get success result from AddTlc, we will remove the pending operation
                 state.tlc_state.remove_pending_tlc_operation(tlc_op);
             }
@@ -2091,7 +2147,7 @@ where
             }
             ChannelEvent::CheckActiveChannel => {
                 if state.should_disconnect_peer_awaiting_response() && !state.is_closed() {
-                    debug!(
+                    eprintln!(
                         "Channel {} from peer {:?} is inactive for a time, closing it",
                         state.get_id(),
                         state.get_remote_peer_id()
@@ -2402,6 +2458,10 @@ where
                     .store
                     .get_channel_actor_state(&channel_id)
                     .expect("channel should exist");
+                eprintln!(
+                    "peer : {:?} now set started, set reestablishing to true",
+                    channel.get_local_peer_id()
+                );
                 channel.reestablishing = true;
                 channel.network = Some(self.network.clone());
 
@@ -2493,7 +2553,11 @@ where
         myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        if state.tlc_state.has_pending_operations() {
+        if state.tlc_state.has_pending_operations() && !state.reestablishing {
+            eprintln!(
+                "now peer {:?} has pending tlc operations, so we need to check them",
+                state.get_local_peer_id()
+            );
             myself
                 .send_message(ChannelActorMessage::Event(
                     ChannelEvent::CheckTlcRetryOperation,
@@ -2742,8 +2806,8 @@ impl Debug for TlcInfo {
 impl TlcInfo {
     pub fn log(&self) -> String {
         format!(
-            "id: {:?} status: {:?} amount: {:?}",
-            &self.tlc_id, self.status, self.amount
+            "id: {:?} status: {:?} amount: {:?} remove_reason: {:?} payment_hash: {:?}",
+            &self.tlc_id, self.status, self.amount, self.removed_reason, self.payment_hash
         )
     }
 
@@ -4520,14 +4584,11 @@ impl ChannelActorState {
         //         _ => true,
         //     });
         // self.tlc_state.received_tlcs.next_tlc_id -= inbound_dropped;
-        // for tlc in self.tlc_state.offered_tlcs.tlcs.iter_mut() {
-        //     if tlc.status == TlcStatus::Outbound(OutboundTlcStatus::RemoteRemoved) {
-        //         tlc.status = TlcStatus::Outbound(OutboundTlcStatus::Committed);
-        //     }
-        //     if tlc.status == TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitPrevAck) {
-        //         tlc.status = TlcStatus::Outbound(OutboundTlcStatus::RemoteRemoved);
-        //     }
-        // }
+        for tlc in self.tlc_state.received_tlcs.tlcs.iter_mut() {
+            if tlc.status == TlcStatus::Inbound(InboundTlcStatus::AnnounceWaitPrevAck) {
+                tlc.status = TlcStatus::Inbound(InboundTlcStatus::AnnounceWaitAck);
+            }
+        }
         self.clear_waiting_peer_response();
     }
 
@@ -4874,13 +4935,13 @@ impl ChannelActorState {
         self.commitment_numbers.get_remote()
     }
 
-    fn set_remote_commitment_number(&mut self, number: u64) {
-        self.commitment_numbers.remote = number;
-    }
+    // fn set_remote_commitment_number(&mut self, number: u64) {
+    //     self.commitment_numbers.remote = number;
+    // }
 
-    fn set_local_commitment_number(&mut self, number: u64) {
-        self.commitment_numbers.local = number;
-    }
+    // fn set_local_commitment_number(&mut self, number: u64) {
+    //     self.commitment_numbers.local = number;
+    // }
 
     pub fn increment_local_commitment_number(&mut self) {
         self.commitment_numbers.increment_local();
@@ -4991,6 +5052,10 @@ impl ChannelActorState {
             let filled_payment_hash: Hash256 =
                 current.hash_algorithm.hash(fulfill.payment_preimage).into();
             if current.payment_hash != filled_payment_hash {
+                eprintln!(
+                    "TLC payment hash {:?} does not match the preimage {:?}",
+                    current.payment_hash, filled_payment_hash
+                );
                 return Err(ProcessingChannelError::FinalIncorrectPreimage);
             }
 
@@ -5012,9 +5077,11 @@ impl ChannelActorState {
                             to_local_amount, to_remote_amount, tlc_id, reason);
             self.tlc_state.apply_remove_tlc(tlc_id);
         }
-        debug!(
-            "Removed tlc payment_hash {:?} with reason {:?}",
-            current.payment_hash, reason
+        eprintln!(
+            "peer {:?} Removed tlc payment_hash {:?} with reason {:?}",
+            self.get_local_peer_id(),
+            current.payment_hash,
+            reason
         );
 
         Ok((current.clone(), reason))
@@ -5511,7 +5578,7 @@ impl ChannelActorState {
             self.check_tlc_limits(add_amount, is_sent)?;
         }
 
-        if is_tlc_command_message && self.tlc_state.waiting_ack {
+        if is_tlc_command_message && (self.tlc_state.waiting_ack || self.reestablishing) {
             return Err(ProcessingChannelError::WaitingTlcAck);
         }
 
@@ -6209,7 +6276,33 @@ impl ChannelActorState {
 
     async fn on_reestablished_channel_ready(&mut self, myself: &ActorRef<ChannelActorMessage>) {
         self.reestablishing = false;
+        self.mark_retry_ops_for_reestablish();
+        if self.tlc_state.has_pending_operations() {
+            myself.send_after(4 * RETRYABLE_TLC_OPS_INTERVAL, || {
+                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
+            });
+        }
         self.on_owned_channel_updated(myself, false).await;
+        eprintln!(
+            "\n\npeer {:?} finished reestablish ....\n\n",
+            self.get_local_peer_id()
+        );
+    }
+
+    fn mark_retry_ops_for_reestablish(&mut self) {
+        let peer = self.get_local_peer_id();
+        for op in self.tlc_state.retryable_tlc_operations.iter_mut() {
+            match op {
+                RetryableTlcOperation::ForwardTlc(payment_hash, _, _, _, try_one_time) => {
+                    eprintln!(
+                        "peer {:?} payment_hash : {:?} mark retry ops for reestablish",
+                        peer, payment_hash
+                    );
+                    *try_one_time = true;
+                }
+                _ => {}
+            }
+        }
     }
 
     fn append_remote_commitment_point(&mut self, commitment_point: Pubkey) {
@@ -6503,6 +6596,7 @@ impl ChannelActorState {
                             }
                         }
                     }
+
                     // previous waiting_ack maybe true, reset it after reestablish the channel
                     // if we need to resend CommitmentSigned message, it will be set to proper status again
                     eprintln!(
@@ -6510,8 +6604,8 @@ impl ChannelActorState {
                         self.get_local_peer_id(),
                         waiting_ack
                     );
-                    if need_resend_commitment_signed
-                        || self.tlc_state.need_another_commitment_signed()
+                    if self.tlc_state.need_another_commitment_signed()
+                        || need_resend_commitment_signed
                     {
                         eprintln!(
                             "Resend AddTlc and RemoveTlc messages if needed: {}",
@@ -6525,7 +6619,6 @@ impl ChannelActorState {
                                 }),
                             ))
                             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                        //need_resend_commitment_signed = false;
                     }
                 } else if expected_remote_commitment_number == actual_remote_commitment_number + 1
                     && expected_local_commitment_number == actual_local_commitment_number
@@ -6536,52 +6629,59 @@ impl ChannelActorState {
                         "peer {:?} resending RevokeAndAck message .....",
                         self.get_local_peer_id()
                     );
+                    self.set_waiting_ack(myself, false);
 
-                    // self.set_remote_commitment_number(actual_remote_commitment_number);
-                    // // if actual_local_commitment_number < expected_local_commitment_number {
-                    // //     self.set_local_commitment_number(actual_local_commitment_number);
-                    // // }
+                    for info in self.tlc_state.all_tlcs() {
+                        if let Some(remove_reason) = &info.removed_reason {
+                            if info.is_received()
+                                && matches!(info.inbound_status(), InboundTlcStatus::LocalRemoved)
+                            {
+                                eprintln!(
+                                    "peer {:?} resend remove_tlc: {:?}",
+                                    self.get_local_peer_id(),
+                                    info.tlc_id
+                                );
+                                // resend RemoveTlc message
+                                network
+                                    .send_message(NetworkActorMessage::new_command(
+                                        NetworkActorCommand::SendFiberMessage(
+                                            FiberMessageWithPeerId::new(
+                                                self.get_remote_peer_id(),
+                                                FiberMessage::remove_tlc(RemoveTlc {
+                                                    channel_id: self.get_id(),
+                                                    tlc_id: info.tlc_id.into(),
+                                                    reason: remove_reason.clone(),
+                                                }),
+                                            ),
+                                        ),
+                                    ))
+                                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
-                    // // Resetting the remote nonce to build the RevokeAndAck message
-                    // let last_committed_nonce = self.get_last_committed_remote_nonce();
-                    // let used_nonce = self
-                    //     .last_revoke_and_ack_remote_nonce
-                    //     .as_ref()
-                    //     .expect("must have set last_revoke_and_ack_remote_nonce")
-                    //     .clone();
+                                //need_resend_commitment_signed = true;
+                                debug_event!(network, "resend remove tlc");
+                            }
+                        }
+                    }
 
-                    // self.commit_remote_nonce(used_nonce);
-                    // self.send_revoke_and_ack_message()?;
-
-                    let last_revoke_ack_msg = self
-                        .last_revoke_ack_msg
-                        .as_ref()
-                        .expect("must have set last_revoke_and_ack_msg")
-                        .clone();
-
-                    self.network()
-                        .send_message(NetworkActorMessage::new_command(
-                            NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
-                                self.get_remote_peer_id(),
-                                FiberMessage::revoke_and_ack(last_revoke_ack_msg),
-                            )),
-                        ))
-                        .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-
-                    // Now we can reset the remote nonce to the "real" last committed nonce
-                    //self.commit_remote_nonce(last_committed_nonce);
-
-                    need_resend_commitment_signed = self.tlc_state.need_another_commitment_signed();
-                    if need_resend_commitment_signed {
-                        network
+                    if let Some(last_revoke_ack_msg) = self.last_revoke_ack_msg.clone() {
+                        eprintln!(
+                            "peer {:?} reuse resend RevokeAndAck message: {:?}",
+                            self.get_local_peer_id(),
+                            last_revoke_ack_msg
+                        );
+                        self.network()
                             .send_message(NetworkActorMessage::new_command(
-                                NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                                    channel_id: self.get_id(),
-                                    command: ChannelCommand::CommitmentSigned(),
-                                }),
+                                NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
+                                    self.get_remote_peer_id(),
+                                    FiberMessage::revoke_and_ack(last_revoke_ack_msg),
+                                )),
                             ))
                             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                     }
+                } else if actual_local_commitment_number == expected_remote_commitment_number
+                    && expected_local_commitment_number == actual_local_commitment_number
+                {
+                    self.set_waiting_ack(myself, false);
                 }
 
                 self.on_reestablished_channel_ready(myself).await;
@@ -7217,8 +7317,8 @@ impl ChannelActorState {
             })
             .chain(self.tlc_state.received_tlcs.tlcs.iter().filter(move |tlc| {
                 match tlc.inbound_status() {
-                    InboundTlcStatus::RemoteAnnounced => !for_remote,
-                    InboundTlcStatus::AnnounceWaitPrevAck => !for_remote,
+                    InboundTlcStatus::RemoteAnnounced => !for_remote && !self.reestablishing,
+                    InboundTlcStatus::AnnounceWaitPrevAck => !for_remote && !self.reestablishing,
                     InboundTlcStatus::AnnounceWaitAck => true,
                     InboundTlcStatus::Committed => true,
                     InboundTlcStatus::LocalRemoved => true,
