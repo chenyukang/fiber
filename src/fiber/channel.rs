@@ -192,7 +192,7 @@ pub enum TxCollaborationCommand {
     TxComplete(),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AddTlcCommand {
     pub amount: u128,
     pub payment_hash: Hash256,
@@ -206,6 +206,27 @@ pub struct AddTlcCommand {
     /// Use all zeros when no shared secrets are available.
     pub shared_secret: [u8; 32],
     pub previous_tlc: Option<PrevTlcInfo>,
+}
+
+impl Debug for AddTlcCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AddTlcCommand")
+            .field("amount", &self.amount)
+            .field("payment_hash", &self.payment_hash)
+            .field("expiry", &self.expiry)
+            .field("hash_algorithm", &self.hash_algorithm)
+            .field(
+                "onion_packet",
+                &(if self.onion_packet.is_some() {
+                    "Some(...)"
+                } else {
+                    "None"
+                }
+                .to_string()),
+            )
+            .field("previous_tlc", &self.previous_tlc)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
