@@ -23,6 +23,7 @@ use ractor::call;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::SystemTime;
+use tracing::debug;
 
 #[tokio::test]
 async fn test_send_payment_custom_records() {
@@ -3075,9 +3076,12 @@ async fn test_send_payment_remove_tlc_with_preimage_will_retry() {
         .await;
 
     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    debug!("now finished disconnect  ...");
 
     // reconnect node_0 and node_1
     node_0.connect_to_nonblocking(&node_1).await;
+
+    debug!("now finsihed reconnect .....");
 
     // the CheckChannels in network actor will continue to retry RemoveTlc for tlc already with preimage
     // so all the payments should be succeeded after all
@@ -3195,6 +3199,76 @@ async fn test_send_payment_invoice_cancel_multiple_ops() {
                 payments.remove(payment_hash);
             }
             assert_ne!(status, PaymentSessionStatus::Success);
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+        if payments.is_empty() {
+            break;
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_send_payment_invoice_two() {
+    init_tracing();
+    let _span = tracing::info_span!("node", node = "test").entered();
+    let (nodes, _channels) =
+        create_n_nodes_network(&[((0, 1), (HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT))], 2).await;
+    let [node_0, node_1] = nodes.try_into().expect("4 nodes");
+
+    let mut payments = HashSet::new();
+    let mut invoices: Vec<CkbInvoice> = vec![];
+
+    let count = 2;
+    let target_pubkey = node_1.pubkey;
+    for _i in 0..count {
+        let preimage = gen_rand_sha256_hash();
+        let ckb_invoice = InvoiceBuilder::new(Currency::Fibd)
+            .amount(Some(100))
+            .payment_preimage(preimage)
+            .payee_pub_key(target_pubkey.into())
+            .build()
+            .expect("build invoice success");
+
+        //node_0.insert_invoice(ckb_invoice.clone(), Some(preimage));
+        invoices.push(ckb_invoice);
+    }
+
+    for i in 0..count {
+        let invoice = &invoices[i];
+
+        let res = node_0
+            .send_payment(SendPaymentCommand {
+                invoice: Some(invoice.to_string()),
+                amount: invoice.amount,
+                target_pubkey: None,
+                allow_self_payment: true,
+                payment_hash: None,
+                final_tlc_expiry_delta: None,
+                tlc_expiry_limit: None,
+                timeout: None,
+                max_fee_amount: None,
+                max_parts: None,
+                keysend: None,
+                udt_type_script: None,
+                dry_run: false,
+                hop_hints: None,
+                custom_records: None,
+            })
+            .await
+            .unwrap();
+        payments.insert(res.payment_hash);
+        node_0.wait_until_created(res.payment_hash).await;
+    }
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+    loop {
+        for payment_hash in payments.clone().iter() {
+            let status = node_0.get_payment_status(*payment_hash).await;
+            eprintln!("payment_hash: {:?} got status : {:?}", payment_hash, status);
+            if status == PaymentSessionStatus::Failed {
+                payments.remove(payment_hash);
+            }
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
         if payments.is_empty() {
