@@ -217,15 +217,6 @@ impl Debug for AddTlcCommand {
             .field("payment_hash", &self.payment_hash)
             .field("expiry", &self.expiry)
             .field("hash_algorithm", &self.hash_algorithm)
-            .field(
-                "onion_packet",
-                &(if self.onion_packet.is_some() {
-                    "Some(...)"
-                } else {
-                    "None"
-                }
-                .to_string()),
-            )
             .field("previous_tlc", &self.previous_tlc)
             .finish()
     }
@@ -6445,8 +6436,6 @@ impl ChannelActorState {
                 let peer_local_commitment_number = reestablish_channel.local_commitment_number;
                 let peer_remote_commitment_number = reestablish_channel.remote_commitment_number;
                 let peer_waiting_ack = reestablish_channel.waiting_ack;
-                // let peer_commitment_gap =
-                //     peer_local_commitment_number.abs_diff(peer_remote_commitment_number);
 
                 warn!(
                     "peer: {:?} my_local_commitment_number: {:?}, \
@@ -6461,13 +6450,22 @@ impl ChannelActorState {
                     my_waiting_ack,
                     peer_waiting_ack
                 );
-                if my_local_commitment_number == peer_local_commitment_number
-                    && my_remote_commitment_number == peer_remote_commitment_number
+                if my_local_commitment_number == peer_remote_commitment_number
+                    && my_remote_commitment_number == peer_local_commitment_number
                 {
-                    // commitments are the same, sync up the tlcs
                     debug!("peer: {:?} resync channel tlcs", self.get_debug_id());
                     self.set_waiting_ack(myself, false);
-                    self.resync_channel_tlcs(true)?;
+                    self.resync_channel_tlcs(false)?;
+                    if !self.is_acceptor {
+                        network
+                            .send_message(NetworkActorMessage::new_command(
+                                NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
+                                    channel_id: self.get_id(),
+                                    command: ChannelCommand::CommitmentSigned(),
+                                }),
+                            ))
+                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                    }
                 } else if my_remote_commitment_number == peer_local_commitment_number + 1
                     && peer_waiting_ack
                 {
@@ -6475,22 +6473,13 @@ impl ChannelActorState {
                     // don't clear my waiting_ack flag here, since if i'm waiting for peer ack,
                     // peer will resend commitment_signed message
                     self.resync_channel_tlcs(false)?;
-                    if let Some(last_revoke_ack_msg) = self.last_revoke_ack_msg.clone() {
+                    if self.resend_revoke_and_ack() {
                         debug!(
-                            "peer: {:?} resend revoke_and_ack message: {:?}",
+                            "peer: {:?} need_another_commitment_signed {:?}",
                             self.get_debug_id(),
-                            last_revoke_ack_msg
+                            self.tlc_state.need_another_commitment_signed()
                         );
-                        self.network()
-                            .send_message(NetworkActorMessage::new_command(
-                                NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
-                                    self.get_remote_peer_id(),
-                                    FiberMessage::revoke_and_ack(last_revoke_ack_msg),
-                                )),
-                            ))
-                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                        //self.increment_local_commitment_number();
-                        if self.tlc_state.need_another_commitment_signed()
+                        if my_waiting_ack
                             && my_local_commitment_number == peer_remote_commitment_number
                         {
                             debug!(
@@ -6513,20 +6502,7 @@ impl ChannelActorState {
                     && my_local_commitment_number == peer_remote_commitment_number
                 {
                     // I need to resend my commitment_signed message
-                    if self.tlc_state.need_another_commitment_signed() {
-                        debug!(
-                            "peer {:?} i am waiting ack, now I resend commitment signed",
-                            self.get_debug_id()
-                        );
-                        self.network()
-                            .send_message(NetworkActorMessage::new_command(
-                                NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                                    channel_id: self.get_id(),
-                                    command: ChannelCommand::CommitmentSigned(),
-                                }),
-                            ))
-                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                    }
+                    self.resync_channel_tlcs(true)?;
                 } else {
                     debug!(
                         "peer: {:?} unexpected_commitnumbers (my_local_commitment_number: {:?}, \
@@ -6556,6 +6532,33 @@ impl ChannelActorState {
             }
         }
         Ok(())
+    }
+
+    fn resend_revoke_and_ack(&self) -> bool {
+        self.last_revoke_ack_msg
+            .as_ref()
+            .map_or(false, |last_revoke_ack_msg| {
+                debug!(
+                    "peer: {:?} resend revoke_and_ack message: {:?}",
+                    self.get_debug_id(),
+                    last_revoke_ack_msg
+                );
+                self.network()
+                    .send_message(NetworkActorMessage::new_command(
+                        NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
+                            self.get_remote_peer_id(),
+                            // Clone is needed here as FiberMessage::revoke_and_ack takes ownership
+                            FiberMessage::revoke_and_ack(last_revoke_ack_msg.clone()),
+                        )),
+                    ))
+                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                debug!(
+                    "peer: {:?} need_another_commitment_signed {:?}",
+                    self.get_debug_id(),
+                    self.tlc_state.need_another_commitment_signed()
+                );
+                true // Return true because the message was resent
+            })
     }
 
     fn resync_channel_tlcs(&self, send_commitment_signed: bool) -> ProcessingChannelResult {
