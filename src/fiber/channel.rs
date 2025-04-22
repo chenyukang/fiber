@@ -687,14 +687,21 @@ where
         &self,
         myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
-        inbound: bool,
+        _inbound: bool,
     ) {
         let previous_balance = state.get_local_balance();
-        let pending_tlcs = if inbound {
-            state.tlc_state.received_tlcs.tlcs.iter()
-        } else {
-            state.tlc_state.offered_tlcs.tlcs.iter()
-        };
+        // let pending_tlcs = if inbound {
+        //     state.tlc_state.received_tlcs.tlcs.iter()
+        // } else {
+        //     state.tlc_state.offered_tlcs.tlcs.iter()
+        // };
+        let pending_tlcs = state
+            .tlc_state
+            .received_tlcs
+            .tlcs
+            .iter()
+            .chain(state.tlc_state.offered_tlcs.tlcs.iter());
+
         let settled_tlcs: Vec<_> = pending_tlcs
             .filter(|tlc| {
                 tlc.removed_reason.is_some()
@@ -5244,7 +5251,7 @@ impl ChannelActorState {
     pub fn any_tlc_pending(&self) -> bool {
         self.tlc_state
             .all_tlcs()
-            .any(|tlc| tlc.removed_reason.is_none())
+            .any(|tlc| tlc.removed_confirmed_at.is_none())
     }
 
     pub fn get_local_funding_pubkey(&self) -> &Pubkey {
@@ -5622,14 +5629,15 @@ impl ChannelActorState {
             }
         };
 
+        #[cfg(debug_assertions)]
+        self.tlc_state.debug();
         if !flags.contains(ShuttingDownFlags::AWAITING_PENDING_TLCS) || self.any_tlc_pending() {
             debug!("Will not shutdown the channel because we require all tlcs resolved");
-            #[cfg(debug_assertions)]
-            self.tlc_state.debug();
             return Ok(false);
         }
 
         debug!("All pending tlcs are resolved, transitioning to Shutdown state");
+        //self.apply_settled_remove_tlcs_for_shutdown()?;
         self.update_state(ChannelState::ShuttingDown(
             flags | ShuttingDownFlags::DROPPING_PENDING,
         ));
@@ -7358,6 +7366,40 @@ impl ChannelActorState {
                 NetworkActorCommand::NotifyFundingTx(tx.clone()),
             ));
         }
+    }
+
+    fn apply_settled_remove_tlcs_for_shutdown(&mut self) -> Result<(), ProcessingChannelError> {
+        let previous_balance = self.get_local_balance();
+
+        let pending_tlcs = self
+            .tlc_state
+            .received_tlcs
+            .tlcs
+            .iter()
+            .chain(self.tlc_state.offered_tlcs.tlcs.iter());
+
+        let settled_tlcs: Vec<_> = pending_tlcs
+            .filter(|tlc| {
+                tlc.removed_reason.is_some()
+                    && matches!(
+                        tlc.status,
+                        TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed)
+                            | TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed)
+                    )
+                    && !self.tlc_state.applied_remove_tlcs.contains(&tlc.tlc_id)
+            })
+            .map(|tlc| tlc.tlc_id)
+            .collect();
+
+        for tlc_id in settled_tlcs {
+            self.remove_tlc_with_reason(tlc_id)?;
+        }
+
+        if self.get_local_balance() != previous_balance {
+            self.update_graph_for_local_channel_change();
+            self.update_graph_for_remote_channel_change();
+        }
+        Ok(())
     }
 }
 
