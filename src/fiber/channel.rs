@@ -1237,11 +1237,11 @@ where
             }
             ChannelState::ChannelReady => CommitmentSignedFlags::ChannelReady(),
             ChannelState::ShuttingDown(flags) => {
-                if flags.valid_for_flush_pending_tlcs() {
-                    warn!(
-                        "Received commitment_signed command in ShuttingDown state: {:?}",
-                        flags
-                    );
+                warn!(
+                    "Received commitment_signed command in ShuttingDown state: {:?}",
+                    flags
+                );
+                if flags.is_valid_for_flush_pending_tlcs() {
                     CommitmentSignedFlags::PendingShutdown()
                 } else {
                     return Err(ProcessingChannelError::InvalidState(format!(
@@ -1283,6 +1283,7 @@ where
                 )),
             ))
             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+        state.update_last_commitment_signed_remote_nonce();
 
         match flags {
             CommitmentSignedFlags::SigningCommitment(flags) => {
@@ -1295,10 +1296,8 @@ where
             }
             CommitmentSignedFlags::PendingShutdown() => {
                 state.set_waiting_ack(myself, true);
-                state.maybe_transition_to_shutdown()?;
             }
         }
-        state.update_last_commitment_signed_remote_nonce();
         Ok(())
     }
 
@@ -1381,6 +1380,7 @@ where
 
         state.maybe_transition_to_shutdown()?;
         self.handle_commitment_signed_command(myself, state)?;
+
         Ok(())
     }
 
@@ -1468,7 +1468,8 @@ where
                 "Channel state updated to {:?} after processing shutdown command",
                 &state.state
             );
-            state.maybe_transition_to_shutdown()
+            state.maybe_transition_to_shutdown()?;
+            Ok(())
         }
     }
 
@@ -2396,7 +2397,7 @@ where
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        trace!(
+        debug!(
             "Channel actor processing message: id: {:?}, state: {:?}, message: {:?}",
             &state.get_id(),
             &state.state,
@@ -3628,13 +3629,12 @@ bitflags! {
 }
 
 impl ShuttingDownFlags {
-    pub fn valid_for_flush_pending_tlcs(&self) -> bool {
-        matches!(
-            *self,
-            ShuttingDownFlags::OUR_SHUTDOWN_SENT
-                | ShuttingDownFlags::THEIR_SHUTDOWN_SENT
-                | ShuttingDownFlags::AWAITING_PENDING_TLCS
-        )
+    pub fn is_valid_for_flush_pending_tlcs(&self) -> bool {
+        !self.contains(ShuttingDownFlags::WAITING_COMMITMENT_CONFIRMATION)
+    }
+
+    pub fn is_valid_for_tlc_operation(&self) -> bool {
+        !self.contains(ShuttingDownFlags::DROPPING_PENDING)
     }
 }
 
@@ -5393,8 +5393,7 @@ impl ChannelActorState {
         match self.state {
             ChannelState::ChannelReady => {}
             ChannelState::ShuttingDown(flags)
-                if add_tlc_amount.is_none()
-                    || (!is_sent && flags == ShuttingDownFlags::OUR_SHUTDOWN_SENT) =>
+                if flags.is_valid_for_tlc_operation() && (add_tlc_amount.is_none() || !is_sent) =>
             {
                 // when we've sent out shutting down command,
                 // we can only remove tlc or process add_tlc peer message
@@ -5613,13 +5612,13 @@ impl ChannelActorState {
         Ok((completed_commitment_tx, settlement_data))
     }
 
-    fn maybe_transition_to_shutdown(&mut self) -> ProcessingChannelResult {
+    fn maybe_transition_to_shutdown(&mut self) -> Result<bool, ProcessingChannelError> {
         // This function will also be called when we resolve all pending tlcs.
         // If we are not in the ShuttingDown state, we should not do anything.
         let flags = match self.state {
             ChannelState::ShuttingDown(flags) => flags,
             _ => {
-                return Ok(());
+                return Ok(false);
             }
         };
 
@@ -5627,7 +5626,7 @@ impl ChannelActorState {
             debug!("Will not shutdown the channel because we require all tlcs resolved");
             #[cfg(debug_assertions)]
             self.tlc_state.debug();
-            return Ok(());
+            return Ok(false);
         }
 
         debug!("All pending tlcs are resolved, transitioning to Shutdown state");
@@ -5703,11 +5702,12 @@ impl ChannelActorState {
             } else {
                 debug!("We have sent our shutdown signature, waiting for counterparty's signature");
             }
+            return Ok(true);
         } else {
             debug!("Not ready to shutdown the channel, waiting for both parties to send the Shutdown message");
         }
 
-        Ok(())
+        Ok(false)
     }
 
     fn handle_accept_channel_message(
@@ -5892,7 +5892,7 @@ impl ChannelActorState {
             }
             ChannelState::ChannelReady => CommitmentSignedFlags::ChannelReady(),
             ChannelState::ShuttingDown(flags) => {
-                if flags.valid_for_flush_pending_tlcs() {
+                if flags.is_valid_for_flush_pending_tlcs() {
                     debug!(
                         "process commitment_signed while shutdown is pending, current state {:?}",
                         &self.state

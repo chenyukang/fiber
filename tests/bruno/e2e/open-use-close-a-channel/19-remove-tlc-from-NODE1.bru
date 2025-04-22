@@ -44,4 +44,5 @@ assert {
 script:post-response {
   // Sleep for sometime to make sure current operation finishes before next request starts.
   await new Promise(r => setTimeout(r, 100));
+  console.log("step 19: ", res.body);
 }
