@@ -733,6 +733,62 @@ async fn test_send_payment_with_private_channel_hints_fallback() {
 }
 
 #[tokio::test]
+async fn test_send_payment_payself_with_private_channel_cycle() {
+    init_tracing();
+
+    let (nodes, _channels) = create_n_nodes_network(
+        &[
+            ((0, 1), (MIN_RESERVED_CKB + 40000000000, MIN_RESERVED_CKB)),
+            ((1, 2), (MIN_RESERVED_CKB + 40000000000, MIN_RESERVED_CKB)),
+        ],
+        3,
+    )
+    .await;
+    let [mut node1, _node2, mut node3] = nodes.try_into().expect("3 nodes");
+
+    let (_new_channel_id, funding_tx_hash) = establish_channel_between_nodes(
+        &mut node3,
+        &mut node1,
+        false,
+        MIN_RESERVED_CKB + 20000000000,
+        MIN_RESERVED_CKB,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let funding_tx = node3
+        .get_transaction_view_from_hash(funding_tx_hash)
+        .await
+        .expect("get funding tx");
+
+    let _outpoint = funding_tx.output_pts_iter().next().unwrap();
+    // sleep for a while
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+    let source_node = &mut node1;
+
+    let res = source_node
+        .send_payment_keysend_to_self(30000000000, false)
+        .await;
+
+    assert!(res.is_err());
+
+    let res = source_node
+        .send_payment_keysend_to_self(10000000000, false)
+        .await;
+
+    assert!(res.is_ok(), "Send payment failed: {:?}", res);
+}
+
+#[tokio::test]
 async fn test_send_payment_with_private_multiple_channel_hints_fallback() {
     init_tracing();
     let (nodes, _channels) = create_n_nodes_network(
