@@ -3,6 +3,7 @@ use ckb_types::core::{EpochNumberWithFraction, FeeRate, TransactionView};
 use ckb_types::packed::{Byte32, OutPoint, Script, Transaction};
 use ckb_types::prelude::{IntoTransactionView, Pack, Unpack};
 use ckb_types::H256;
+use either::Either;
 use once_cell::sync::OnceCell;
 use ractor::concurrency::Duration;
 use ractor::{
@@ -56,7 +57,9 @@ use super::channel::{
 use super::config::{AnnouncedNodeName, MIN_TLC_EXPIRY_DELTA};
 use super::fee::calculate_commitment_tx_fee;
 use super::gossip::{GossipActorMessage, GossipMessageStore, GossipMessageUpdates};
-use super::graph::{NetworkGraph, NetworkGraphStateStore, OwnedChannelUpdateEvent, SessionRoute};
+use super::graph::{
+    NetworkGraph, NetworkGraphStateStore, OwnedChannelUpdateEvent, RouterHop, SessionRoute,
+};
 use super::key::blake2b_hash_with_salt;
 use super::types::{
     BroadcastMessageWithTimestamp, EcdsaSignature, FiberMessage, ForwardTlcResult, GossipMessage,
@@ -82,7 +85,7 @@ use crate::fiber::types::{
     FiberChannelMessage, PaymentOnionPacket, PeeledPaymentOnionPacket, TxSignatures,
 };
 use crate::fiber::KeyPair;
-use crate::invoice::{CkbInvoice, InvoiceStore};
+use crate::invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceStore};
 use crate::{now_timestamp_as_millis_u64, unwrap_or_return, Error};
 
 pub const FIBER_PROTOCOL_ID: ProtocolId = ProtocolId::new(42);
@@ -184,7 +187,6 @@ pub struct NodeInfoResponse {
     pub auto_accept_channel_ckb_funding_amount: u64,
     pub tlc_expiry_delta: u64,
     pub tlc_min_value: u128,
-    pub tlc_max_value: u128,
     pub tlc_fee_proportional_millionths: u128,
     pub channel_count: u32,
     pub pending_channel_count: u32,
@@ -264,8 +266,18 @@ pub enum NetworkActorCommand {
         SendPaymentCommand,
         RpcReplyPort<Result<SendPaymentResponse, String>>,
     ),
+    // Send payment with router
+    SendPaymentWithRouter(
+        SendPaymentWithRouterCommand,
+        RpcReplyPort<Result<SendPaymentResponse, String>>,
+    ),
     // Get Payment Session for query payment status and errors
     GetPayment(Hash256, RpcReplyPort<Result<SendPaymentResponse, String>>),
+    // Build a payment router with the given hops
+    BuildPaymentRouter(
+        BuildRouterCommand,
+        RpcReplyPort<Result<PaymentRouter, String>>,
+    ),
 
     NodeInfo((), RpcReplyPort<Result<NodeInfoResponse, String>>),
     ListPeers((), RpcReplyPort<Result<Vec<PeerInfo>, String>>),
@@ -300,7 +312,7 @@ pub struct OpenChannelCommand {
 }
 
 #[serde_as]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct SendPaymentCommand {
     // the identifier of the payment target
     pub target_pubkey: Option<Pubkey>,
@@ -335,6 +347,44 @@ pub struct SendPaymentCommand {
     pub dry_run: bool,
 }
 
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct SendPaymentWithRouterCommand {
+    /// the hash to use within the payment's HTLC
+    pub payment_hash: Option<Hash256>,
+
+    /// The router to use for the payment
+    pub router: Vec<RouterHop>,
+
+    /// the encoded invoice to send to the recipient
+    pub invoice: Option<String>,
+
+    /// Some custom records for the payment which contains a map of u32 to Vec<u8>
+    /// The key is the record type, and the value is the serialized data
+    /// For example:
+    /// ```json
+    /// "custom_records": {
+    ///    "0x1": "0x01020304",
+    ///    "0x2": "0x05060708",
+    ///    "0x3": "0x090a0b0c",
+    ///    "0x4": "0x0d0e0f10010d090a0b0c"
+    ///  }
+    /// ```
+    pub custom_records: Option<PaymentCustomRecords>,
+
+    /// keysend payment
+    pub keysend: Option<bool>,
+
+    /// udt type script for the payment
+    #[serde_as(as = "Option<EntityHex>")]
+    pub udt_type_script: Option<Script>,
+
+    /// dry_run for payment, used for check whether we can build valid router and the fee for this payment,
+    /// it's useful for the sender to double check the payment before sending it to the network,
+    /// default is false
+    pub dry_run: bool,
+}
+
 /// The custom records to be included in the payment.
 /// The key is hex encoded of `u32`, and the value is hex encoded of `Vec<u8>` with `0x` as prefix.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Default)]
@@ -343,6 +393,7 @@ pub struct PaymentCustomRecords {
     pub data: HashMap<u32, Vec<u8>>,
 }
 
+/// A hop hint is a hint for a node to use a specific channel.
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HopHint {
@@ -355,6 +406,35 @@ pub struct HopHint {
     pub(crate) fee_rate: u64,
     /// The TLC expiry delta to use this hop to forward the payment.
     pub(crate) tlc_expiry_delta: u64,
+}
+
+/// A hop requirement need to meet when building router, do not including the source node,
+/// the last hop is the target node.
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HopRequire {
+    /// The public key of the node
+    pub(crate) pubkey: Pubkey,
+    /// The outpoint for the channel, which means use channel with `channel_outpoint` to reach this node
+    #[serde_as(as = "Option<EntityHex>")]
+    pub(crate) channel_outpoint: Option<OutPoint>,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BuildRouterCommand {
+    /// the amount of the payment, the unit is Shannons for non UDT payment
+    pub amount: Option<u128>,
+    #[serde_as(as = "Option<EntityHex>")]
+    pub udt_type_script: Option<Script>,
+    pub hops_info: Vec<HopRequire>,
+    pub final_tlc_expiry_delta: Option<u64>,
+}
+
+#[serde_as]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PaymentRouter {
+    pub router_hops: Vec<RouterHop>,
 }
 
 #[serde_as]
@@ -376,6 +456,7 @@ pub struct SendPaymentData {
     pub custom_records: Option<PaymentCustomRecords>,
     pub allow_self_payment: bool,
     pub hop_hints: Vec<HopHint>,
+    pub router: Vec<RouterHop>,
     pub dry_run: bool,
 }
 
@@ -520,6 +601,7 @@ impl SendPaymentData {
             custom_records: command.custom_records,
             allow_self_payment: command.allow_self_payment,
             hop_hints,
+            router: vec![],
             dry_run: command.dry_run,
         })
     }
@@ -598,6 +680,7 @@ pub enum NetworkServiceEvent {
     ChannelReady(PeerId, Hash256, OutPoint),
     ChannelClosed(PeerId, Hash256, Byte32),
     ChannelAbandon(Hash256),
+    ChannelFundingAborted(Hash256),
     // A RevokeAndAck is received from the peer. Other data relevant to this
     // RevokeAndAck message are also assembled here. The watch tower may use this.
     RevokeAndAckReceived(
@@ -629,7 +712,6 @@ pub enum NetworkActorEvent {
     GossipMessageUpdates(GossipMessageUpdates),
 
     /// Channel related events.
-
     /// A channel has been accepted.
     /// The two Hash256 are respectively newly agreed channel id and temp channel id,
     /// The two u128 are respectively local and remote funding amount,
@@ -915,7 +997,7 @@ where
             }
             NetworkActorEvent::FundingTransactionPending(transaction, outpoint, channel_id) => {
                 state
-                    .on_funding_transaction_pending(transaction, outpoint.clone(), channel_id)
+                    .on_funding_transaction_pending(channel_id, transaction, outpoint)
                     .await;
             }
             NetworkActorEvent::FundingTransactionConfirmed(
@@ -930,7 +1012,7 @@ where
             }
             NetworkActorEvent::FundingTransactionFailed(outpoint) => {
                 error!("Funding transaction failed: {:?}", outpoint);
-                state.remove_in_flight_tx(outpoint.tx_hash().into());
+                state.abort_funding(Either::Right(outpoint)).await;
             }
             NetworkActorEvent::ClosingTransactionPending(channel_id, peer_id, tx, force) => {
                 state
@@ -1149,6 +1231,18 @@ where
                                         channel_id,
                                         tlc.id()
                                     );
+                                    if self
+                                        .store
+                                        .get_invoice_status(&tlc.payment_hash)
+                                        .is_some_and(|s| {
+                                            !matches!(
+                                                s,
+                                                CkbInvoiceStatus::Open | CkbInvoiceStatus::Received
+                                            )
+                                        })
+                                    {
+                                        continue;
+                                    }
                                     let (send, _recv) = oneshot::channel();
                                     let rpc_reply = RpcReplyPort::from(send);
                                     if let Err(err) = state
@@ -1303,8 +1397,8 @@ where
                         }
                     },
                     Ok(Err(err)) => {
-                        // FIXME(yukang): we need to handle this error properly
                         error!("Failed to fund channel: {}", err);
+                        state.abort_funding(Either::Left(channel_id)).await;
                         return Ok(());
                     }
                     Err(err) => {
@@ -1463,6 +1557,31 @@ where
                     }
                 }
             }
+            NetworkActorCommand::SendPaymentWithRouter(payment_request, reply) => {
+                match self
+                    .on_send_payment_with_router(myself, state, payment_request)
+                    .await
+                {
+                    Ok(payment) => {
+                        let _ = reply.send(Ok(payment));
+                    }
+                    Err(e) => {
+                        error!("Failed to send payment: {:?}", e);
+                        let _ = reply.send(Err(e.to_string()));
+                    }
+                }
+            }
+            NetworkActorCommand::BuildPaymentRouter(build_payment_router, reply) => {
+                match self.on_build_payment_router(build_payment_router).await {
+                    Ok(router) => {
+                        let _ = reply.send(Ok(router));
+                    }
+                    Err(e) => {
+                        error!("Failed to build payment router: {:?}", e);
+                        let _ = reply.send(Err(e.to_string()));
+                    }
+                }
+            }
             NetworkActorCommand::GetPayment(payment_hash, reply) => {
                 match self.on_get_payment(&payment_hash) {
                     Ok(payment) => {
@@ -1497,7 +1616,6 @@ where
                         .auto_accept_channel_ckb_funding_amount,
                     tlc_expiry_delta: state.tlc_expiry_delta,
                     tlc_min_value: state.tlc_min_value,
-                    tlc_max_value: state.tlc_max_value,
                     tlc_fee_proportional_millionths: state.tlc_fee_proportional_millionths,
                     channel_count: state.channels.len() as u32,
                     pending_channel_count: state.pending_channels.len() as u32,
@@ -1725,16 +1843,18 @@ where
     async fn build_payment_route(
         &self,
         payment_session: &mut PaymentSession,
-        payment_data: &SendPaymentData,
     ) -> Result<Vec<PaymentHopData>, Error> {
         let graph = self.network_graph.read().await;
-        match graph.build_route(payment_data.clone()) {
+        let source = graph.get_source_pubkey();
+        match graph.build_route(payment_session.request.clone()) {
             Err(e) => {
                 let error = format!("Failed to build route, {}", e);
                 self.set_payment_fail_with_error(payment_session, &error);
                 return Err(Error::SendPaymentError(error));
             }
             Ok(hops) => {
+                payment_session.route =
+                    SessionRoute::new(source, payment_session.request.target_pubkey, &hops);
                 assert_ne!(hops[0].funding_tx_hash, Hash256::default());
                 return Ok(hops);
             }
@@ -1794,6 +1914,10 @@ where
                 let err = format!(
                     "Failed to send onion packet with error {}",
                     error_detail.error_code_as_str()
+                );
+                eprintln!(
+                    "send onion packet failed: {:?} need_to_retry: {:?}",
+                    err, need_to_retry
                 );
                 if !need_to_retry {
                     // only update the payment session status when we don't need to retry
@@ -1885,24 +2009,6 @@ where
         self.store.insert_payment_session(payment_session.clone());
     }
 
-    async fn payment_session_build_route(
-        &self,
-        payment_session: &mut PaymentSession,
-        payment_data: &SendPaymentData,
-        state: &mut NetworkActorState<S>,
-    ) -> Result<Vec<PaymentHopData>, Error> {
-        let hops_info = self
-            .build_payment_route(payment_session, payment_data)
-            .await?;
-
-        payment_session.route = SessionRoute::new(
-            state.get_public_key(),
-            payment_data.target_pubkey,
-            &hops_info,
-        );
-        Ok(hops_info)
-    }
-
     async fn try_payment_session(
         &self,
         myself: ActorRef<NetworkActorMessage>,
@@ -1925,9 +2031,7 @@ where
                 payment_session.retried_times += 1;
             }
 
-            let hops_info = self
-                .payment_session_build_route(payment_session, &payment_data, state)
-                .await?;
+            let hops_info = self.build_payment_route(payment_session).await?;
 
             match self
                 .send_payment_onion_packet(state, payment_session, &payment_data, hops_info)
@@ -1975,13 +2079,62 @@ where
             Error::InvalidParameter(format!("Failed to validate payment request: {:?}", e))
         })?;
 
+        self.send_payment_with_payment_data(myself, state, payment_data)
+            .await
+    }
+
+    async fn on_send_payment_with_router(
+        &self,
+        myself: ActorRef<NetworkActorMessage>,
+        state: &mut NetworkActorState<S>,
+        command: SendPaymentWithRouterCommand,
+    ) -> Result<SendPaymentResponse, Error> {
+        // Only proceed if we have at least one hop requirement
+        let Some(last_edge) = command.router.last() else {
+            return Err(Error::InvalidParameter(
+                "No hop requirements provided".to_string(),
+            ));
+        };
+
+        let source = self.network_graph.read().await.get_source_pubkey();
+        let target = last_edge.target;
+        let amount = last_edge.amount_received;
+
+        // Create payment command with defaults from the last hop
+        let payment_command = SendPaymentCommand {
+            target_pubkey: Some(target),
+            payment_hash: command.payment_hash,
+            invoice: command.invoice,
+            allow_self_payment: target == source,
+            dry_run: command.dry_run,
+            amount: Some(amount),
+            keysend: command.keysend,
+            udt_type_script: command.udt_type_script.clone(),
+            ..Default::default()
+        };
+
+        let mut payment_data = SendPaymentData::new(payment_command).map_err(|e| {
+            error!("Failed to validate payment request: {:?}", e);
+            Error::InvalidParameter(format!("Failed to validate payment request: {:?}", e))
+        })?;
+
+        // specify the router to be used
+        payment_data.router = command.router.clone();
+        self.send_payment_with_payment_data(myself, state, payment_data)
+            .await
+    }
+
+    async fn send_payment_with_payment_data(
+        &self,
+        myself: ActorRef<NetworkActorMessage>,
+        state: &mut NetworkActorState<S>,
+        payment_data: SendPaymentData,
+    ) -> Result<SendPaymentResponse, Error> {
         // for dry run, we only build the route and return the hops info,
         // will not store the payment session and send the onion packet
         if payment_data.dry_run {
-            let mut payment_session = PaymentSession::new(payment_data.clone(), 0);
-            let _hops = self
-                .payment_session_build_route(&mut payment_session, &payment_data, state)
-                .await?;
+            let mut payment_session = PaymentSession::new(payment_data, 0);
+            let _hops = self.build_payment_route(&mut payment_session).await?;
             return Ok(payment_session.into());
         }
 
@@ -2003,6 +2156,27 @@ where
             .try_payment_session(myself, state, &mut payment_session)
             .await?;
         return Ok(session.into());
+    }
+
+    async fn on_build_payment_router(
+        &self,
+        command: BuildRouterCommand,
+    ) -> Result<PaymentRouter, Error> {
+        // Only proceed if we have at least one hop requirement
+        let Some(_last_hop) = command.hops_info.last() else {
+            return Err(Error::InvalidParameter(
+                "No hop requirements provided".to_string(),
+            ));
+        };
+
+        let source = self.network_graph.read().await.get_source_pubkey();
+        let router_hops = self
+            .network_graph
+            .read()
+            .await
+            .build_path(source, command)?;
+
+        Ok(PaymentRouter { router_hops })
     }
 }
 
@@ -2049,7 +2223,6 @@ pub struct NetworkActorState<S> {
     tlc_expiry_delta: u64,
     // The default tlc min and max value of tlcs to be accepted.
     tlc_min_value: u128,
-    tlc_max_value: u128,
     // The default tlc fee proportional millionths to be used when auto accepting a channel.
     tlc_fee_proportional_millionths: u128,
     // The gossip messages actor to process and send gossip messages.
@@ -2461,6 +2634,32 @@ where
         if let Some(task) = self.ckb_txs_in_flight.remove(&tx_hash) {
             task.stop(Some("cleanup in flight tx".to_string()));
         }
+    }
+
+    pub async fn abort_funding(&mut self, channel_id_or_outpoint: Either<Hash256, OutPoint>) {
+        let channel_id = match channel_id_or_outpoint {
+            Either::Left(channel_id) => channel_id,
+            Either::Right(outpoint) => {
+                self.remove_in_flight_tx(outpoint.tx_hash().into());
+                match self.pending_channels.remove(&outpoint) {
+                    Some(channel_id) => channel_id,
+                    None => {
+                        warn!(
+                            "Funding transaction failed for outpoint {:?} but no channel found",
+                            &outpoint
+                        );
+                        return;
+                    }
+                }
+            }
+        };
+
+        self.send_message_to_channel_actor(
+            channel_id,
+            None,
+            ChannelActorMessage::Event(ChannelEvent::Stop(StopReason::AbortFunding)),
+        )
+        .await;
     }
 
     pub async fn abandon_channel(
@@ -2964,7 +3163,7 @@ where
             }
         }
 
-        if reason == StopReason::Abandon {
+        if reason == StopReason::Abandon || reason == StopReason::AbortFunding {
             if let Some(channel_actor_state) = self.store.get_channel_actor_state(&channel_id) {
                 // remove from transaction track actor
                 if let Some(funding_tx) = channel_actor_state.funding_tx.as_ref() {
@@ -2979,7 +3178,11 @@ where
             // notify event observers, such as remove from watchtower
             self.network
                 .send_message(NetworkActorMessage::new_notification(
-                    NetworkServiceEvent::ChannelAbandon(channel_id),
+                    if reason == StopReason::Abandon {
+                        NetworkServiceEvent::ChannelAbandon(channel_id)
+                    } else {
+                        NetworkServiceEvent::ChannelFundingAborted(channel_id)
+                    },
                 ))
                 .expect(ASSUME_NETWORK_MYSELF_ALIVE);
         }
@@ -3040,9 +3243,9 @@ where
 
     async fn on_funding_transaction_pending(
         &mut self,
+        channel_id: Hash256,
         transaction: Transaction,
         outpoint: OutPoint,
-        channel_id: Hash256,
     ) {
         // Just a sanity check to ensure that no two channels are associated with the same outpoint.
         if let Some(old) = self.pending_channels.remove(&outpoint) {
@@ -3326,7 +3529,6 @@ where
             auto_accept_channel_ckb_funding_amount: config.auto_accept_channel_ckb_funding_amount(),
             tlc_expiry_delta: config.tlc_expiry_delta(),
             tlc_min_value: config.tlc_min_value(),
-            tlc_max_value: config.tlc_max_value(),
             tlc_fee_proportional_millionths: config.tlc_fee_proportional_millionths(),
             gossip_actor,
             channel_subscribers,

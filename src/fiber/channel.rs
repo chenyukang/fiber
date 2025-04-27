@@ -2,7 +2,7 @@
 use crate::fiber::network::DebugEvent;
 use crate::fiber::network::PaymentCustomRecords;
 use crate::fiber::types::BroadcastMessageWithTimestamp;
-use crate::{debug_event, utils::tx::compute_tx_message};
+use crate::{debug_event, fiber::types::TxAbort, utils::tx::compute_tx_message};
 use bitflags::bitflags;
 use futures::future::OptionFuture;
 use secp256k1::XOnlyPublicKey;
@@ -562,9 +562,14 @@ where
                     .await?;
                 Ok(())
             }
-            FiberChannelMessage::TxAbort(_)
-            | FiberChannelMessage::TxInitRBF(_)
-            | FiberChannelMessage::TxAckRBF(_) => {
+            FiberChannelMessage::TxAbort(_) => {
+                if state.state.can_abort_funding() {
+                    state.update_state(ChannelState::Closed(CloseFlags::FUNDING_ABORTED));
+                    myself.stop(None);
+                }
+                Ok(())
+            }
+            FiberChannelMessage::TxInitRBF(_) | FiberChannelMessage::TxAckRBF(_) => {
                 warn!("Received unsupported message: {:?}", &message);
                 Ok(())
             }
@@ -1997,6 +2002,23 @@ where
                 debug_event!(self.network, "ChannelActorStopped");
                 if reason == StopReason::Abandon {
                     state.update_state(ChannelState::Closed(CloseFlags::ABANDONED));
+                } else if reason == StopReason::AbortFunding {
+                    state.update_state(ChannelState::Closed(CloseFlags::FUNDING_ABORTED));
+                    let abort_message = FiberMessageWithPeerId {
+                        peer_id: state.get_remote_peer_id(),
+                        message: FiberMessage::ChannelNormalOperation(
+                            FiberChannelMessage::TxAbort(TxAbort {
+                                channel_id: state.get_id(),
+                                message: "funding aborted".as_bytes().to_vec(),
+                            }),
+                        ),
+                    };
+                    state
+                        .network()
+                        .send_message(NetworkActorMessage::new_command(
+                            NetworkActorCommand::SendFiberMessage(abort_message),
+                        ))
+                        .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                 }
                 myself.stop(None);
             }
@@ -2462,13 +2484,11 @@ where
                 .expect(ASSUME_NETWORK_ACTOR_ALIVE);
         }
         let stop_reason = match state.state {
-            ChannelState::Closed(flags) => {
-                if flags == CloseFlags::ABANDONED {
-                    StopReason::Abandon
-                } else {
-                    StopReason::Closed
-                }
-            }
+            ChannelState::Closed(flags) => match flags {
+                CloseFlags::ABANDONED => StopReason::Abandon,
+                CloseFlags::FUNDING_ABORTED => StopReason::AbortFunding,
+                _ => StopReason::Closed,
+            },
             _ => StopReason::PeerDisConnected,
         };
         self.network
@@ -3436,6 +3456,7 @@ pub struct ClosedChannel {}
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub enum StopReason {
     Abandon,
+    AbortFunding,
     Closed,
     PeerDisConnected,
 }
@@ -3607,6 +3628,8 @@ bitflags! {
         const UNCOOPERATIVE = 1 << 1;
         /// Indicates that channel is abandoned.
         const ABANDONED = 1 << 2;
+        /// Channel is closed because of aborted funding.
+        const FUNDING_ABORTED = 1 << 3;
     }
 }
 
@@ -3650,6 +3673,21 @@ impl ChannelState {
             ChannelState::Closed(_)
                 | ChannelState::ShuttingDown(ShuttingDownFlags::WAITING_COMMITMENT_CONFIRMATION)
         )
+    }
+
+    /// Can only abort funding when the channel is funding and our signatures have not sent yet.
+    fn can_abort_funding(&self) -> bool {
+        match self {
+            ChannelState::NegotiatingFunding(_)
+            | ChannelState::CollaboratingFundingTx(_)
+            | ChannelState::SigningCommitment(_) => true,
+            ChannelState::AwaitingTxSignatures(flags)
+                if !flags.contains(AwaitingTxSignaturesFlags::OUR_TX_SIGNATURES_SENT) =>
+            {
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -3774,7 +3812,8 @@ impl ChannelActorState {
             return false;
         }
         if let Some(timestamp) = self.waiting_peer_response {
-            let elapsed = now_timestamp_as_millis_u64() - timestamp;
+            // depends on the system's clock source, not all system clocks are monotonic, using saturating_sub to avoid potential underflow
+            let elapsed = now_timestamp_as_millis_u64().saturating_sub(timestamp);
             elapsed > PEER_CHANNEL_RESPONSE_TIMEOUT
         } else {
             false
@@ -6891,13 +6930,9 @@ impl ChannelActorState {
     ) -> Result<(TransactionView, TransactionView), ProcessingChannelError> {
         let commitment_tx = {
             let funding_out_point = self.must_get_funding_transaction_outpoint();
-            let cell_deps =
-                get_cell_deps(vec![Contract::FundingLock], &self.funding_udt_type_script)
-                    .map_err(|e| ProcessingChannelError::InternalError(e.to_string()))?;
             let (output, output_data) = self.build_commitment_transaction_output(for_remote);
 
             TransactionBuilder::default()
-                .cell_deps(cell_deps)
                 .input(
                     CellInput::new_builder()
                         .previous_output(funding_out_point.clone())
@@ -6910,15 +6945,9 @@ impl ChannelActorState {
 
         let settlement_tx = {
             let commtimtent_out_point = OutPoint::new(commitment_tx.hash(), 0);
-            let cell_deps = get_cell_deps(
-                vec![Contract::CommitmentLock],
-                &self.funding_udt_type_script,
-            )
-            .map_err(|e| ProcessingChannelError::InternalError(e.to_string()))?;
             let (outputs, outputs_data) = self.build_settlement_transaction_outputs(for_remote);
 
             TransactionBuilder::default()
-                .cell_deps(cell_deps)
                 .input(
                     CellInput::new_builder()
                         .previous_output(commtimtent_out_point.clone())
