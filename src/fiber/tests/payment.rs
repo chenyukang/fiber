@@ -3595,3 +3595,51 @@ async fn test_send_payment_invoice_cancel_multiple_ops() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_send_payment_with_reverse_channel_of_capaicity_not_enough() {
+    init_tracing();
+    let _span = tracing::info_span!("node", node = "test").entered();
+    let (nodes, channels) = create_n_nodes_network(
+        &[
+            ((0, 1), (13900000000 + MIN_RESERVED_CKB, MIN_RESERVED_CKB)),
+            ((1, 2), (14000000000 + MIN_RESERVED_CKB, MIN_RESERVED_CKB)),
+            ((2, 1), (14100000000 + MIN_RESERVED_CKB, MIN_RESERVED_CKB)),
+        ],
+        3,
+    )
+    .await;
+
+    let node0_actor_state = nodes[0].get_channel_actor_state(channels[0]);
+    eprintln!(
+        "node_0: {:?} {:?}",
+        node0_actor_state.to_local_amount, node0_actor_state.to_remote_amount
+    );
+
+    let node1_actor_state = nodes[1].get_channel_actor_state(channels[0]);
+    eprintln!(
+        "node_1: {:?} {:?}",
+        node1_actor_state.to_local_amount, node1_actor_state.to_remote_amount
+    );
+
+    let payment = nodes[0].send_payment_keysend(&nodes[2], 1, false).await;
+    let payment_hash = payment.unwrap().payment_hash;
+    nodes[0].assert_router_used(1, payment_hash, channels[2]);
+
+    nodes[0].wait_until_success(payment_hash).await;
+    nodes[0].assert_router_used(1, payment_hash, channels[1]);
+    nodes[0]
+        .assert_payment_status(payment_hash, PaymentSessionStatus::Success, Some(2))
+        .await;
+
+    // now begin the second time send_payment
+    let payment = nodes[0].send_payment_keysend(&nodes[2], 1, false).await;
+    let payment_hash = payment.unwrap().payment_hash;
+    nodes[0].assert_router_used(1, payment_hash, channels[2]);
+
+    nodes[0].wait_until_success(payment_hash).await;
+    nodes[0].assert_router_used(1, payment_hash, channels[1]);
+    nodes[0]
+        .assert_payment_status(payment_hash, PaymentSessionStatus::Success, Some(2))
+        .await;
+}

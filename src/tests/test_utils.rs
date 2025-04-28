@@ -1036,6 +1036,16 @@ impl NetworkNode {
         self.store.get_payment_custom_records(payment_hash)
     }
 
+    pub fn assert_router_used(&self, index: usize, payment_hash: Hash256, channel_id: Hash256) {
+        let funding_tx_hash = self.get_channel_funding_tx(&channel_id).unwrap();
+        let channel_outpoint = OutPoint::new(funding_tx_hash.into(), 0);
+        let payment_session = self.get_payment_session(payment_hash).unwrap();
+        assert_eq!(
+            payment_session.route.nodes[index].channel_outpoint,
+            channel_outpoint
+        );
+    }
+
     pub async fn new_with_node_name(node_name: &str) -> Self {
         let config = NetworkNodeConfigBuilder::new()
             .node_name(Some(node_name.to_string()))
