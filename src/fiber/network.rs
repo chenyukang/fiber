@@ -989,9 +989,30 @@ where
                 // Notify outside observers.
                 myself
                     .send_message(NetworkActorMessage::new_notification(
-                        NetworkServiceEvent::ChannelReady(peer_id, channel_id, channel_outpoint),
+                        NetworkServiceEvent::ChannelReady(
+                            peer_id,
+                            channel_id,
+                            channel_outpoint.clone(),
+                        ),
                     ))
                     .expect(ASSUME_NETWORK_MYSELF_ALIVE);
+
+                // retry related payment session for this channel
+                for session in self
+                    .store
+                    .get_payment_sessions_with_status(PaymentSessionStatus::Created)
+                {
+                    if let Some(first_hop_channel_outpoint) = session.first_hop_channel_outpoint() {
+                        if channel_outpoint == first_hop_channel_outpoint {
+                            debug!(
+                                "Now retrying payment session {:?} for channel {:?} reestablished",
+                                session.payment_hash(),
+                                channel_id
+                            );
+                            self.register_payment_retry(myself.clone(), session.payment_hash());
+                        }
+                    }
+                }
             }
             NetworkActorEvent::FiberMessage(peer_id, message) => {
                 self.handle_peer_message(state, peer_id, message).await?
