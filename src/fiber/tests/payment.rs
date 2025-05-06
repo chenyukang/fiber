@@ -4451,7 +4451,7 @@ async fn test_send_payment_with_reconnect_two_times() {
 
     for _i in 0..2 {
         let mut payments = HashSet::new();
-        for _j in 0..10 {
+        for _j in 0..15 {
             let res = node0
                 .send_payment_keysend(&node1, 1000, false)
                 .await
@@ -4485,7 +4485,7 @@ async fn test_send_payment_with_reconnect_two_times() {
         // reconnect peer
         node0.connect_to_nonblocking(&node1).await;
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
         // wait for the payment to be retried
         for _i in 0..20 {
             assert!(node0.get_triggered_unexpected_events().await.is_empty());
