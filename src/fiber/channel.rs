@@ -3122,6 +3122,17 @@ impl TlcState {
         tlc.payment_hash
     }
 
+    pub fn update_created_at_commitment_numbers(
+        &mut self,
+        tlc_id: TLCId,
+        numbers: CommitmentNumbers,
+    ) {
+        let tlc_info = self.get_mut(&tlc_id);
+        if let Some(tlc_info) = tlc_info {
+            tlc_info.created_at = numbers;
+        }
+    }
+
     pub fn commitment_signed_tlcs(&self, for_remote: bool) -> impl Iterator<Item = &TlcInfo> + '_ {
         self.offered_tlcs
             .tlcs
@@ -5239,6 +5250,11 @@ impl ChannelActorState {
             local: local_commitment_number,
             remote: remote_commitment_number,
         } = tlc.get_commitment_numbers();
+        debug!(
+            "tlc commitment numbers: payment_hash: {:?} numbers: {:?}",
+            tlc.payment_hash,
+            tlc.get_commitment_numbers()
+        );
         let local_pubkey = derive_tlc_pubkey(
             &self.get_local_channel_public_keys().tlc_base_key,
             &self.get_local_commitment_point(remote_commitment_number),
@@ -5286,6 +5302,10 @@ impl ChannelActorState {
             [a, b].concat()
         };
 
+        #[cfg(debug_assertions)]
+        self.tlc_state.debug();
+        debug!("Active tlcs: {:?}  for_remote: {:?}", tlcs, for_remote);
+
         if tlcs.is_empty() {
             Vec::new()
         } else {
@@ -5295,6 +5315,14 @@ impl ChannelActorState {
                 result.extend_from_slice(&tlc.get_htlc_type().to_le_bytes());
                 result.extend_from_slice(&tlc.amount.to_le_bytes());
                 result.extend_from_slice(&tlc.get_hash());
+                // eprintln!(
+                //     "tlc hash: {:?} amount: {}, type: {:?} local_key: {:?} remote_key: {:?}",
+                //     tlc.get_hash(),
+                //     tlc.amount,
+                //     tlc.get_htlc_type(),
+                //     local_key,
+                //     remote_key
+                // );
                 if for_remote {
                     result.extend_from_slice(blake160(&remote_key.serialize()).as_ref());
                     result.extend_from_slice(blake160(&local_key.serialize()).as_ref());
@@ -6035,6 +6063,8 @@ impl ChannelActorState {
             commitment_signed.commitment_tx_partial_signature,
         )?;
 
+        debug!("finished verify : {:?}", commitment_signed);
+
         // Notify outside observers.
         network
             .send_message(NetworkActorMessage::new_notification(
@@ -6470,7 +6500,7 @@ impl ChannelActorState {
                 let peer_remote_commitment_number = reestablish_channel.remote_commitment_number;
 
                 warn!(
-                    "peer: {:?} \
+                    "handling reestablish peer: {:?} \
                     local_commitment_number ({:?}, {:?}) \
                     peer_commitment_number ({:?} {:?}) \
                     waiting_ack: {:?}",
@@ -6486,7 +6516,7 @@ impl ChannelActorState {
                 {
                     // commitments are the same, sync up the tlcs
                     self.set_waiting_ack(myself, false);
-                    self.resend_tlcs_on_reestablish(false)?;
+                    self.resend_tlcs_on_reestablish(false, reestablish_channel)?;
 
                     // there is a scenario that two peers are both in WaitingAck state
                     // and if two parties send CommitmentSigned message to each other there maybe be a Musig2VerifyError
@@ -6506,8 +6536,9 @@ impl ChannelActorState {
                     // peer need ACK, I need to send my revoke_and_ack message
                     // don't clear my waiting_ack flag here, since if i'm waiting for peer ack,
                     // peer will resend commitment_signed message
-                    self.resend_tlcs_on_reestablish(false)?;
+                    self.resend_tlcs_on_reestablish(false, reestablish_channel)?;
                     if let Some(last_revoke_ack_msg) = self.last_revoke_ack_msg.clone() {
+                        debug!("resend revoke_and_ack message: {:?}", last_revoke_ack_msg);
                         self.network()
                             .send_message(NetworkActorMessage::new_command(
                                 NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
@@ -6517,15 +6548,30 @@ impl ChannelActorState {
                             ))
                             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
-                        if my_waiting_ack {
-                            self.set_waiting_ack(myself, false);
+                        // this check make sure the two parties make symmetric commitment numbers
+                        // after the peer process the revoke_and_ack message and increased his local number
+                        // otherwise this CommitmentSigned peer message will be verified as invalid
+                        if my_waiting_ack
+                            && my_local_commitment_number == peer_remote_commitment_number
+                        {
+                            debug!("resend commitment_signed command for reestablish");
+                            self.network()
+                                .send_message(NetworkActorMessage::new_command(
+                                    NetworkActorCommand::ControlFiberChannel(
+                                        ChannelCommandWithId {
+                                            channel_id: self.get_id(),
+                                            command: ChannelCommand::CommitmentSigned(),
+                                        },
+                                    ),
+                                ))
+                                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                         }
                     }
                 } else if my_waiting_ack
                     && my_local_commitment_number == peer_remote_commitment_number
                 {
                     // I need to resend my commitment_signed message, don't clear my WaitingTlcAck flag
-                    self.resend_tlcs_on_reestablish(true)?;
+                    self.resend_tlcs_on_reestablish(true, reestablish_channel)?;
                 } else {
                     error!(
                         "peer: {:?} unexpected_commitnumbers",
@@ -6547,9 +6593,37 @@ impl ChannelActorState {
         Ok(())
     }
 
-    fn resend_tlcs_on_reestablish(&self, send_commitment_signed: bool) -> ProcessingChannelResult {
+    fn resend_tlcs_on_reestablish(
+        &mut self,
+        send_commitment_signed: bool,
+        reestablish_channel: &ReestablishChannel,
+    ) -> ProcessingChannelResult {
         let network = self.network();
         let mut need_commitment_signed = false;
+        let resend_add_tlc_ids: Vec<_> = self
+            .tlc_state
+            .all_tlcs()
+            .filter_map(|info| {
+                if info.is_offered()
+                    && matches!(info.outbound_status(), OutboundTlcStatus::LocalAnnounced)
+                {
+                    Some(info.tlc_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for tlc_id in resend_add_tlc_ids.iter() {
+            self.tlc_state.update_created_at_commitment_numbers(
+                *tlc_id,
+                CommitmentNumbers {
+                    local: reestablish_channel.remote_commitment_number,
+                    remote: reestablish_channel.local_commitment_number,
+                },
+            );
+        }
+
         for info in self.tlc_state.all_tlcs() {
             if info.is_offered()
                 && matches!(info.outbound_status(), OutboundTlcStatus::LocalAnnounced)
@@ -6572,6 +6646,7 @@ impl ChannelActorState {
                     ))
                     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                 debug_event!(network, "resend add tlc");
+
                 need_commitment_signed = true;
             } else if let Some(remove_reason) = &info.removed_reason {
                 if info.is_received()
@@ -7057,7 +7132,7 @@ impl ChannelActorState {
             let funding_out_point = self.must_get_funding_transaction_outpoint();
             let (output, output_data) = self.build_commitment_transaction_output(for_remote);
 
-            TransactionBuilder::default()
+            let res = TransactionBuilder::default()
                 .input(
                     CellInput::new_builder()
                         .previous_output(funding_out_point.clone())
@@ -7065,14 +7140,18 @@ impl ChannelActorState {
                 )
                 .output(output)
                 .output_data(output_data)
-                .build()
+                .build();
+            debug!("build commitment tx {:?}", res);
+            res
         };
 
         let settlement_tx = {
             let commtimtent_out_point = OutPoint::new(commitment_tx.hash(), 0);
             let (outputs, outputs_data) = self.build_settlement_transaction_outputs(for_remote);
 
-            TransactionBuilder::default()
+            debug!("commitment_output_point: {:?}", commtimtent_out_point);
+            debug!("outputs: {:?}", outputs);
+            let res = TransactionBuilder::default()
                 .input(
                     CellInput::new_builder()
                         .previous_output(commtimtent_out_point.clone())
@@ -7080,7 +7159,9 @@ impl ChannelActorState {
                 )
                 .set_outputs(outputs.to_vec())
                 .set_outputs_data(outputs_data.to_vec())
-                .build()
+                .build();
+            debug!("build settlement tx {:?}", res);
+            res
         };
 
         Ok((commitment_tx, settlement_tx))
@@ -7090,6 +7171,7 @@ impl ChannelActorState {
         let x_only_aggregated_pubkey = self.get_commitment_lock_script_xonly(for_remote);
         let version = self.get_current_commitment_number(for_remote);
         let tlcs = self.get_active_tlcs(for_remote);
+        debug!("now tlcs: {:?}", tlcs);
 
         let mut commitment_lock_script_args = [
             &blake2b_256(x_only_aggregated_pubkey)[0..20],
@@ -7337,10 +7419,17 @@ impl ChannelActorState {
         let (commitment_tx, settlement_tx) = self.build_commitment_and_settlement_tx(false)?;
 
         let deterministic_verify_ctx = self.get_deterministic_verify_context();
-        deterministic_verify_ctx.verify(
+        let res = deterministic_verify_ctx.verify(
             funding_tx_partial_signature,
             &compute_tx_message(&commitment_tx),
-        )?;
+        );
+        debug!(
+            "build_and_verify_commitment_tx funding_tx_partial_signature: {:?} \
+            commitment_tx: {:?} settlement_tx: {:?} \
+            res: {:?}",
+            funding_tx_partial_signature, commitment_tx, settlement_tx, res
+        );
+        res?;
 
         let to_local_output = settlement_tx
             .outputs()
@@ -7375,7 +7464,18 @@ impl ChannelActorState {
             ]
             .concat(),
         );
+        debug!(
+            "build_and_verify_commitment_tx
+                to_local_output: {:?} to_local_output_data {:?}, \
+                to_remote_output: {:?} to_remote_output_data: {:?}, args: {:?}",
+            to_local_output, to_local_output_data, to_remote_output, to_remote_output_data, args
+        );
+
         let verify_ctx = self.get_verify_context();
+        debug!(
+            "build_and_verify_commitment_tx context: {:?} message: {:?}",
+            verify_ctx, message
+        );
         verify_ctx.verify(commitment_tx_partial_signature, message.as_slice())?;
 
         Ok(PartiallySignedCommitmentTransaction {
@@ -7395,6 +7495,12 @@ impl ChannelActorState {
         let deterministic_sign_ctx = self.get_deterministic_sign_context();
         let funding_tx_partial_signature =
             deterministic_sign_ctx.sign(&compute_tx_message(&commitment_tx))?;
+        debug!(
+            "build_and_sign_commitment_tx funding_tx_partial_signature: {:?}, commitment_tx: {:?} settlement_tx: {:?}",
+            funding_tx_partial_signature,
+            commitment_tx,
+            settlement_tx
+        );
 
         let to_local_output = settlement_tx
             .outputs()
@@ -7430,7 +7536,18 @@ impl ChannelActorState {
             .concat(),
         );
 
+        debug!(
+            "build_and_sign_commitment_tx
+                to_local_output: {:?} to_local_output_data {:?}, \
+                to_remote_output: {:?} to_remote_output_data: {:?}, args: {:?}",
+            to_local_output, to_local_output_data, to_remote_output, to_remote_output_data, args
+        );
+
         let sign_ctx = self.get_sign_context(true);
+        debug!(
+            "build_and_sign_commitment_tx context: {:?} message: {:?}",
+            sign_ctx, message
+        );
         let commitment_tx_partial_signature = sign_ctx.sign(message.as_slice())?;
 
         Ok((
@@ -7632,6 +7749,7 @@ impl Musig2CommonContext {
     }
 }
 
+#[derive(Debug)]
 struct Musig2VerifyContext {
     common_ctx: Musig2CommonContext,
     pubkey: Pubkey,
@@ -7651,6 +7769,7 @@ impl Musig2VerifyContext {
     }
 }
 
+#[derive(Debug)]
 struct Musig2SignContext {
     common_ctx: Musig2CommonContext,
     seckey: Privkey,
