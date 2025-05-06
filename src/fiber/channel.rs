@@ -2088,6 +2088,8 @@ where
                             NetworkActorCommand::SendFiberMessage(abort_message),
                         ))
                         .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                } else if reason == StopReason::PeerDisConnected {
+                    state.drop_tlcs_for_peer_disconnect();
                 }
                 myself.stop(None);
             }
@@ -2897,6 +2899,10 @@ impl PendingTlcs {
         self.tlcs.iter_mut()
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &TlcInfo> {
+        self.tlcs.iter()
+    }
+
     pub fn get_next_id(&self) -> u64 {
         self.next_tlc_id
     }
@@ -3010,6 +3016,15 @@ impl TlcState {
                 .tlcs
                 .iter()
                 .find(|tlc| tlc.tlc_id == *tlc_id)
+        }
+    }
+
+    pub fn drop_tlc(&mut self, tlc_id: &TLCId) {
+        debug!("now drop_tlc: {:?}", self.get(tlc_id));
+        if tlc_id.is_offered() {
+            self.offered_tlcs.tlcs.retain(|tlc| tlc.tlc_id != *tlc_id);
+        } else {
+            self.received_tlcs.tlcs.retain(|tlc| tlc.tlc_id != *tlc_id);
         }
     }
 
@@ -4582,6 +4597,45 @@ impl ChannelActorState {
         self.local_pubkey < self.remote_pubkey
     }
 
+    fn drop_tlcs_for_peer_disconnect(&mut self) {
+        let drop_outbound_tlcs: Vec<_> = self
+            .tlc_state
+            .offered_tlcs
+            .iter()
+            .filter_map(|info| {
+                if matches!(info.outbound_status(), OutboundTlcStatus::LocalAnnounced) {
+                    Some(info.tlc_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for tlc_id in drop_outbound_tlcs.iter() {
+            self.tlc_state.drop_tlc(tlc_id);
+        }
+
+        let drop_inbound_tlcs: Vec<_> = self
+            .tlc_state
+            .received_tlcs
+            .iter()
+            .filter_map(|info| {
+                if matches!(
+                    info.inbound_status(),
+                    InboundTlcStatus::RemoteAnnounced | InboundTlcStatus::AnnounceWaitPrevAck
+                ) {
+                    Some(info.tlc_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for tlc_id in drop_inbound_tlcs.iter() {
+            self.tlc_state.drop_tlc(tlc_id);
+        }
+    }
+
     async fn get_or_create_local_channel_announcement_signature(
         &mut self,
         remote_nonce: PubNonce,
@@ -4969,12 +5023,12 @@ impl ChannelActorState {
         } else {
             self.get_next_received_tlc_id()
         };
-        if tlc.tlc_id != next_tlc_id {
-            return Err(ProcessingChannelError::InvalidParameter(format!(
-                "Received tlc id {:?} is not the expected next id {:?}",
-                tlc.tlc_id, next_tlc_id
-            )));
-        }
+        // if tlc.tlc_id != next_tlc_id {
+        //     return Err(ProcessingChannelError::InvalidParameter(format!(
+        //         "Received tlc id {:?} is not the expected next id {:?}",
+        //         tlc.tlc_id, next_tlc_id
+        //     )));
+        // }
         let payment_hash = tlc.payment_hash;
 
         // If all the tlcs with the same payment hash are confirmed to be failed,
@@ -6596,58 +6650,58 @@ impl ChannelActorState {
     fn resend_tlcs_on_reestablish(
         &mut self,
         send_commitment_signed: bool,
-        reestablish_channel: &ReestablishChannel,
+        _reestablish_channel: &ReestablishChannel,
     ) -> ProcessingChannelResult {
         let network = self.network();
         let mut need_commitment_signed = false;
-        let resend_add_tlc_ids: Vec<_> = self
-            .tlc_state
-            .all_tlcs()
-            .filter_map(|info| {
-                if info.is_offered()
-                    && matches!(info.outbound_status(), OutboundTlcStatus::LocalAnnounced)
-                {
-                    Some(info.tlc_id)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // let resend_add_tlc_ids: Vec<_> = self
+        //     .tlc_state
+        //     .all_tlcs()
+        //     .filter_map(|info| {
+        //         if info.is_offered()
+        //             && matches!(info.outbound_status(), OutboundTlcStatus::LocalAnnounced)
+        //         {
+        //             Some(info.tlc_id)
+        //         } else {
+        //             None
+        //         }
+        //     })
+        //     .collect();
 
-        for tlc_id in resend_add_tlc_ids.iter() {
-            self.tlc_state.update_created_at_commitment_numbers(
-                *tlc_id,
-                CommitmentNumbers {
-                    local: reestablish_channel.remote_commitment_number,
-                    remote: reestablish_channel.local_commitment_number,
-                },
-            );
-        }
+        // for tlc_id in resend_add_tlc_ids.iter() {
+        //     self.tlc_state.update_created_at_commitment_numbers(
+        //         *tlc_id,
+        //         CommitmentNumbers {
+        //             local: reestablish_channel.remote_commitment_number,
+        //             remote: reestablish_channel.local_commitment_number,
+        //         },
+        //     );
+        // }
 
         for info in self.tlc_state.all_tlcs() {
             if info.is_offered()
                 && matches!(info.outbound_status(), OutboundTlcStatus::LocalAnnounced)
             {
-                // resend AddTlc message
-                network
-                    .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
-                            self.get_remote_peer_id(),
-                            FiberMessage::add_tlc(AddTlc {
-                                channel_id: self.get_id(),
-                                tlc_id: info.tlc_id.into(),
-                                amount: info.amount,
-                                payment_hash: info.payment_hash,
-                                expiry: info.expiry,
-                                hash_algorithm: info.hash_algorithm,
-                                onion_packet: info.onion_packet.clone(),
-                            }),
-                        )),
-                    ))
-                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                debug_event!(network, "resend add tlc");
+                // // resend AddTlc message
+                // network
+                //     .send_message(NetworkActorMessage::new_command(
+                //         NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
+                //             self.get_remote_peer_id(),
+                //             FiberMessage::add_tlc(AddTlc {
+                //                 channel_id: self.get_id(),
+                //                 tlc_id: info.tlc_id.into(),
+                //                 amount: info.amount,
+                //                 payment_hash: info.payment_hash,
+                //                 expiry: info.expiry,
+                //                 hash_algorithm: info.hash_algorithm,
+                //                 onion_packet: info.onion_packet.clone(),
+                //             }),
+                //         )),
+                //     ))
+                //     .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                // debug_event!(network, "resend add tlc");
 
-                need_commitment_signed = true;
+                // need_commitment_signed = true;
             } else if let Some(remove_reason) = &info.removed_reason {
                 if info.is_received()
                     && matches!(info.inbound_status(), InboundTlcStatus::LocalRemoved)
