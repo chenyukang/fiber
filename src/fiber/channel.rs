@@ -6517,22 +6517,8 @@ impl ChannelActorState {
                             ))
                             .expect(ASSUME_NETWORK_ACTOR_ALIVE);
 
-                        // this check make sure the two parties make symmetric commitment numbers
-                        // after the peer process the revoke_and_ack message and increased his local number
-                        // otherwise this CommitmentSigned peer message will be verified as invalid
-                        if my_waiting_ack
-                            && my_local_commitment_number == peer_remote_commitment_number
-                        {
-                            self.network()
-                                .send_message(NetworkActorMessage::new_command(
-                                    NetworkActorCommand::ControlFiberChannel(
-                                        ChannelCommandWithId {
-                                            channel_id: self.get_id(),
-                                            command: ChannelCommand::CommitmentSigned(),
-                                        },
-                                    ),
-                                ))
-                                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                        if my_waiting_ack {
+                            self.set_waiting_ack(myself, false);
                         }
                     }
                 } else if my_waiting_ack
