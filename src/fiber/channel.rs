@@ -3122,6 +3122,17 @@ impl TlcState {
         tlc.payment_hash
     }
 
+    pub fn update_created_at_commitment_numbers(
+        &mut self,
+        tlc_id: TLCId,
+        numbers: CommitmentNumbers,
+    ) {
+        let tlc_info = self.get_mut(&tlc_id);
+        if let Some(tlc_info) = tlc_info {
+            tlc_info.created_at = numbers;
+        }
+    }
+
     pub fn commitment_signed_tlcs(&self, for_remote: bool) -> impl Iterator<Item = &TlcInfo> + '_ {
         self.offered_tlcs
             .tlcs
@@ -6470,7 +6481,7 @@ impl ChannelActorState {
                 let peer_remote_commitment_number = reestablish_channel.remote_commitment_number;
 
                 warn!(
-                    "peer: {:?} \
+                    "handling reestablish peer: {:?} \
                     local_commitment_number ({:?}, {:?}) \
                     peer_commitment_number ({:?} {:?}) \
                     waiting_ack: {:?}",
@@ -6486,7 +6497,7 @@ impl ChannelActorState {
                 {
                     // commitments are the same, sync up the tlcs
                     self.set_waiting_ack(myself, false);
-                    self.resend_tlcs_on_reestablish(false)?;
+                    self.resend_tlcs_on_reestablish(false, reestablish_channel)?;
 
                     // there is a scenario that two peers are both in WaitingAck state
                     // and if two parties send CommitmentSigned message to each other there maybe be a Musig2VerifyError
@@ -6506,7 +6517,7 @@ impl ChannelActorState {
                     // peer need ACK, I need to send my revoke_and_ack message
                     // don't clear my waiting_ack flag here, since if i'm waiting for peer ack,
                     // peer will resend commitment_signed message
-                    self.resend_tlcs_on_reestablish(false)?;
+                    self.resend_tlcs_on_reestablish(false, reestablish_channel)?;
                     if let Some(last_revoke_ack_msg) = self.last_revoke_ack_msg.clone() {
                         self.network()
                             .send_message(NetworkActorMessage::new_command(
@@ -6539,7 +6550,7 @@ impl ChannelActorState {
                     && my_local_commitment_number == peer_remote_commitment_number
                 {
                     // I need to resend my commitment_signed message, don't clear my WaitingTlcAck flag
-                    self.resend_tlcs_on_reestablish(true)?;
+                    self.resend_tlcs_on_reestablish(true, reestablish_channel)?;
                 } else {
                     error!(
                         "peer: {:?} unexpected_commitnumbers",
@@ -6561,9 +6572,40 @@ impl ChannelActorState {
         Ok(())
     }
 
-    fn resend_tlcs_on_reestablish(&self, send_commitment_signed: bool) -> ProcessingChannelResult {
+    fn resend_tlcs_on_reestablish(
+        &mut self,
+        send_commitment_signed: bool,
+        reestablish_channel: &ReestablishChannel,
+    ) -> ProcessingChannelResult {
         let network = self.network();
         let mut need_commitment_signed = false;
+
+        // reset TLC created_at commitment numbers, because the peer may have
+        // different commitment numbers than us, maybe need a better way to resolve this issue
+        let resend_add_tlc_ids: Vec<_> = self
+            .tlc_state
+            .all_tlcs()
+            .filter_map(|info| {
+                if info.is_offered()
+                    && matches!(info.outbound_status(), OutboundTlcStatus::LocalAnnounced)
+                {
+                    Some(info.tlc_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for tlc_id in resend_add_tlc_ids.iter() {
+            self.tlc_state.update_created_at_commitment_numbers(
+                *tlc_id,
+                CommitmentNumbers {
+                    local: reestablish_channel.remote_commitment_number,
+                    remote: reestablish_channel.local_commitment_number,
+                },
+            );
+        }
+
         for info in self.tlc_state.all_tlcs() {
             if info.is_offered()
                 && matches!(info.outbound_status(), OutboundTlcStatus::LocalAnnounced)
