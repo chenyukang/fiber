@@ -26,7 +26,7 @@ use tentacle::secio::PeerId;
 
 #[derive(Clone, Debug)]
 pub struct Store {
-    pub(crate) db: Arc<DB>,
+    pub db: Arc<DB>,
 }
 
 #[derive(Copy, Clone)]

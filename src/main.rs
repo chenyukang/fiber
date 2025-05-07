@@ -1,10 +1,18 @@
 use ckb_chain_spec::ChainSpec;
 use ckb_resource::Resource;
 use core::default::Default;
+pub use fiber_v020::fiber::graph::PaymentSession as OldPaymentSessionV020;
+pub use fiber_v021::fiber::graph::PaymentSession as OldPaymentSessionV021;
+pub use fiber_v030::fiber::graph::PaymentSession as OldPaymentSessionV030;
+pub use fiber_v031::fiber::graph::PaymentSession as OldPaymentSessionV031;
+pub use fiber_v040::fiber::graph::PaymentSession as OldPaymentSessionV040;
+use fnn::fiber::graph::PaymentSession as OldPaymentSessionV050;
+
 use fnn::actors::RootActor;
 use fnn::cch::CchMessage;
 use fnn::ckb::contracts::TypeIDResolver;
 use fnn::ckb::{contracts::try_init_contracts_context, CkbChainActor};
+use fnn::fiber::graph::PaymentSession;
 use fnn::fiber::{channel::ChannelSubscribers, graph::NetworkGraph, network::init_chain_hash};
 use fnn::store::Store;
 use fnn::tasks::{
@@ -17,6 +25,7 @@ use fnn::watchtower::{
 use fnn::NetworkServiceEvent;
 use fnn::{start_cch, start_network, start_rpc, Config};
 use ractor::Actor;
+use rocksdb::ops::Iterate;
 #[cfg(debug_assertions)]
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -29,6 +38,19 @@ use tracing::{debug, info, info_span, trace};
 use tracing_subscriber::{field::MakeExt, fmt, fmt::format, EnvFilter};
 
 pub struct ExitMessage(String);
+
+fn try_deserialize_payment_session<T: serde::de::DeserializeOwned + std::fmt::Debug>(
+    version_name: &str,
+    data: &[u8],
+) -> Result<(), ()> {
+    match bincode::deserialize::<T>(data) {
+        Ok(_) => {
+            eprintln!("deserialization ok {} ok", version_name);
+            Ok(())
+        }
+        Err(_) => Err(()),
+    }
+}
 
 #[tokio::main]
 pub async fn main() -> Result<(), ExitMessage> {
@@ -73,6 +95,30 @@ pub async fn main() -> Result<(), ExitMessage> {
         .store_path();
 
     let store = Store::new(store_path).map_err(|err| ExitMessage(err.to_string()))?;
+
+    info!("migrate PaymentSession ...");
+    const PAYMENT_SESSION_PREFIX: u8 = 192;
+    let prefix = vec![PAYMENT_SESSION_PREFIX];
+
+    for (k, v) in store
+        .db
+        .prefix_iterator(prefix.as_slice())
+        .take_while(|(col_key, _)| col_key.starts_with(prefix.as_slice()))
+    {
+        if try_deserialize_payment_session::<OldPaymentSessionV020>("v020", &v).is_ok()
+            || try_deserialize_payment_session::<OldPaymentSessionV021>("v021", &v).is_ok()
+            || try_deserialize_payment_session::<OldPaymentSessionV030>("v030", &v).is_ok()
+            || try_deserialize_payment_session::<OldPaymentSessionV031>("v031", &v).is_ok()
+            || try_deserialize_payment_session::<OldPaymentSessionV040>("v040", &v).is_ok()
+            || try_deserialize_payment_session::<OldPaymentSessionV050>("v050", &v).is_ok()
+        {
+            continue;
+        }
+
+        eprintln!("Failed to deserialize payment session");
+        // eprintln!("k: {:?} v: {:?}", k, v);
+    }
+    return Ok(());
 
     let tracker = new_tokio_task_tracker();
     let token = new_tokio_cancellation_token();
