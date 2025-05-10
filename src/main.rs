@@ -379,7 +379,7 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
-    use fnn::fiber::network::PeerInfo;
+    use fnn::fiber::{network::PeerInfo, types::NodeAnnouncement};
     use fnn::store::Store;
     use ratatui::{
         backend::CrosstermBackend,
@@ -410,14 +410,15 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
             .fiber
             .as_ref()
             .map(|f| Pubkey::from(f.public_key()).tentacle_peer_id());
-
-        eprintln!("local_peer_id: {:?}", local_peer_id);
         if let Some(peer_id) = local_peer_id {
             store.list_peers(&peer_id)
         } else {
             Vec::new()
         }
     };
+
+    // Get node info (NodeAnnouncement)
+    let nodes: Vec<NodeAnnouncement> = store.list_nodes();
 
     // Setup terminal
     enable_raw_mode().map_err(|e| ExitMessage(format!("Failed to enable raw mode: {e}")))?;
@@ -429,34 +430,65 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
         .map_err(|e| ExitMessage(format!("Failed to create terminal: {e}")))?;
 
     let res = (|| {
+        let mut show_nodes = false;
         loop {
             terminal.draw(|f| {
                 let size = f.size();
                 let block = Block::default()
-                    .title(format!("Connected Peers ({} peers)", peers.len()))
-                    .borders(Borders::ALL);
-                let items: Vec<ListItem> = peers
-                    .iter()
-                    .map(|peer| {
-                        let addr_str = peer
-                            .addresses
-                            .iter()
-                            .map(|a| a.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        ListItem::new(format!(
-                            "{}\n  PeerId: {}\n  Addrs: {}",
-                            peer.pubkey, peer.peer_id, addr_str
-                        ))
+                    .title(if show_nodes {
+                        format!("Known Nodes ({} nodes) - Press 'p' for peers", nodes.len())
+                    } else {
+                        format!(
+                            "Connected Peers ({} peers) - Press 'n' for nodes",
+                            peers.len()
+                        )
                     })
-                    .collect();
+                    .borders(Borders::ALL);
+                let items: Vec<ListItem> = if show_nodes {
+                    nodes
+                        .iter()
+                        .map(|node| {
+                            let addr_str = node
+                                .addresses
+                                .iter()
+                                .map(|a| a.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            ListItem::new(format!(
+                                "{}\n  PeerId: {}\n  Addrs: {}",
+                                node.node_name,
+                                node.peer_id(),
+                                addr_str
+                            ))
+                        })
+                        .collect()
+                } else {
+                    peers
+                        .iter()
+                        .map(|peer| {
+                            let addr_str = peer
+                                .addresses
+                                .iter()
+                                .map(|a| a.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            ListItem::new(format!(
+                                "{}\n  PeerId: {}\n  Addrs: {}",
+                                peer.pubkey, peer.peer_id, addr_str
+                            ))
+                        })
+                        .collect()
+                };
                 let list = List::new(items).block(block);
                 f.render_widget(list, size);
             })?;
             if event::poll(std::time::Duration::from_millis(200))? {
                 if let Event::Key(key) = event::read()? {
-                    if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
-                        break;
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        KeyCode::Char('n') => show_nodes = true,
+                        KeyCode::Char('p') => show_nodes = false,
+                        _ => {}
                     }
                 }
             }

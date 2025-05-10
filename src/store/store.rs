@@ -9,7 +9,9 @@ use crate::{
         graph::{NetworkGraphStateStore, PaymentSession, PaymentSessionStatus},
         history::{Direction, TimedResult},
         network::{NetworkActorStateStore, PaymentCustomRecords, PersistentNetworkActorState},
-        types::{BroadcastMessage, BroadcastMessageID, Cursor, Hash256, CURSOR_SIZE},
+        types::{
+            BroadcastMessage, BroadcastMessageID, Cursor, Hash256, NodeAnnouncement, CURSOR_SIZE,
+        },
     },
     invoice::{CkbInvoice, CkbInvoiceStatus, InvoiceError, InvoiceStore},
     watchtower::{ChannelData, WatchtowerStore},
@@ -271,6 +273,24 @@ impl Store {
         } else {
             return Vec::new();
         }
+    }
+
+    /// List all known nodes (from PersistentNetworkActorState in the store).
+    /// Returns a Vec<PeerInfo> for all known nodes.
+    pub fn list_nodes(&self) -> Vec<NodeAnnouncement> {
+        let prefix = [BROADCAST_MESSAGE_PREFIX];
+        let mut result = Vec::new();
+        for (_key, value) in self.prefix_iterator(&prefix) {
+            let broadcast_message: BroadcastMessage =
+                deserialize_from(value.as_ref(), "BroadcastMessage");
+            match broadcast_message {
+                BroadcastMessage::NodeAnnouncement(node) => {
+                    result.push(node);
+                }
+                _ => {}
+            }
+        }
+        result
     }
 }
 
