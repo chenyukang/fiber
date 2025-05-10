@@ -11,6 +11,7 @@ use fnn::ckb::contracts::TypeIDResolver;
 use fnn::ckb::contracts::{get_cell_deps, Contract};
 use fnn::ckb::{contracts::try_init_contracts_context, CkbChainActor};
 use fnn::config::{Args, Config};
+#[cfg(feature = "gui")]
 use fnn::fiber::types::Pubkey;
 use fnn::fiber::{channel::ChannelSubscribers, graph::NetworkGraph, network::init_chain_hash};
 use fnn::store::Store;
@@ -74,13 +75,13 @@ pub async fn main() -> Result<(), ExitMessage> {
     let _span = info_span!("node", node = fnn::get_node_prefix()).entered();
 
     let mut args = Args::parse();
-    let gui = args.gui;
     let config = Config::parse(&mut args);
-
-    eprintln!("config: {:?} gui: {:?}", config.fiber.is_some(), gui);
     #[cfg(feature = "gui")]
-    if config.fiber.is_some() && gui {
-        return tui_show_peers(&config);
+    {
+        let gui = args.gui;
+        if config.fiber.is_some() && gui {
+            return tui_show_peers(&config);
+        }
     }
 
     let store_path = config
@@ -431,6 +432,9 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
 
     let res = (|| {
         let mut show_nodes = false;
+        let mut selected_idx = 0usize;
+        let mut show_detail = false;
+        let mut list_state = ratatui::widgets::ListState::default();
         loop {
             terminal.draw(|f| {
                 let size = f.size();
@@ -491,22 +495,193 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
                         })
                         .collect()
                 };
-                let list = List::new(items).block(block);
-                f.render_widget(list, size);
+                let list = List::new(items).block(block).highlight_symbol("▶ ");
+                // Draw the list with highlight
+                list_state.select(Some(selected_idx));
+                f.render_stateful_widget(list, size, &mut list_state);
+
+                // If show_detail, draw a popup
+                if show_detail {
+                    use ratatui::layout::Alignment;
+                    use ratatui::style::{Color, Style};
+                    use ratatui::text::{Line, Span, Text};
+                    use ratatui::widgets::{Clear, Paragraph, Wrap};
+                    let (title, detail_lines): (&str, Vec<Line>) = if show_nodes {
+                        let node = nodes.get(selected_idx).unwrap();
+                        let mut detail_lines = vec![
+                            Line::from(vec![
+                                Span::styled("Node Name: ", Style::default().fg(Color::Green)),
+                                Span::raw(format!("{}", node.node_name)),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("PeerId: ", Style::default().fg(Color::Green)),
+                                Span::raw(format!("{}", node.peer_id())),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("Addresses: ", Style::default().fg(Color::Green)),
+                                Span::raw(
+                                    node.addresses
+                                        .iter()
+                                        .map(|a| a.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                ),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("Chain Hash: ", Style::default().fg(Color::Green)),
+                                Span::raw(format!("{:?}", node.chain_hash)),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("Timestamp: ", Style::default().fg(Color::Green)),
+                                Span::raw(format!("{}", node.timestamp)),
+                            ]),
+                            Line::from(vec![
+                                Span::styled(
+                                    "Auto Accept Min CKB: ",
+                                    Style::default().fg(Color::Green),
+                                ),
+                                Span::raw(format!("{}", node.auto_accept_min_ckb_funding_amount)),
+                            ]),
+                        ];
+                        // UDT Cfg Infos
+                        let mut udt_lines = vec![];
+                        let udt_cfg_infos = &node.udt_cfg_infos;
+                        for (i, udt) in udt_cfg_infos.0.iter().enumerate() {
+                            if i == 0 {
+                                udt_lines.push(Line::from(vec![Span::styled(
+                                    "UDT Cfg Infos:",
+                                    Style::default().fg(Color::Green),
+                                )]));
+                            }
+                            udt_lines.push(Line::from(vec![
+                                Span::raw("    - "),
+                                Span::styled("name: ", Style::default().fg(Color::Green)),
+                                Span::raw(format!("{:<7}", udt.name)),
+                                Span::raw("  "),
+                                Span::styled("hash_type: ", Style::default().fg(Color::Green)),
+                                Span::raw(format!("{:<7}", format!("{:?}", udt.script.hash_type))),
+                                Span::raw("  "),
+                                Span::styled(
+                                    "auto_accept_amount: ",
+                                    Style::default().fg(Color::Green),
+                                ),
+                                Span::raw(format!(
+                                    "{:<15}",
+                                    format!("{:?}", udt.auto_accept_amount)
+                                )),
+                            ]));
+                        }
+                        detail_lines.extend(udt_lines);
+                        ("Node Detail", detail_lines)
+                    } else {
+                        let peer = peers.get(selected_idx).unwrap();
+                        let detail_lines = vec![
+                            Line::from(vec![
+                                Span::styled("Pubkey: ", Style::default().fg(Color::Green)),
+                                Span::raw(format!("{}", peer.pubkey)),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("PeerId: ", Style::default().fg(Color::Green)),
+                                Span::raw(format!("{}", peer.peer_id)),
+                            ]),
+                            Line::from(vec![
+                                Span::styled("Addresses: ", Style::default().fg(Color::Green)),
+                                Span::raw(
+                                    peer.addresses
+                                        .iter()
+                                        .map(|a| a.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", "),
+                                ),
+                            ]),
+                        ];
+                        ("Peer Detail", detail_lines)
+                    };
+                    let popup_area = centered_rect(60, 40, size);
+                    f.render_widget(Clear, popup_area); // clear the area
+                    let para = Paragraph::new(Text::from(detail_lines))
+                        .block(
+                            Block::default()
+                                .title(title)
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(Color::Yellow)),
+                        )
+                        .alignment(Alignment::Left)
+                        .wrap(Wrap { trim: true });
+                    f.render_widget(para, popup_area);
+                }
             })?;
             if event::poll(std::time::Duration::from_millis(200))? {
                 if let Event::Key(key) = event::read()? {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break,
-                        KeyCode::Char('n') => show_nodes = true,
-                        KeyCode::Char('p') => show_nodes = false,
-                        _ => {}
+                    if show_detail {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
+                                show_detail = false
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => break,
+                            KeyCode::Char('n') => {
+                                show_nodes = true;
+                                selected_idx = 0;
+                            }
+                            KeyCode::Char('p') => {
+                                show_nodes = false;
+                                selected_idx = 0;
+                            }
+                            KeyCode::Down => {
+                                let len = if show_nodes { nodes.len() } else { peers.len() };
+                                if selected_idx + 1 < len {
+                                    selected_idx += 1;
+                                }
+                            }
+                            KeyCode::Up => {
+                                if selected_idx > 0 {
+                                    selected_idx -= 1;
+                                }
+                            }
+                            KeyCode::Enter => {
+                                let len = if show_nodes { nodes.len() } else { peers.len() };
+                                if len > 0 {
+                                    show_detail = true;
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
         }
         Ok(())
     })();
+
+    // Helper for popup area
+    fn centered_rect(
+        percent_x: u16,
+        percent_y: u16,
+        r: ratatui::layout::Rect,
+    ) -> ratatui::layout::Rect {
+        let popup_layout = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Vertical)
+            .constraints([
+                ratatui::layout::Constraint::Percentage((100 - percent_y) / 2),
+                ratatui::layout::Constraint::Percentage(percent_y),
+                ratatui::layout::Constraint::Percentage((100 - percent_y) / 2),
+            ])
+            .split(r);
+        let vertical = popup_layout[1];
+        let popup_layout = ratatui::layout::Layout::default()
+            .direction(ratatui::layout::Direction::Horizontal)
+            .constraints([
+                ratatui::layout::Constraint::Percentage((100 - percent_x) / 2),
+                ratatui::layout::Constraint::Percentage(percent_x),
+                ratatui::layout::Constraint::Percentage((100 - percent_x) / 2),
+            ])
+            .split(vertical);
+        popup_layout[1]
+    }
 
     // Restore terminal
     disable_raw_mode().ok();
