@@ -59,7 +59,7 @@ impl FromStr for Service {
         option_env!("GIT_COMMIT_HASH").unwrap_or("unknown"),
         option_env!("GIT_COMMIT_DATE").unwrap_or("unknown")),
     about)]
-struct Args {
+pub struct Args {
     // We want to differentiate between when it is a user-set value or it is the default value.
     // If the user has not set default value but set `base_dir` instead then we will use `config.yml`,
     // under base dir.
@@ -90,6 +90,11 @@ struct Args {
     /// config for ckb
     #[command(flatten)]
     pub ckb: <CkbConfig as ClapSerde>::Opt,
+
+    // ========== GUI Option ==========
+    #[cfg(feature = "gui")]
+    #[arg(long, default_value_t = false, help = "Show peer info in TUI")]
+    pub gui: bool,
 }
 
 #[derive(Deserialize)]
@@ -124,9 +129,9 @@ pub(crate) fn print_help_and_exit(code: i32) {
 }
 
 impl Config {
-    pub fn parse() -> Self {
+    pub fn parse(args: &mut Args) -> Self {
         // Parse whole args with clap
-        let mut args = Args::parse();
+        //let mut args = Args::parse();
 
         // Base directory for all things to be stored to disk
         let base_dir = args.base_dir.clone().unwrap_or(get_default_base_dir());
@@ -137,7 +142,11 @@ impl Config {
         // 3. Using the default `config.yml` file
         let config_file = args
             .config_file
-            .or(args.base_dir.map(|x| x.join(DEFAULT_CONFIG_FILE_NAME)))
+            .clone()
+            .or(args
+                .base_dir
+                .clone()
+                .map(|x| x.join(DEFAULT_CONFIG_FILE_NAME)))
             .unwrap_or(get_default_config_file());
 
         let config_from_file = File::open(config_file).map(BufReader::new).map(|f| {
@@ -156,7 +165,7 @@ impl Config {
                 .and_then(|x| x.services.clone())
                 .unwrap_or_default()
         } else {
-            args.services
+            args.services.clone()
         };
 
         if services.is_empty() {

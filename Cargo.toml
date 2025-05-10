@@ -70,10 +70,13 @@ bitmask-enum = "2.2.5"
 either = "1.15.0"
 aes-gcm = "0.10"
 scrypt = "0.11"
+ratatui = { version = "0.26", optional = true }
+crossterm = { version = "0.27", optional = true }
 
 [features]
 default = []
 portable = ["rocksdb/portable"]
+gui = ["ratatui", "crossterm"]
 
 [profile.release]
 panic = "abort"

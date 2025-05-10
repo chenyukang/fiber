@@ -1,12 +1,17 @@
 use ckb_chain_spec::ChainSpec;
 use ckb_resource::Resource;
+use clap::Parser;
 use core::default::Default;
+#[cfg(feature = "gui")]
+use crossterm::execute;
 use fnn::actors::RootActor;
 use fnn::cch::CchMessage;
 use fnn::ckb::contracts::TypeIDResolver;
 #[cfg(debug_assertions)]
 use fnn::ckb::contracts::{get_cell_deps, Contract};
 use fnn::ckb::{contracts::try_init_contracts_context, CkbChainActor};
+use fnn::config::{Args, Config};
+use fnn::fiber::types::Pubkey;
 use fnn::fiber::{channel::ChannelSubscribers, graph::NetworkGraph, network::init_chain_hash};
 use fnn::store::Store;
 use fnn::tasks::{
@@ -17,7 +22,7 @@ use fnn::watchtower::{
 };
 #[cfg(debug_assertions)]
 use fnn::NetworkServiceEvent;
-use fnn::{start_cch, start_network, start_rpc, Config};
+use fnn::{start_cch, start_network, start_rpc};
 use ractor::Actor;
 #[cfg(debug_assertions)]
 use std::collections::HashMap;
@@ -68,7 +73,15 @@ pub async fn main() -> Result<(), ExitMessage> {
 
     let _span = info_span!("node", node = fnn::get_node_prefix()).entered();
 
-    let config = Config::parse();
+    let mut args = Args::parse();
+    let gui = args.gui;
+    let config = Config::parse(&mut args);
+
+    eprintln!("config: {:?} gui: {:?}", config.fiber.is_some(), gui);
+    #[cfg(feature = "gui")]
+    if config.fiber.is_some() && gui {
+        return tui_show_peers(&config);
+    }
 
     let store_path = config
         .fiber
@@ -357,4 +370,102 @@ async fn signal_listener() {
         .await
         .expect("listen for Ctrl-c signal");
     tracing::info!("Ctrl-c received, shutting down");
+}
+
+#[cfg(feature = "gui")]
+fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
+    use crossterm::{
+        event::{self, Event, KeyCode},
+        execute,
+        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    };
+    use fnn::fiber::network::PeerInfo;
+    use fnn::store::Store;
+    use ratatui::{
+        backend::CrosstermBackend,
+        widgets::{Block, Borders, List, ListItem},
+        Terminal,
+    };
+    use std::io::{self};
+
+    // Load store from config
+    let store_path = config
+        .fiber
+        .as_ref()
+        .ok_or_else(|| ExitMessage("fiber config is required but absent".to_string()))?
+        .store_path();
+    eprintln!("now store_path: {:?}", store_path);
+    let store = Store::new(store_path).map_err(|err| ExitMessage(err.to_string()))?;
+
+    let fiber_config = config.fiber.as_ref();
+    eprintln!("fiber_config: {:?}", fiber_config);
+    let pubkey = fiber_config
+        .as_ref()
+        .map(|f| Pubkey::from(f.public_key()).tentacle_peer_id());
+    eprintln!("pubkey: {:?}", pubkey);
+
+    // Get peer info
+    let peers: Vec<PeerInfo> = {
+        let local_peer_id = config
+            .fiber
+            .as_ref()
+            .map(|f| Pubkey::from(f.public_key()).tentacle_peer_id());
+
+        eprintln!("local_peer_id: {:?}", local_peer_id);
+        if let Some(peer_id) = local_peer_id {
+            store.list_peers(&peer_id)
+        } else {
+            Vec::new()
+        }
+    };
+
+    // Setup terminal
+    enable_raw_mode().map_err(|e| ExitMessage(format!("Failed to enable raw mode: {e}")))?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)
+        .map_err(|e| ExitMessage(format!("Failed to enter alt screen: {e}")))?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)
+        .map_err(|e| ExitMessage(format!("Failed to create terminal: {e}")))?;
+
+    let res = (|| {
+        loop {
+            terminal.draw(|f| {
+                let size = f.size();
+                let block = Block::default()
+                    .title(format!("Connected Peers ({} peers)", peers.len()))
+                    .borders(Borders::ALL);
+                let items: Vec<ListItem> = peers
+                    .iter()
+                    .map(|peer| {
+                        let addr_str = peer
+                            .addresses
+                            .iter()
+                            .map(|a| a.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        ListItem::new(format!(
+                            "{}\n  PeerId: {}\n  Addrs: {}",
+                            peer.pubkey, peer.peer_id, addr_str
+                        ))
+                    })
+                    .collect();
+                let list = List::new(items).block(block);
+                f.render_widget(list, size);
+            })?;
+            if event::poll(std::time::Duration::from_millis(200))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    // Restore terminal
+    disable_raw_mode().ok();
+    execute!(io::stdout(), LeaveAlternateScreen).ok();
+    res.map_err(|e: std::io::Error| ExitMessage(format!("TUI error: {e}")))
 }

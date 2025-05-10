@@ -245,6 +245,33 @@ impl Store {
             Err(errors.join("\n"))
         }
     }
+
+    /// List all peers for the given local peer_id (usually self).
+    /// Returns a Vec<PeerInfo> for all known peers of this node.
+    pub fn list_peers(
+        &self,
+        local_peer_id: &tentacle::secio::PeerId,
+    ) -> Vec<crate::fiber::network::PeerInfo> {
+        use crate::fiber::network::PeerInfo;
+
+        if let Some(state) = self.get_network_actor_state(local_peer_id) {
+            // For each peer_pubkey_map entry, build PeerInfo
+            state
+                .peer_pubkey_map
+                .iter()
+                .map(|(peer_id, pubkey)| {
+                    let addresses = state.get_peer_addresses(peer_id);
+                    PeerInfo {
+                        pubkey: *pubkey,
+                        peer_id: peer_id.clone(),
+                        addresses,
+                    }
+                })
+                .collect()
+        } else {
+            return Vec::new();
+        }
+    }
 }
 
 pub struct Batch {

@@ -375,6 +375,14 @@ impl Pubkey {
     }
 }
 
+impl std::fmt::Display for crate::fiber::types::Pubkey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use hex::ToHex;
+        let bytes = self.serialize();
+        write!(f, "0x{}", bytes.encode_hex::<String>())
+    }
+}
+
 #[derive(Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct EcdsaSignature(pub Secp256k1Signature);
 
@@ -1512,14 +1520,10 @@ const UPDATE: u16 = 0x1000;
     Debug,
     Copy,
     Clone,
-    Serialize,
-    Deserialize,
-    PartialEq,
-    Eq,
-    AsRefStr,
-    EnumString,
-    TryFromPrimitive,
-    IntoPrimitive,
+    Serialize, Deserialize,
+    PartialEq, Eq,
+    AsRefStr, EnumString,
+    TryFromPrimitive, IntoPrimitive,
 )]
 pub enum TlcErrorCode {
     TemporaryNodeFailure = NODE | 2,

@@ -2254,11 +2254,11 @@ pub struct NetworkActorState<S> {
 }
 
 #[serde_as]
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Default, Clone, Serialize, Deserialize, Debug)]
 pub struct PersistentNetworkActorState {
     // This map is used to store the public key of the peer.
     #[serde_as(as = "Vec<(DisplayFromStr, _)>")]
-    peer_pubkey_map: HashMap<PeerId, Pubkey>,
+    pub peer_pubkey_map: HashMap<PeerId, Pubkey>,
     // These addresses are saved by the user (e.g. the user sends a ConnectPeer rpc to the node),
     // we will then save these addresses to the peer store.
     #[serde_as(as = "Vec<(DisplayFromStr, _)>")]
@@ -2270,7 +2270,11 @@ impl PersistentNetworkActorState {
         Default::default()
     }
 
-    fn get_peer_addresses(&self, peer_id: &PeerId) -> Vec<Multiaddr> {
+    pub fn peer_pubkey_map(&self) -> &HashMap<PeerId, Pubkey> {
+        &self.peer_pubkey_map
+    }
+
+    pub fn get_peer_addresses(&self, peer_id: &PeerId) -> Vec<Multiaddr> {
         self.saved_peer_addresses
             .get(peer_id)
             .cloned()
@@ -3511,10 +3515,13 @@ where
             debug!("Tentacle service stopped");
         });
 
+        eprintln!("now my_peer_id: {:?}", my_peer_id);
         let mut state_to_be_persisted = self
             .store
             .get_network_actor_state(&my_peer_id)
             .unwrap_or_default();
+
+        eprintln!("now state_to_be_persisted: {:?}", state_to_be_persisted);
 
         for bootnode in &config.bootnode_addrs {
             let addr = Multiaddr::from_str(bootnode.as_str()).expect("valid bootnode");

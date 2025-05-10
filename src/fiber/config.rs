@@ -85,11 +85,11 @@ pub struct FiberConfig {
         env,
         help = "base directory for fiber [default: $BASE_DIR/fiber]"
     )]
-    pub(crate) base_dir: Option<PathBuf>,
+    pub base_dir: Option<PathBuf>,
 
     /// listening address for fiber network [default: "/ip4/0.0.0.0/tcp/0" (random tcp port)]
     #[arg(name = "FIBER_LISTENING_ADDR", long = "fiber-listening-addr", env)]
-    pub(crate) listening_addr: Option<String>,
+    pub listening_addr: Option<String>,
 
     /// whether to announce listening address [default: false]
     #[arg(
@@ -97,7 +97,7 @@ pub struct FiberConfig {
         long = "fiber-announce-listening-addr",
         env
     )]
-    pub(crate) announce_listening_addr: Option<bool>,
+    pub announce_listening_addr: Option<bool>,
 
     /// whether to announce or process private address, this should be set to false unless you are running a private network or testing [default: false]
     #[arg(
@@ -105,11 +105,11 @@ pub struct FiberConfig {
         long = "fiber-announce-private-addr",
         env
     )]
-    pub(crate) announce_private_addr: Option<bool>,
+    pub announce_private_addr: Option<bool>,
 
     /// addresses to be announced to fiber network (separated by `,`)
     #[arg(name = "FIBER_ANNOUNCED_ADDRS", long = "fiber-announced-addrs", env, value_parser, num_args = 0.., value_delimiter = ',')]
-    pub(crate) announced_addrs: Vec<String>,
+    pub announced_addrs: Vec<String>,
 
     /// bootstrap node addresses to be connected at startup (separated by `,`)
     #[arg(name = "FIBER_BOOTNODE_ADDRS", long = "fiber-bootnode-addrs", env, value_parser, num_args = 0.., value_delimiter = ',')]
@@ -121,7 +121,7 @@ pub struct FiberConfig {
         long = "fiber-announced-node-name",
         env
     )]
-    pub(crate) announced_node_name: Option<AnnouncedNodeName>,
+    pub announced_node_name: Option<AnnouncedNodeName>,
 
     /// chain spec file path, can be "mainnet", "testnet", or a file path to a custom chain spec
     #[arg(name = "FIBER_CHAIN", long = "fiber-chain", env)]
@@ -193,7 +193,7 @@ pub struct FiberConfig {
         env,
         help = "The interval to reannounce NodeAnnouncement, in seconds. 0 means never reannounce. [default: 3600 (1 hour)]"
     )]
-    pub(crate) announce_node_interval_seconds: Option<u64>,
+    pub announce_node_interval_seconds: Option<u64>,
 
     /// Gossip network maintenance interval, in milli-seconds. [default: 60000]
     /// This is the interval to maintain the gossip network, including connecting to more peers, etc.
@@ -203,7 +203,7 @@ pub struct FiberConfig {
         env,
         help = "Gossip network maintenance interval, in milli-seconds. [default: 60000]"
     )]
-    pub(crate) gossip_network_maintenance_interval_ms: Option<u64>,
+    pub gossip_network_maintenance_interval_ms: Option<u64>,
 
     /// Maximal number of inbound connections. The node will disconnect inbound connections
     /// when the number of inbound connection exceeds this number. [default: 16]
@@ -213,7 +213,7 @@ pub struct FiberConfig {
         env,
         help = "Maximal number of inbound connections. The node will disconnect inbound connections when the number of inbound connection exceeds this number. [default: 16]"
     )]
-    pub(crate) max_inbound_peers: Option<usize>,
+    pub max_inbound_peers: Option<usize>,
 
     /// Minimal number of outbound connections. The node will try to connect to more peers
     /// when the number of outbound connection is less than this number. [default: 8]
@@ -223,7 +223,7 @@ pub struct FiberConfig {
         env,
         help = "Minimal number of outbound connections. The node will try to connect to more peers when the number of outbound connection is less than this number. [default: 8]"
     )]
-    pub(crate) min_outbound_peers: Option<usize>,
+    pub min_outbound_peers: Option<usize>,
 
     /// Gossip store maintenance interval, in milli-seconds. [default: 20000]
     /// This is the interval to maintain the gossip store, including saving messages whose complete dependencies
@@ -234,7 +234,7 @@ pub struct FiberConfig {
         env,
         help = "Gossip store maintenance interval, in milli-seconds. [default: 20000]"
     )]
-    pub(crate) gossip_store_maintenance_interval_ms: Option<u64>,
+    pub gossip_store_maintenance_interval_ms: Option<u64>,
 
     /// Gossip network num targeted active syncing peers. [default: None]
     /// This is the number of peers to target for active syncing. This is the number of peers that we will
@@ -247,7 +247,7 @@ pub struct FiberConfig {
         env,
         help = "Gossip network num targeted active syncing peers. [default: None]"
     )]
-    pub(crate) gossip_network_num_targeted_active_syncing_peers: Option<usize>,
+    pub gossip_network_num_targeted_active_syncing_peers: Option<usize>,
 
     /// Gossip network num targeted outbound passive syncing peers. [default: None]
     /// This is the number of peers to target for outbound passive syncing. This is the number of outbound peers
@@ -261,7 +261,7 @@ pub struct FiberConfig {
         env,
         help = "Gossip network num targeted outbound passive syncing peers. [default: None]"
     )]
-    pub(crate) gossip_network_num_targeted_outbound_passive_syncing_peers: Option<usize>,
+    pub gossip_network_num_targeted_outbound_passive_syncing_peers: Option<usize>,
 
     /// Whether to sync the network graph from the network. [default: true]
     #[arg(
@@ -270,7 +270,7 @@ pub struct FiberConfig {
         env,
         help = "Whether to sync the network graph from the network. [default: true]"
     )]
-    pub(crate) sync_network_graph: Option<bool>,
+    pub sync_network_graph: Option<bool>,
 
     /// The interval to check watchtower, in seconds. 0 means never check. [default: 60 (1 minute)]
     #[arg(
