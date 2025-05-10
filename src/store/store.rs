@@ -45,6 +45,22 @@ enum ChannelTimestamp {
 // TODO: previous implementation accidentally used BroadcastMessageID::ChannelUpdate as the key
 // for the channel updates timestamps. I have fixed it here by using the same key as the channel
 // announcement. This is a breaking change, we need migration for this.
+
+// When rendering the TUI for nodes and peers, highlight the first row in green.
+// For example, in your TUI rendering code (main.rs), when iterating rows:
+//
+// for (i, row) in rows.iter().enumerate() {
+//     if i == 0 {
+//         // set style to green for the first row
+//     } else {
+//         // normal style
+//     }
+// }
+//
+// If using ratatui, you can use .style(Style::default().fg(Color::Green)) for the first row.
+//
+// This is a comment for guidance; actual code should be in main.rs where the TUI is rendered.
+
 pub(crate) fn get_channel_timestamps_key(outpoint: &OutPoint) -> Vec<u8> {
     BroadcastMessageID::ChannelAnnouncement(outpoint.clone())
         .to_bytes()

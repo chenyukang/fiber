@@ -454,12 +454,17 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
                                 .map(|a| a.to_string())
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            ListItem::new(format!(
-                                "{}\n  PeerId: {}\n  Addrs: {}",
-                                node.node_name,
-                                node.peer_id(),
-                                addr_str
-                            ))
+                            use ratatui::style::{Color, Style};
+                            use ratatui::text::{Line, Span};
+                            let lines = vec![
+                                Line::from(vec![Span::styled(
+                                    format!("{}", node.node_name),
+                                    Style::default().fg(Color::Green),
+                                )]),
+                                Line::raw(format!("  PeerId: {}", node.peer_id())),
+                                Line::raw(format!("  Addrs: {}", addr_str)),
+                            ];
+                            ListItem::new(lines)
                         })
                         .collect()
                 } else {
@@ -472,10 +477,17 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
                                 .map(|a| a.to_string())
                                 .collect::<Vec<_>>()
                                 .join(", ");
-                            ListItem::new(format!(
-                                "{}\n  PeerId: {}\n  Addrs: {}",
-                                peer.pubkey, peer.peer_id, addr_str
-                            ))
+                            use ratatui::style::{Color, Style};
+                            use ratatui::text::{Line, Span};
+                            let lines = vec![
+                                Line::from(vec![Span::styled(
+                                    format!("{}", peer.pubkey),
+                                    Style::default().fg(Color::Green),
+                                )]),
+                                Line::raw(format!("  PeerId: {}", peer.peer_id)),
+                                Line::raw(format!("  Addrs: {}", addr_str)),
+                            ];
+                            ListItem::new(lines)
                         })
                         .collect()
                 };
