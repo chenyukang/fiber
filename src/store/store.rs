@@ -18,11 +18,13 @@ use crate::{
 };
 use ckb_types::packed::{OutPoint, Script};
 use ckb_types::prelude::Entity;
+use rand::{distributions::Alphanumeric, Rng};
 use rocksdb::{
     prelude::*, DBCompressionType, DBIterator, Direction as DbDirection, IteratorMode, WriteBatch,
     DB,
 };
 use serde::Serialize;
+use std::path::PathBuf;
 use std::{collections::HashSet, path::Path, sync::Arc};
 use tentacle::secio::PeerId;
 use tracing::info;
@@ -45,22 +47,6 @@ enum ChannelTimestamp {
 // TODO: previous implementation accidentally used BroadcastMessageID::ChannelUpdate as the key
 // for the channel updates timestamps. I have fixed it here by using the same key as the channel
 // announcement. This is a breaking change, we need migration for this.
-
-// When rendering the TUI for nodes and peers, highlight the first row in green.
-// For example, in your TUI rendering code (main.rs), when iterating rows:
-//
-// for (i, row) in rows.iter().enumerate() {
-//     if i == 0 {
-//         // set style to green for the first row
-//     } else {
-//         // normal style
-//     }
-// }
-//
-// If using ratatui, you can use .style(Style::default().fg(Color::Green)) for the first row.
-//
-// This is a comment for guidance; actual code should be in main.rs where the TUI is rendered.
-
 pub(crate) fn get_channel_timestamps_key(outpoint: &OutPoint) -> Vec<u8> {
     BroadcastMessageID::ChannelAnnouncement(outpoint.clone())
         .to_bytes()
@@ -1030,4 +1016,32 @@ impl WatchtowerStore for Store {
             batch.commit();
         }
     }
+}
+
+/// Copy a directory recursively to a new temporary directory and return the temp dir path
+pub fn copy_store_to_temp<P: AsRef<Path>>(src: P) -> std::io::Result<PathBuf> {
+    let dst = std::env::temp_dir().join(format!(
+        "fiber-gui-store-{}",
+        rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(8)
+            .map(char::from)
+            .collect::<String>()
+    ));
+    fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_dir(&from, &to)?;
+            } else {
+                std::fs::copy(&from, &to)?;
+            }
+        }
+        Ok(())
+    }
+    copy_dir(src.as_ref(), &dst)?;
+    Ok(dst)
 }
