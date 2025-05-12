@@ -20,11 +20,10 @@ use ckb_types::packed::{OutPoint, Script};
 use ckb_types::prelude::Entity;
 use rand::{distributions::Alphanumeric, Rng};
 use rocksdb::{
-    prelude::*, DBCompressionType, DBIterator, Direction as DbDirection, IteratorMode, WriteBatch,
-    DB,
+    prelude::*, ColumnFamilyDescriptor, DBCompressionType, DBIterator, Direction as DbDirection,
+    IteratorMode, SecondaryDB, SecondaryOpenDescriptor, WriteBatch, DB,
 };
 use serde::Serialize;
-use std::path::PathBuf;
 use std::{collections::HashSet, path::Path, sync::Arc};
 use tentacle::secio::PeerId;
 use tracing::info;
@@ -32,6 +31,11 @@ use tracing::info;
 #[derive(Clone, Debug)]
 pub struct Store {
     pub(crate) db: Arc<DB>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SecondaryStore {
+    pub(crate) db: Arc<SecondaryDB>,
 }
 
 #[derive(Copy, Clone)]
@@ -248,6 +252,63 @@ impl Store {
         } else {
             Err(errors.join("\n"))
         }
+    }
+}
+
+impl SecondaryStore {
+    pub fn new_secondary<P: AsRef<Path>>(primary_path: P) -> SecondaryStore {
+        let cf_names: Vec<String> = vec![];
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        opts.create_missing_column_families(true);
+        opts.set_keep_log_file_num(1);
+        let secondary_path = std::env::temp_dir().join(format!(
+            "fiber-gui-store-{}",
+            rand::thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(8)
+                .map(char::from)
+                .collect::<String>()
+        ));
+
+        let cf_descriptors: Vec<_> = cf_names
+            .into_iter()
+            .map(|name| ColumnFamilyDescriptor::new(name, Options::default()))
+            .collect();
+
+        let descriptor = SecondaryOpenDescriptor::new(secondary_path.to_string_lossy().to_string());
+        let inner = SecondaryDB::open_cf_descriptors_with_descriptor(
+            &opts,
+            primary_path.as_ref(),
+            cf_descriptors,
+            descriptor,
+        )
+        .expect("Failed to open SecondaryDB");
+        SecondaryStore {
+            db: Arc::new(inner),
+        }
+    }
+
+    fn prefix_iterator<'a>(
+        &'a self,
+        prefix: &'a [u8],
+    ) -> impl Iterator<Item = (Box<[u8]>, Box<[u8]>)> + 'a {
+        self.db
+            .prefix_iterator(prefix)
+            .take_while(move |(col_key, _)| col_key.starts_with(prefix))
+    }
+
+    fn get_network_actor_state(&self, id: &PeerId) -> Option<PersistentNetworkActorState> {
+        let key = [&[PEER_ID_NETWORK_ACTOR_STATE_PREFIX], id.as_bytes()].concat();
+        self.db
+            .get(key)
+            .map(|value| {
+                deserialize_from(
+                    value.as_ref().expect("secondary value"),
+                    "PersistentNetworkActorState",
+                )
+            })
+            .ok()
     }
 
     /// List all peers for the given local peer_id (usually self).
@@ -1016,32 +1077,4 @@ impl WatchtowerStore for Store {
             batch.commit();
         }
     }
-}
-
-/// Copy a directory recursively to a new temporary directory and return the temp dir path
-pub fn copy_store_to_temp<P: AsRef<Path>>(src: P) -> std::io::Result<PathBuf> {
-    let dst = std::env::temp_dir().join(format!(
-        "fiber-gui-store-{}",
-        rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(8)
-            .map(char::from)
-            .collect::<String>()
-    ));
-    fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(dst)?;
-        for entry in std::fs::read_dir(src)? {
-            let entry = entry?;
-            let from = entry.path();
-            let to = dst.join(entry.file_name());
-            if entry.file_type()?.is_dir() {
-                copy_dir(&from, &to)?;
-            } else {
-                std::fs::copy(&from, &to)?;
-            }
-        }
-        Ok(())
-    }
-    copy_dir(src.as_ref(), &dst)?;
-    Ok(dst)
 }

@@ -380,8 +380,10 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     };
-    use fnn::fiber::{network::PeerInfo, types::NodeAnnouncement};
-    use fnn::store::Store;
+    use fnn::{
+        fiber::{network::PeerInfo, types::NodeAnnouncement},
+        store::store::SecondaryStore,
+    };
     use ratatui::{
         backend::CrosstermBackend,
         widgets::{Block, Borders, List, ListItem},
@@ -396,12 +398,7 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
         .ok_or_else(|| ExitMessage("fiber config is required but absent".to_string()))?
         .store_path();
     eprintln!("now store_path: {:?}", store_path);
-    // Use a temp copy of the store for GUI mode to avoid RocksDB lock conflicts
-    let temp_store_path = match fnn::store::copy_store_to_temp(&store_path) {
-        Ok(p) => p,
-        Err(e) => return Err(ExitMessage(format!("Failed to copy store for GUI: {e}"))),
-    };
-    let store = Store::new(&temp_store_path).map_err(|err| ExitMessage(err.to_string()))?;
+    let store = SecondaryStore::new_secondary(store_path);
 
     // Get peer info
     let peers: Vec<PeerInfo> = {
@@ -684,9 +681,5 @@ fn tui_show_peers(config: &Config) -> Result<(), ExitMessage> {
     // Restore terminal
     disable_raw_mode().ok();
     execute!(io::stdout(), LeaveAlternateScreen).ok();
-    // Clean up the temp store directory after TUI exits
-    if let Err(e) = std::fs::remove_dir_all(&temp_store_path) {
-        eprintln!("Failed to remove temp store dir: {e}");
-    }
     res.map_err(|e: std::io::Error| ExitMessage(format!("TUI error: {e}")))
 }

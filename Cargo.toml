@@ -74,7 +74,7 @@ ratatui = { version = "0.26", optional = true }
 crossterm = { version = "0.27", optional = true }
 
 [features]
-default = []
+default = ["gui"]
 portable = ["rocksdb/portable"]
 gui = ["ratatui", "crossterm"]
 
