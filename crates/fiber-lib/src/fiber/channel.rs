@@ -1228,6 +1228,11 @@ where
 
         let (tlc_info, remove_reason) = state.remove_tlc_with_reason(tlc_id)?;
 
+        debug!(
+            "yukang debug invoice: {:?}, remove_reason: {:?}",
+            self.store.get_invoice(&tlc_info.payment_hash),
+            remove_reason
+        );
         if matches!(remove_reason, RemoveTlcReason::RemoveTlcFulfill(_)) {
             if self.store.get_invoice(&tlc_info.payment_hash).is_some() {
                 debug!(channel = ?channel_id, hash = ?tlc_info.payment_hash, "update invoice status to paid");

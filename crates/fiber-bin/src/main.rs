@@ -312,6 +312,7 @@ pub async fn main() -> Result<(), ExitMessage> {
                 Ok(actor) => {
                     // Subscribe the actor to the store so it can receive updates
                     store.subscribe(Box::new(actor.clone()));
+                    info!("cch started successfully");
                     Some(actor)
                 }
             }
