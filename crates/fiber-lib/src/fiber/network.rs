@@ -1690,6 +1690,11 @@ where
                 let _ = reply.send(self.settle_invoice(&myself, &hash, &preimage));
             }
             NetworkActorCommand::AddInvoice(invoice, preimage, reply) => {
+                debug!(
+                    "yukang addinvoice here: {:?} preimage: {:?}",
+                    invoice.payment_hash(),
+                    preimage
+                );
                 let _ = reply.send(add_invoice(&self.store, invoice, preimage));
             }
         };
@@ -1961,6 +1966,10 @@ where
         payment_data: &SendPaymentData,
         hops: Vec<PaymentHopData>,
     ) -> Result<PaymentSession, Error> {
+        debug!(
+            "yukang now send_payment_onion_packet: {:?}",
+            payment_data.payment_hash
+        );
         let session_key = Privkey::from_slice(KeyPair::generate_random_key().as_ref());
         assert_ne!(hops[0].funding_tx_hash, Hash256::default());
 

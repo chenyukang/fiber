@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::debug;
 
 use super::{CkbInvoiceStatus, InvoiceError};
 use crate::{fiber::types::Hash256, invoice::CkbInvoice};
@@ -58,9 +59,14 @@ pub(crate) fn add_invoice<S: InvoiceStore>(
     preimage: Option<Hash256>,
 ) -> Result<(), InvoiceError> {
     let hash = invoice.payment_hash();
+    debug!("Adding invoice with hash: {}", hash);
     if store.get_invoice(hash).is_some() {
         return Err(InvoiceError::InvoiceAlreadyExists);
     }
+    debug!(
+        "Yukang Adding invoice with hash: {} with preimage: {:?}",
+        hash, preimage
+    );
     store.insert_invoice(invoice, preimage)
 }
 

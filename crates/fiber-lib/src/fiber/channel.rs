@@ -8,6 +8,7 @@ use crate::{
 use bitflags::bitflags;
 use futures::future::OptionFuture;
 use secp256k1::XOnlyPublicKey;
+use tracing::field::debug;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -489,6 +490,11 @@ where
             FiberChannelMessage::RevokeAndAck(revoke_and_ack) => {
                 state.handle_revoke_and_ack_peer_message(myself, revoke_and_ack)?;
                 self.update_tlc_status_on_ack(myself, state).await;
+                debug!(
+                    "yukang here need another commitment signed: {:?}",
+                    state.tlc_state.need_another_commitment_signed()
+                );
+                state.tlc_state.debug();
                 if state.tlc_state.need_another_commitment_signed() {
                     self.handle_commitment_signed_command(myself, state)?;
                 }
@@ -853,6 +859,10 @@ where
         let tlc_info = state.get_received_tlc(tlc_id).expect("expect tlc");
         let preimage = self.store.get_preimage(&tlc_info.payment_hash);
 
+        debug!(
+            "yukang now here try to settle down tlc: {:?} with preimage: {:?}",
+            &tlc_info.payment_hash, preimage
+        );
         let preimage = if let Some(preimage) = preimage {
             preimage
         } else {
@@ -1093,6 +1103,10 @@ where
         state.check_insert_tlc(&tlc_info)?;
         state.tlc_state.add_received_tlc(tlc_info);
         state.increment_next_received_tlc_id();
+        debug!(
+            "yukang now add_tlc_peer_message: {:?} add_tlc: {:?}",
+            add_tlc.payment_hash, add_tlc
+        );
         Ok(())
     }
 
@@ -1109,6 +1123,10 @@ where
         let payment_hash = state
             .tlc_state
             .set_offered_tlc_removed(remove_tlc.tlc_id, remove_tlc.reason.clone());
+        debug!(
+            "yukang now remove_tlc_peer_message: {:?} remove_tlc: {:?}",
+            payment_hash, remove_tlc
+        );
         if let RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill { payment_preimage }) =
             remove_tlc.reason
         {
@@ -1229,9 +1247,10 @@ where
         let (tlc_info, remove_reason) = state.remove_tlc_with_reason(tlc_id)?;
 
         debug!(
-            "yukang debug invoice: {:?}, remove_reason: {:?}",
+            "yukang debug invoice: {:?}, remove_reason: {:?}, payment_hash: {:?}",
             self.store.get_invoice(&tlc_info.payment_hash),
-            remove_reason
+            remove_reason,
+            tlc_info.payment_hash
         );
         if matches!(remove_reason, RemoveTlcReason::RemoveTlcFulfill(_)) {
             if self.store.get_invoice(&tlc_info.payment_hash).is_some() {
@@ -1392,6 +1411,10 @@ where
         state.tlc_state.add_offered_tlc(tlc);
         state.increment_next_offered_tlc_id();
 
+        debug!(
+            "yukang now add_tlc_command: {:?} tlc_id: {:?}, payment_hash: {:?}",
+            &command, tlc_id, command.payment_hash
+        );
         let add_tlc = AddTlc {
             channel_id: state.get_id(),
             tlc_id: tlc_id.into(),
@@ -1429,6 +1452,11 @@ where
         let payment_hash = state
             .tlc_state
             .set_received_tlc_removed(command.id, command.reason.clone());
+
+        debug!(
+            "yukang now remove_tlc_command: {:?} payment_hash: {:?}, reason: {:?}",
+            command.id, payment_hash, command.reason
+        );
         if let RemoveTlcReason::RemoveTlcFulfill(RemoveTlcFulfill { payment_preimage }) =
             command.reason
         {
@@ -2533,7 +2561,7 @@ where
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        trace!(
+        info!(
             "Channel actor processing message: peer: {:?} id: {:?}, state: {:?}, message: {:?}",
             state.get_local_peer_id(),
             &state.get_id(),

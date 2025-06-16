@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use std::time::Duration;
 use tentacle::secio::SecioKeyPair;
+use tracing::debug;
 
 /// The parameter struct for generating a new invoice.
 #[serde_as]
@@ -287,6 +288,11 @@ where
         params: InvoiceParams,
     ) -> Result<GetInvoiceResult, ErrorObjectOwned> {
         let payment_hash = params.payment_hash;
+        debug!(
+            "yukang get_invoice: payment_hash={} invoice= {:?}",
+            payment_hash,
+            self.store.get_invoice(&payment_hash)
+        );
         match self.store.get_invoice(&payment_hash) {
             Some(invoice) => {
                 let status = match self
