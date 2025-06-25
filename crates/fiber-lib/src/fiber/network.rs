@@ -1459,7 +1459,12 @@ where
                     .filter_map(|hold_tlc| {
                         let state = self.store.get_channel_actor_state(&hold_tlc.channel_id)?;
                         let tlc_id = TLCId::Received(hold_tlc.tlc_id);
-                        state.get_received_tlc(tlc_id).cloned()
+                        let s = state.get_received_tlc(tlc_id).cloned();
+                        if s.is_none() {
+                            panic!("Tried to settle mpp tlc set, but hold tlc {:?} not found in channel actor state for channel {:?}",
+                                   hold_tlc.tlc_id, hold_tlc.channel_id);
+                        }
+                        s
                     })
                     .collect();
 
@@ -1467,6 +1472,13 @@ where
                     // no tlcs to settle
                     return Ok(());
                 };
+
+                dbg!(
+                    "Now settling MPP TLC set for payment hash",
+                    payment_hash,
+                    "with tlcs",
+                    &tlcs
+                );
 
                 let mut tlc_fail = None;
 
@@ -1476,11 +1488,11 @@ where
                     .iter()
                     .any(|t| t.total_amount != first_tlc.total_amount)
                 {
-                    error!("one tlc total_amount is not equal to current tlc total_amount");
+                    panic!("one tlc total_amount is not equal to current tlc total_amount");
                     tlc_fail = Some(TlcErr::new(TlcErrorCode::IncorrectOrUnknownPaymentDetails));
                 } else {
                     let Some(invoice) = self.store.get_invoice(&payment_hash) else {
-                        error!(
+                        panic!(
                             "Try to settle mpp tlc set, but invoice not found for payment hash {:?}",
                             payment_hash
                         );
@@ -1493,6 +1505,10 @@ where
                 }
 
                 let Some(preimage) = self.store.get_preimage(&payment_hash) else {
+                    panic!(
+                        "Tried to settle mpp tlc set, but preimage not found for payment hash {:?}",
+                        payment_hash
+                    );
                     return Ok(());
                 };
 
@@ -1524,7 +1540,7 @@ where
                     {
                         Ok(_) => {}
                         Err(err) => {
-                            error!(
+                            panic!(
                                 "Failed to remove tlc {:?} for channel {:?}: {}",
                                 tlc.id(),
                                 tlc.channel_id,
