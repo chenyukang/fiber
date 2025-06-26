@@ -1474,10 +1474,14 @@ where
                 };
 
                 dbg!(
-                    "Now settling MPP TLC set for payment hash",
+                    "debug gp: Now settling MPP TLC set for payment hash",
                     payment_hash,
                     "with tlcs",
                     &tlcs
+                );
+                debug!(
+                    "debug gp: check if tlc set is fulfilled payment hash: {:?}, tlc set: {:?}",
+                    payment_hash, tlcs
                 );
 
                 let mut tlc_fail = None;
@@ -1488,12 +1492,15 @@ where
                     .iter()
                     .any(|t| t.total_amount != first_tlc.total_amount)
                 {
-                    panic!("one tlc total_amount is not equal to current tlc total_amount");
+                    error!(
+                        "debug gp: one tlc total_amount is not equal to current tlc total_amount: {:?}",
+                        payment_hash
+                    );
                     tlc_fail = Some(TlcErr::new(TlcErrorCode::IncorrectOrUnknownPaymentDetails));
                 } else {
                     let Some(invoice) = self.store.get_invoice(&payment_hash) else {
-                        panic!(
-                            "Try to settle mpp tlc set, but invoice not found for payment hash {:?}",
+                        error!(
+                            "debug gp: Try to settle mpp tlc set, but invoice not found for payment hash {:?}",
                             payment_hash
                         );
                         return Ok(());
@@ -1505,8 +1512,8 @@ where
                 }
 
                 let Some(preimage) = self.store.get_preimage(&payment_hash) else {
-                    panic!(
-                        "Tried to settle mpp tlc set, but preimage not found for payment hash {:?}",
+                    error!(
+                        "debug gp: Tried to settle mpp tlc set, but preimage not found for payment hash {:?}",
                         payment_hash
                     );
                     return Ok(());
