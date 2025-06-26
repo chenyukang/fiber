@@ -891,6 +891,7 @@ where
                                 + DEFAULT_HOLD_TLC_TIMEOUT,
                         },
                     );
+                    self.store.insert_channel_actor_state(state.clone());
 
                     // set timeout for hold tlc
                     self.network.send_after(
