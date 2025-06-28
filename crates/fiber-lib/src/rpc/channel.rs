@@ -38,7 +38,7 @@ pub struct OpenChannelParams {
     #[serde_as(as = "DisplayFromStr")]
     pub peer_id: PeerId,
 
-    /// The amount of CKB or UDT to fund the channel with.
+    /// The amount of CKB or UDT to fund the channel with
     #[serde_as(as = "U128Hex")]
     pub funding_amount: u128,
 
