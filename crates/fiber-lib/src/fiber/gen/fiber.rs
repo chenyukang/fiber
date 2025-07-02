@@ -8976,6 +8976,7 @@ impl ::core::fmt::Display for RevokeAndAck {
             "next_per_commitment_point",
             self.next_per_commitment_point()
         )?;
+        write!(f, ", {}: {}", "timestamp", self.timestamp())?;
         write!(f, " }}")
     }
 }
@@ -8986,16 +8987,16 @@ impl ::core::default::Default for RevokeAndAck {
     }
 }
 impl RevokeAndAck {
-    const DEFAULT_VALUE: [u8; 129] = [
+    const DEFAULT_VALUE: [u8; 137] = [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    pub const TOTAL_SIZE: usize = 129;
-    pub const FIELD_SIZES: [usize; 4] = [32, 32, 32, 33];
-    pub const FIELD_COUNT: usize = 4;
+    pub const TOTAL_SIZE: usize = 137;
+    pub const FIELD_SIZES: [usize; 5] = [32, 32, 32, 33, 8];
+    pub const FIELD_COUNT: usize = 5;
     pub fn channel_id(&self) -> Byte32 {
         Byte32::new_unchecked(self.0.slice(0..32))
     }
@@ -9007,6 +9008,9 @@ impl RevokeAndAck {
     }
     pub fn next_per_commitment_point(&self) -> Pubkey {
         Pubkey::new_unchecked(self.0.slice(96..129))
+    }
+    pub fn timestamp(&self) -> Uint64 {
+        Uint64::new_unchecked(self.0.slice(129..137))
     }
     pub fn as_reader<'r>(&'r self) -> RevokeAndAckReader<'r> {
         RevokeAndAckReader::new_unchecked(self.as_slice())
@@ -9039,6 +9043,7 @@ impl molecule::prelude::Entity for RevokeAndAck {
             .revocation_partial_signature(self.revocation_partial_signature())
             .commitment_tx_partial_signature(self.commitment_tx_partial_signature())
             .next_per_commitment_point(self.next_per_commitment_point())
+            .timestamp(self.timestamp())
     }
 }
 #[derive(Clone, Copy)]
@@ -9079,13 +9084,14 @@ impl<'r> ::core::fmt::Display for RevokeAndAckReader<'r> {
             "next_per_commitment_point",
             self.next_per_commitment_point()
         )?;
+        write!(f, ", {}: {}", "timestamp", self.timestamp())?;
         write!(f, " }}")
     }
 }
 impl<'r> RevokeAndAckReader<'r> {
-    pub const TOTAL_SIZE: usize = 129;
-    pub const FIELD_SIZES: [usize; 4] = [32, 32, 32, 33];
-    pub const FIELD_COUNT: usize = 4;
+    pub const TOTAL_SIZE: usize = 137;
+    pub const FIELD_SIZES: [usize; 5] = [32, 32, 32, 33, 8];
+    pub const FIELD_COUNT: usize = 5;
     pub fn channel_id(&self) -> Byte32Reader<'r> {
         Byte32Reader::new_unchecked(&self.as_slice()[0..32])
     }
@@ -9097,6 +9103,9 @@ impl<'r> RevokeAndAckReader<'r> {
     }
     pub fn next_per_commitment_point(&self) -> PubkeyReader<'r> {
         PubkeyReader::new_unchecked(&self.as_slice()[96..129])
+    }
+    pub fn timestamp(&self) -> Uint64Reader<'r> {
+        Uint64Reader::new_unchecked(&self.as_slice()[129..137])
     }
 }
 impl<'r> molecule::prelude::Reader<'r> for RevokeAndAckReader<'r> {
@@ -9126,11 +9135,12 @@ pub struct RevokeAndAckBuilder {
     pub(crate) revocation_partial_signature: Byte32,
     pub(crate) commitment_tx_partial_signature: Byte32,
     pub(crate) next_per_commitment_point: Pubkey,
+    pub(crate) timestamp: Uint64,
 }
 impl RevokeAndAckBuilder {
-    pub const TOTAL_SIZE: usize = 129;
-    pub const FIELD_SIZES: [usize; 4] = [32, 32, 32, 33];
-    pub const FIELD_COUNT: usize = 4;
+    pub const TOTAL_SIZE: usize = 137;
+    pub const FIELD_SIZES: [usize; 5] = [32, 32, 32, 33, 8];
+    pub const FIELD_COUNT: usize = 5;
     pub fn channel_id(mut self, v: Byte32) -> Self {
         self.channel_id = v;
         self
@@ -9147,6 +9157,10 @@ impl RevokeAndAckBuilder {
         self.next_per_commitment_point = v;
         self
     }
+    pub fn timestamp(mut self, v: Uint64) -> Self {
+        self.timestamp = v;
+        self
+    }
 }
 impl molecule::prelude::Builder for RevokeAndAckBuilder {
     type Entity = RevokeAndAck;
@@ -9159,6 +9173,7 @@ impl molecule::prelude::Builder for RevokeAndAckBuilder {
         writer.write_all(self.revocation_partial_signature.as_slice())?;
         writer.write_all(self.commitment_tx_partial_signature.as_slice())?;
         writer.write_all(self.next_per_commitment_point.as_slice())?;
+        writer.write_all(self.timestamp.as_slice())?;
         Ok(())
     }
     fn build(&self) -> Self::Entity {

@@ -7,6 +7,7 @@ use crate::{debug_event, fiber::types::TxAbort, utils::tx::compute_tx_message};
 use bitflags::bitflags;
 use futures::future::OptionFuture;
 use secp256k1::XOnlyPublicKey;
+use tokio::time::Instant;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -502,7 +503,11 @@ where
                 Ok(())
             }
             FiberChannelMessage::RevokeAndAck(revoke_and_ack) => {
-                state.handle_revoke_and_ack_peer_message(myself, revoke_and_ack)?;
+                let res = state.handle_revoke_and_ack_peer_message(myself, revoke_and_ack);
+                if res.is_err() {
+                    debug!("here got error: {:?}", res);
+                    return res;
+                }
                 self.update_tlc_status_on_ack(myself, state).await;
                 if state.tlc_state.need_another_commitment_signed() {
                     self.handle_commitment_signed_command(myself, state)?;
@@ -1318,7 +1323,7 @@ where
 
         #[cfg(debug_assertions)]
         debug!(
-            "send commitment signed: {:?} at commitment_numbers: {:?}",
+            "debug-haha-send commitment signed: {:?} at commitment_numbers: {:?}",
             commitment_signed,
             state.get_current_commitment_numbers()
         );
@@ -1340,6 +1345,15 @@ where
             }
             CommitmentSignedFlags::ChannelReady() => {
                 state.set_waiting_ack(myself, true);
+
+                self.network.start_track();
+                myself.start_track();
+                debug!(
+                    "now begin track peer {} here network_count: {}, network_time: {}",
+                    state.get_local_peer_id(),
+                    self.network.get_message_count(),
+                    self.network.get_accumulated_time()
+                );
             }
             CommitmentSignedFlags::PendingShutdown() => {
                 state.set_waiting_ack(myself, true);
@@ -1634,11 +1648,7 @@ where
         operation: RetryableTlcOperation,
     ) {
         if state.tlc_state.insert_retryable_tlc_operation(operation) {
-            myself
-                .send_message(ChannelActorMessage::Event(
-                    ChannelEvent::CheckTlcRetryOperation,
-                ))
-                .expect("myself alive");
+            state.trigger_retryable_tasks(myself, true);
         }
     }
 
@@ -1661,13 +1671,25 @@ where
         &self,
         myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
+        force: bool,
     ) {
         if state.reestablishing {
             myself.send_after(WAITING_REESTABLISH_FINISH_TIMEOUT, || {
-                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
+                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation(false))
             });
             return;
         }
+        if !force {
+            if let Some(last_time) = state.retryable_task_last_run_at {
+                if last_time + RETRYABLE_TLC_OPS_INTERVAL.as_millis() as u64
+                    > now_timestamp_as_millis_u64()
+                {
+                    // don't run retryable tasks too frequently
+                    return;
+                }
+            }
+        }
+        state.retryable_task_last_run_at = Some(now_timestamp_as_millis_u64());
         let mut pending_tlc_ops = state.tlc_state.get_pending_operations();
         pending_tlc_ops.retain_mut(|retryable_operation| {
             match retryable_operation {
@@ -1770,10 +1792,12 @@ where
         });
 
         state.tlc_state.retryable_tlc_operations = pending_tlc_ops;
+        debug!(
+            "now pending tasks: {:?}",
+            state.tlc_state.retryable_tlc_operations.len()
+        );
         if state.tlc_state.has_pending_operations() {
-            myself.send_after(RETRYABLE_TLC_OPS_INTERVAL, || {
-                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
-            });
+            state.trigger_retryable_tasks(myself, false);
         }
     }
 
@@ -2079,8 +2103,9 @@ where
                 state.update_state(ChannelState::AwaitingChannelReady(flags));
                 state.maybe_channel_is_ready(myself).await;
             }
-            ChannelEvent::CheckTlcRetryOperation => {
-                self.apply_retryable_tlc_operations(myself, state).await;
+            ChannelEvent::CheckTlcRetryOperation(force) => {
+                self.apply_retryable_tlc_operations(myself, state, force)
+                    .await;
             }
             ChannelEvent::Stop(reason) => {
                 debug_event!(self.network, "ChannelActorStopped");
@@ -2143,9 +2168,10 @@ where
             ChannelEvent::CheckActiveChannel => {
                 if state.should_disconnect_peer_awaiting_response() && !state.is_closed() {
                     debug!(
-                        "Channel {} from peer {:?} is inactive for a time, closing it",
+                        "Peer: {} Channel {} from peer {:?} is inactive for a time, closing it",
+                        state.get_local_peer_id(),
                         state.get_id(),
-                        state.get_remote_peer_id()
+                        state.get_remote_peer_id(),
                     );
                     state
                         .network()
@@ -2515,13 +2541,17 @@ where
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        trace!(
-            "Channel actor processing message: peer: {:?} id: {:?}, state: {:?}, message: {:?}",
-            state.get_local_peer_id(),
-            &state.get_id(),
-            &state.state,
-            message,
-        );
+        let time = Instant::now();
+        let message_str = format!("{:?}", message);
+        // debug!(
+        //     "Channel actor processing message: peer: {:?} id: {:?}, state: {:?}, message: {:?} channel_actor_count: {:?} network_actor_count: {:?}",
+        //     state.get_local_peer_id(),
+        //     &state.get_id(),
+        //     &state.state,
+        //     message,
+        //     myself.get_message_count(),
+        //     self.network.get_message_count(),
+        // );
 
         match message {
             ChannelActorMessage::PeerMessage(message) => {
@@ -2557,6 +2587,13 @@ where
         }
 
         self.store.insert_channel_actor_state(state.clone());
+        let elapsed = time.elapsed();
+        debug!(
+            "Channel actor processed message: id: {:?}, handle-elapsed: {:?} message: {:?}",
+            self.get_local_peer_id(),
+            elapsed,
+            message_str,
+        );
         Ok(())
     }
 
@@ -2565,12 +2602,8 @@ where
         myself: ActorRef<Self::Msg>,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        if state.tlc_state.has_pending_operations() && !state.reestablishing {
-            myself
-                .send_message(ChannelActorMessage::Event(
-                    ChannelEvent::CheckTlcRetryOperation,
-                ))
-                .expect("myself alive");
+        if !state.reestablishing {
+            state.trigger_retryable_tasks(&myself, false);
         }
 
         Ok(())
@@ -2996,28 +3029,28 @@ pub struct TlcState {
 impl TlcState {
     #[cfg(any(debug_assertions, feature = "bench"))]
     pub fn debug(&self) {
-        let format_tlc_list = |tlcs: &[TlcInfo]| -> String {
-            if tlcs.is_empty() {
-                "    <none>".to_string()
-            } else {
-                tlcs.iter()
-                    .map(|tlc| format!("    {}", tlc.log()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }
-        };
+        // let format_tlc_list = |tlcs: &[TlcInfo]| -> String {
+        //     if tlcs.is_empty() {
+        //         "    <none>".to_string()
+        //     } else {
+        //         tlcs.iter()
+        //             .map(|tlc| format!("    {}", tlc.log()))
+        //             .collect::<Vec<_>>()
+        //             .join("\n")
+        //     }
+        // };
 
-        let offered_str = format_tlc_list(&self.offered_tlcs.tlcs);
-        let received_str = format_tlc_list(&self.received_tlcs.tlcs);
+        // let offered_str = format_tlc_list(&self.offered_tlcs.tlcs);
+        // let received_str = format_tlc_list(&self.received_tlcs.tlcs);
 
-        if offered_str.contains("<none>") && received_str.contains("<none>") {
-            info!("TlcState: <none>");
-        } else {
-            info!(
-                "TlcState:\n  Offered:\n{}\n  Received:\n{}",
-                offered_str, received_str
-            );
-        }
+        // if offered_str.contains("<none>") && received_str.contains("<none>") {
+        //     info!("TlcState: <none>");
+        // } else {
+        //     info!(
+        //         "TlcState:\n  Offered:\n{}\n  Received:\n{}",
+        //         offered_str, received_str
+        //     );
+        // }
     }
 
     pub fn get_mut(&mut self, tlc_id: &TLCId) -> Option<&mut TlcInfo> {
@@ -3519,6 +3552,9 @@ pub struct ChannelActorState {
     // The arc here is only used to implement the clone trait for the ChannelActorState.
     #[serde(skip)]
     pub scheduled_channel_update_handle: ScheduledChannelUpdateHandle,
+
+    #[serde(skip)]
+    pub retryable_task_last_run_at: Option<u64>,
 }
 
 #[serde_as]
@@ -3613,7 +3649,7 @@ pub enum ChannelEvent {
     Stop(StopReason),
     FundingTransactionConfirmed(H256, u32, u64),
     ClosingTransactionConfirmed(bool),
-    CheckTlcRetryOperation,
+    CheckTlcRetryOperation(bool),
     CheckActiveChannel,
 }
 
@@ -3968,6 +4004,15 @@ impl ChannelActorState {
         if let Some(timestamp) = self.waiting_peer_response {
             // depends on the system's clock source, not all system clocks are monotonic, using saturating_sub to avoid potential underflow
             let elapsed = now_timestamp_as_millis_u64().saturating_sub(timestamp);
+            debug!(
+                "debug elapsed: {:?} {:}",
+                elapsed,
+                elapsed > PEER_CHANNEL_RESPONSE_TIMEOUT
+            );
+            // if elapsed > PEER_CHANNEL_RESPONSE_TIMEOUT {
+            //     debug!("debug large elapsed: {:?}", elapsed);
+            // }
+            // elapsed > PEER_CHANNEL_RESPONSE_TIMEOUT * 2 && !self.reestablishing
             elapsed > PEER_CHANNEL_RESPONSE_TIMEOUT && !self.reestablishing
         } else {
             false
@@ -4261,6 +4306,24 @@ impl ChannelActorState {
         }
     }
 
+    fn trigger_retryable_tasks(
+        &mut self,
+        myself: &ActorRef<ChannelActorMessage>,
+        first_register: bool,
+    ) {
+        if first_register {
+            myself
+                .send_message(ChannelActorMessage::Event(
+                    ChannelEvent::CheckTlcRetryOperation(true),
+                ))
+                .expect("myself alive");
+        } else {
+            myself.send_after(RETRYABLE_TLC_OPS_INTERVAL, || {
+                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation(false))
+            });
+        }
+    }
+
     pub fn get_unsigned_channel_update_message(&self) -> Option<ChannelUpdate> {
         let message_flags = if self.local_is_node1() {
             ChannelUpdateMessageFlags::UPDATE_OF_NODE1
@@ -4370,6 +4433,7 @@ impl ChannelActorState {
             waiting_peer_response: None,
             network: Some(network),
             scheduled_channel_update_handle: None,
+            retryable_task_last_run_at: None,
         };
         if let Some(nonce) = remote_channel_announcement_nonce {
             state.update_remote_channel_announcement_nonce(&nonce);
@@ -4443,6 +4507,7 @@ impl ChannelActorState {
             waiting_peer_response: None,
             network: Some(network),
             scheduled_channel_update_handle: None,
+            retryable_task_last_run_at: None,
         }
     }
 
@@ -4804,12 +4869,13 @@ impl ChannelActorState {
             revocation_partial_signature,
             commitment_tx_partial_signature,
             next_per_commitment_point: point,
+            timestamp: now_timestamp_as_millis_u64(),
         });
 
         #[cfg(debug_assertions)]
         debug!(
-            "Sending RevokeAndAck message with commitment tx partial signature {:?}",
-            commitment_tx_partial_signature
+            "debug-haha Sending RevokeAndAck message with commitment tx partial signature {:?}, network-message: {:?}",
+            self.last_revoke_ack_msg, self.network().get_message_count()
         );
 
         self.network()
@@ -6018,7 +6084,7 @@ impl ChannelActorState {
         #[cfg(debug_assertions)]
         {
             debug!(
-                "verify commitment_signed: {:?} at commitment_numbers: {:?}",
+                "debug-haha verify commitment_signed: {:?} at commitment_numbers: {:?}",
                 commitment_signed,
                 self.get_current_commitment_numbers()
             );
@@ -6225,7 +6291,7 @@ impl ChannelActorState {
         }
         if self.tlc_state.has_pending_operations() {
             myself.send_after(WAITING_REESTABLISH_FINISH_TIMEOUT, || {
-                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
+                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation(true))
             });
         }
         // If the channel is already ready, we should notify the network actor.
@@ -6276,6 +6342,7 @@ impl ChannelActorState {
             revocation_partial_signature,
             commitment_tx_partial_signature,
             next_per_commitment_point,
+            timestamp,
         } = revoke_and_ack;
 
         let sign_ctx = self.get_sign_context_for_revoke_and_ack_message()?;
@@ -6377,6 +6444,20 @@ impl ChannelActorState {
 
         self.tlc_state
             .update_for_revoke_and_ack(self.commitment_numbers);
+
+        let elapsed = now_timestamp_as_millis_u64() - timestamp;
+
+        debug!(
+            "debug-haha handle_revoke_and_ack_peer_message: {:?} at commitment_numbers: {:?} elapsed: {:?}
+            channel_count: {:?} channel_time: {:?} network_count: {:?} network_time: {:?}",
+            revoke_and_ack,
+            self.get_current_commitment_numbers(),
+            elapsed,
+            myself.get_message_count(),
+            myself.get_accumulated_time(),
+            self.network().get_message_count(),
+            self.network().get_accumulated_time(),
+        );
         self.set_waiting_ack(myself, false);
 
         self.network()

@@ -1023,14 +1023,14 @@ where
             .copied()
             .unwrap_or(0)
             + cur_pending_count;
-        if pending_count > 0 {
-            probability *= (0.95f64).powi(pending_count as i32);
-        }
+        // if pending_count > 0 {
+        //     probability *= (0.95f64).powi(pending_count as i32);
+        // }
 
-        debug!(
-            "probability: {} for channel_outpoint: {:?} from: {:?} => to: {:?}",
-            probability, channel_outpoint, from, target
-        );
+        // debug!(
+        //     "probability: {} for channel_outpoint: {:?} from: {:?} => to: {:?}, pending_count: {}",
+        //     probability, channel_outpoint, from, target, pending_count
+        // );
         if probability < DEFAULT_MIN_PROBABILITY {
             debug!("probability is too low: {:?}", probability);
             return;
@@ -1304,13 +1304,13 @@ where
             result.push(edge)
         }
 
-        info!(
-            "get_route: nodes visited: {}, edges expanded: {}, time: {:?} \nresult: {:?}",
-            nodes_visited,
-            edges_expanded,
-            started_time.elapsed(),
-            result
-        );
+        // info!(
+        //     "get_route: nodes visited: {}, edges expanded: {}, time: {:?} \nresult: {:?}",
+        //     nodes_visited,
+        //     edges_expanded,
+        //     started_time.elapsed(),
+        //     result
+        // );
         Ok(result)
     }
 

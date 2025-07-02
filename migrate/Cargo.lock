@@ -2025,7 +2025,7 @@ dependencies = [
  "nom",
  "num_enum",
  "once_cell",
- "ractor 0.15.3",
+ "ractor 0.15.6",
  "rand 0.8.5",
  "regex",
  "scrypt",
@@ -4083,9 +4083,7 @@ dependencies = [
 
 [[package]]
 name = "ractor"
-version = "0.15.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7baf572559ad14ac3793c7c2fc3110f93d097d4d9b45aa626832933c78cb2445"
+version = "0.15.6"
 dependencies = [
  "async-trait",
  "bon",

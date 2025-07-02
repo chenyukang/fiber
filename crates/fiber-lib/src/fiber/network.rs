@@ -1270,11 +1270,11 @@ where
                                 if let Some(payment_preimage) =
                                     self.store.get_preimage(&tlc.payment_hash)
                                 {
-                                    debug!(
-                                        "Found payment preimage for channel {:?} tlc {:?}",
-                                        channel_id,
-                                        tlc.id()
-                                    );
+                                    // debug!(
+                                    //     "Found payment preimage for channel {:?} tlc {:?}",
+                                    //     channel_id,
+                                    //     tlc.id()
+                                    // );
                                     if self
                                         .store
                                         .get_invoice_status(&tlc.payment_hash)
@@ -2014,6 +2014,7 @@ where
                 .write()
                 .await
                 .track_payment_router(&payment_session);
+            state.payment_router_map.remove(&payment_hash);
             self.store.insert_payment_session(payment_session);
             return;
         }
@@ -2035,10 +2036,14 @@ where
                 (retry, channel_error.to_string())
             };
         payment_session.last_error = Some(error);
+        if !matches!(channel_error, ProcessingChannelError::WaitingTlcAck) {
+            state.payment_router_map.remove(&payment_hash);
+        }
         self.store.insert_payment_session(payment_session);
 
         if need_to_retry {
-            let _ = self.try_payment_session(myself, state, payment_hash).await;
+            //let _ = self.try_payment_session(myself, state, payment_hash).await;
+            self.register_payment_retry(myself, payment_hash);
         }
     }
 
@@ -2060,11 +2065,11 @@ where
 
         assert!(payment_session.status != PaymentSessionStatus::Failed);
 
-        debug!(
-            "try_payment_session: {:?} times: {:?}",
-            payment_session.payment_hash(),
-            payment_session.retried_times
-        );
+        // debug!(
+        //     "try_payment_session: {:?} times: {:?}",
+        //     payment_session.payment_hash(),
+        //     payment_session.retried_times
+        // );
 
         let payment_data = payment_session.request.clone();
         if payment_session.can_retry() {
@@ -2072,7 +2077,19 @@ where
                 payment_session.retried_times += 1;
             }
 
-            let hops_info = self.build_payment_route(&mut payment_session).await?;
+            let hops_info = match state.payment_router_map.get(&payment_hash) {
+                Some(hops) => {
+                    debug!("Using cached hops for payment hash: {:?}", payment_hash);
+                    hops.clone()
+                }
+                None => {
+                    let hops_info = self.build_payment_route(&mut payment_session).await?;
+                    state
+                        .payment_router_map
+                        .insert(payment_hash, hops_info.clone());
+                    hops_info
+                }
+            };
 
             match self
                 .send_payment_onion_packet(state, &mut payment_session, &payment_data, hops_info)
@@ -2104,7 +2121,9 @@ where
     }
 
     fn register_payment_retry(&self, myself: ActorRef<NetworkActorMessage>, payment_hash: Hash256) {
-        myself.send_after(Duration::from_millis(500), move || {
+        // Randomly retry the payment after 1 to 6 seconds
+        let rand_time = rand::thread_rng().gen_range(6000..20000);
+        myself.send_after(Duration::from_millis(rand_time), move || {
             NetworkActorMessage::new_event(NetworkActorEvent::RetrySendPayment(payment_hash))
         });
     }
@@ -2271,6 +2290,8 @@ pub struct NetworkActorState<S> {
     channel_subscribers: ChannelSubscribers,
     max_inbound_peers: usize,
     min_outbound_peers: usize,
+    // the payment router map, only used for avoiding finding the same payment router multiple times
+    payment_router_map: HashMap<Hash256, Vec<PaymentHopData>>,
 }
 
 #[serde_as]
@@ -2418,6 +2439,12 @@ where
 
     pub fn get_public_key(&self) -> Pubkey {
         self.private_key.pubkey()
+    }
+
+    pub fn node_name(&self) -> String {
+        self.node_name
+            .map(|x| x.as_str().to_string())
+            .unwrap_or("unknown".to_string())
     }
 
     pub fn generate_channel_seed(&mut self) -> [u8; 32] {
@@ -3508,6 +3535,7 @@ where
             channel_subscribers,
             max_inbound_peers: config.max_inbound_peers(),
             min_outbound_peers: config.min_outbound_peers(),
+            payment_router_map: Default::default(),
         };
 
         let node_announcement = state.get_or_create_new_node_announcement_message();
@@ -3569,6 +3597,13 @@ where
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
+        debug!(
+            "NetworkActor processing now: {:?}, with peer {} here network_count: {:?}, network_time: {:?}",
+            message,
+            state.node_name(),
+            myself.get_message_count(),
+            myself.get_accumulated_time(),
+        );
         match message {
             NetworkActorMessage::Event(event) => {
                 if let Err(err) = self.handle_event(myself, state, event).await {

@@ -30,6 +30,7 @@ use std::panic;
 use std::time::SystemTime;
 use tracing::debug;
 use tracing::error;
+use tracing::info;
 
 #[tokio::test]
 async fn test_send_payment_custom_records() {
@@ -2231,25 +2232,30 @@ async fn test_send_payment_bench_test() {
         &[
             ((0, 1), (HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT)),
             ((1, 2), (HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT)),
+            ((2, 3), (HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT)),
         ],
-        3,
+        4,
     )
     .await;
-    let [node_0, node_1, node_2] = nodes.try_into().expect("3 nodes");
+    let [node_0, node_1, node_2, node_3] = nodes.try_into().expect("3 nodes");
 
     let mut all_sent = HashSet::new();
 
-    for i in 1..=10 {
-        let payment = node_0
-            .send_payment_keysend(&node_2, 1000, false)
-            .await
-            .unwrap();
-        eprintln!("payment: {:?}", payment);
-        all_sent.insert(payment.payment_hash);
-        eprintln!("send: {} payment_hash: {:?} sent", i, payment.payment_hash);
+    for i in 1..=60 {
+        assert!(node_0.get_triggered_unexpected_events().await.is_empty());
+        assert!(node_1.get_triggered_unexpected_events().await.is_empty());
+        assert!(node_2.get_triggered_unexpected_events().await.is_empty());
+        assert!(node_3.get_triggered_unexpected_events().await.is_empty());
+
+        if let Ok(payment) = node_0.send_payment_keysend(&node_3, 100, false).await {
+            eprintln!("payment: {:?}", payment);
+            all_sent.insert(payment.payment_hash);
+            info!("send: {} payment_hash: {:?} sent", i, payment.payment_hash);
+        }
     }
 
     loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
         for payment_hash in all_sent.clone().iter() {
             node_0.wait_until_final_status(*payment_hash).await;
             let status = node_0.get_payment_status(*payment_hash).await;
@@ -2260,11 +2266,11 @@ async fn test_send_payment_bench_test() {
             }
         }
         let res = node_0.node_info().await;
-        eprintln!("node0 node_info: {:?}", res);
+        //eprintln!("node0 node_info: {:?}", res);
         let res = node_1.node_info().await;
-        eprintln!("node1 node_info: {:?}", res);
+        //eprintln!("node1 node_info: {:?}", res);
         let res = node_2.node_info().await;
-        eprintln!("node2 node_info: {:?}", res);
+        //eprintln!("node2 node_info: {:?}", res);
         if all_sent.is_empty() {
             break;
         }
@@ -3582,7 +3588,7 @@ async fn test_send_payment_shutdown_with_force() {
             .duration_since(started)
             .expect("time passed")
             .as_secs();
-        if elapsed > 180 {
+        if elapsed > 180 || failed_count >= expect_failed_count {
             error!("timeout, failed_count: {:?}", failed_count);
             break;
         }

@@ -1151,6 +1151,7 @@ pub struct RevokeAndAck {
     pub revocation_partial_signature: PartialSignature,
     pub commitment_tx_partial_signature: PartialSignature,
     pub next_per_commitment_point: Pubkey,
+    pub timestamp: u64,
 }
 
 impl From<RevokeAndAck> for molecule_fiber::RevokeAndAck {
@@ -1164,6 +1165,7 @@ impl From<RevokeAndAck> for molecule_fiber::RevokeAndAck {
                 revoke_and_ack.commitment_tx_partial_signature,
             ))
             .next_per_commitment_point(revoke_and_ack.next_per_commitment_point.into())
+            .timestamp(revoke_and_ack.timestamp.pack())
             .build()
     }
 }
@@ -1183,6 +1185,7 @@ impl TryFrom<molecule_fiber::RevokeAndAck> for RevokeAndAck {
             )
             .map_err(|e| anyhow!(e))?,
             next_per_commitment_point: revoke_and_ack.next_per_commitment_point().try_into()?,
+            timestamp: revoke_and_ack.timestamp().unpack(),
         })
     }
 }

@@ -133,6 +133,7 @@ struct RevokeAndAck {
     revocation_partial_signature:       Byte32,
     commitment_tx_partial_signature:    Byte32,
     next_per_commitment_point:          Pubkey,
+    timestamp:                          Uint64,
 }
 
 struct RemoveTlcFulfill {
