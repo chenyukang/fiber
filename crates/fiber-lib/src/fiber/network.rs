@@ -2160,7 +2160,8 @@ where
     }
 
     fn register_payment_retry(&self, myself: ActorRef<NetworkActorMessage>, payment_hash: Hash256) {
-        let rand_time = rand::thread_rng().gen_range(1000..2000);
+        //let rand_time = rand::thread_rng().gen_range(1000..2000);
+        let rand_time = 500;
         myself.send_after(Duration::from_millis(rand_time), move || {
             NetworkActorMessage::new_event(NetworkActorEvent::RetrySendPayment(payment_hash))
         });
