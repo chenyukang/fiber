@@ -1,11 +1,11 @@
 meta {
-  name: Node2 open a channel to Node3
+  name: Node1 open a channel to Node2
   type: http
   seq: 7
 }
 
 post {
-  url: {{NODE2_RPC_URL}}
+  url: {{NODE1_RPC_URL}}
   body: json
   auth: none
 }
@@ -22,8 +22,8 @@ body:json {
     "method": "open_channel",
     "params": [
       {
-        "peer_id": "{{NODE3_PEERID}}",
-        "funding_amount": "0x377aab54d000"
+        "peer_id": "{{NODE2_PEERID}}",
+        "funding_amount": "0x177aab54d000"
       }
     ]
   }

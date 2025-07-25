@@ -1,11 +1,11 @@
 meta {
-  name: get auto accepted channel id from Node3
+  name: get auto accepted channel id from Node2
   type: http
   seq: 8
 }
 
 post {
-  url: {{NODE3_RPC_URL}}
+  url: {{NODE2_RPC_URL}}
   body: json
   auth: none
 }
@@ -22,7 +22,7 @@ body:json {
     "method": "list_channels",
     "params": [
       {
-        "peer_id": "{{NODE2_PEERID}}"
+        "peer_id": "{{NODE1_PEERID}}"
       }
     ]
   }
@@ -31,11 +31,14 @@ body:json {
 assert {
   res.body.error: isUndefined
   res.body.result.channels: isDefined
+  res.body.result.channels[1].enabled: isDefined
+  res.body.result.channels[1].tlc_expiry_delta: isDefined
+  res.body.result.channels[1].tlc_fee_proportional_millionths: isDefined
 }
 
 script:post-response {
   console.log(res.body.result);
   // Sleep for sometime to make sure current operation finishes before next request starts.
   await new Promise(r => setTimeout(r, 2000));
-  bru.setVar("N2N3_CHANNEL_ID", res.body.result.channels[0].channel_id);
+  bru.setVar("N1N2_CHANNEL_ID", res.body.result.channels[0].channel_id);
 }
