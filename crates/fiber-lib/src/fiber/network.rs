@@ -816,6 +816,9 @@ pub enum NetworkActorEvent {
 
     // A channel actor stopped event.
     ChannelActorStopped(Hash256, StopReason),
+
+    // Tentacle service error event.
+    TentacleServiceError(ServiceError),
 }
 
 #[derive(Debug)]
@@ -1152,6 +1155,14 @@ where
             }
             NetworkActorEvent::ChannelActorStopped(channel_id, reason) => {
                 state.on_channel_actor_stopped(channel_id, reason).await;
+            }
+            NetworkActorEvent::TentacleServiceError(service_error) => {
+                error!("Tentacle service error: {:?}", service_error);
+                if let ServiceError::DialerError { address, .. } = service_error {
+                    if let Some(peer_id) = extract_peer_id(&address) {
+                        state.dialed_peers.remove(&peer_id);
+                    }
+                }
             }
         }
         Ok(())
@@ -4117,6 +4128,11 @@ impl ServiceHandle for NetworkServiceHandle {
         // TODO
         // ServiceError::DialerError => remove address from peer store
         // ServiceError::ProtocolError => ban peer
+        self.actor
+            .send_message(NetworkActorMessage::new_event(
+                NetworkActorEvent::TentacleServiceError(error),
+            ))
+            .expect(ASSUME_NETWORK_MYSELF_ALIVE);
     }
 
     async fn handle_event(&mut self, _context: &mut ServiceContext, event: ServiceEvent) {
