@@ -1017,6 +1017,7 @@ where
                             "Received a channel message for a channel that is not created with peer: {:?}",
                             channel_id
                         );
+                    debug!("debug-cpu channel not found here 1");
                     return Err(Error::ChannelNotFound(channel_id));
                 }
                 state
@@ -3671,7 +3672,10 @@ where
                             let _ = rpc_reply.send(Ok(()));
                             Ok(())
                         }
-                        None => Err(Error::ChannelNotFound(channel_id)),
+                        None => {
+                            debug!("debug-cpu channel not found here 2");
+                            Err(Error::ChannelNotFound(channel_id))
+                        }
                     }
                 }
             }
@@ -3680,7 +3684,10 @@ where
                     actor.send_message(ChannelActorMessage::Command(command))?;
                     Ok(())
                 }
-                None => Err(Error::ChannelNotFound(channel_id)),
+                None => {
+                    debug!("debug-cpu channel not found here 3");
+                    Err(Error::ChannelNotFound(channel_id))
+                }
             },
         }
     }
@@ -3708,6 +3715,7 @@ where
                 )));
             }
         } else {
+            debug!("debug-cpu channel not found here 4");
             return Err(Error::ChannelNotFound(channel_id));
         }
 
@@ -4494,8 +4502,12 @@ where
                 }
             }
             NetworkActorMessage::Command(command) => {
+                let command_str = format!("{:?}", command);
                 if let Err(err) = self.handle_command(myself, state, command).await {
-                    error!("Failed to handle fiber network command: {}", err);
+                    error!(
+                        "Failed to handle fiber network command: {} with command: {:?}",
+                        err, command_str
+                    );
                 }
             }
             NetworkActorMessage::Notification(event) => {
