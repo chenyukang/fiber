@@ -111,6 +111,15 @@ fn main() {
             exit(0);
         }
     } else {
+        eprintln!("now will open db at: {}", path.display());
+        if !path.exists() {
+            eprintln!(
+                "db path does not exist, creating a new db at: {}",
+                path.display()
+            );
+            exit(1);
+        }
+
         let db = Store::open_db(path).expect("failed to open db");
         let migrate = init_db_migrate(db);
 

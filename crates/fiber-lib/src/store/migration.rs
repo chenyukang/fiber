@@ -114,7 +114,7 @@ impl Migrations {
 
     fn get_migration_version(&self, db: &Store) -> Result<Option<String>, Error> {
         let raw = db.get(MIGRATION_VERSION_KEY);
-
+        eprintln!("now db version: {:?}", raw);
         Ok(raw.map(|version_bytes| {
             String::from_utf8(version_bytes.to_vec()).expect("version bytes to utf8")
         }))
