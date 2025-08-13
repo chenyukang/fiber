@@ -439,6 +439,7 @@ impl ChannelActorStateStore for Store {
                 let key_len = key.len();
                 let peer_id = PeerId::from_bytes(key[1..key_len - 32].into())
                     .expect("deserialize peer id should be OK");
+                eprintln!("now peer_id: {}", peer_id);
                 let channel_id: [u8; 32] = key[key_len - 32..]
                     .try_into()
                     .expect("channel id should be 32 bytes");
