@@ -44,7 +44,7 @@ pub const MILLI_SECONDS_PER_EPOCH: u64 = 4 * 60 * 60 * 1000;
 #[cfg(debug_assertions)]
 // 2 seconds for testing environment, so default 2/3 commitment_delay_epoch is 6 * 2/3 * 2 = 8 seconds
 // we need to make sure 2/3 commitment_delay_epoch is greater than MIN_TLC_EXPIRY_DELTA
-pub const MILLI_SECONDS_PER_EPOCH: u64 = 2 * 1000;
+pub const MILLI_SECONDS_PER_EPOCH: u64 = 4 * 60 * 60 * 1000;
 
 /// The minimal expiry delta to forward a tlc, in milliseconds, 160 minutes.
 /// expect it >= 2/3 commitment_delay_epoch, default DEFAULT_COMMITMENT_DELAY_EPOCHS is 1 epoch
