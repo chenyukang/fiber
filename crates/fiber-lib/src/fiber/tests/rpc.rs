@@ -768,3 +768,34 @@ async fn test_rpc_shutdown_following_disconnect() {
         }
     }
 }
+
+#[tokio::test]
+async fn test_many_network_nodes() {
+    init_tracing();
+    let mut configs = vec![];
+    let n: usize = 110;
+    for i in 0..n {
+        let c = (
+            (i, i + 1),
+            ChannelParameters {
+                public: true,
+                node_a_funding_amount: MIN_RESERVED_CKB + 10000000000,
+                node_b_funding_amount: MIN_RESERVED_CKB,
+                ..Default::default()
+            },
+        );
+        configs.push(c);
+    }
+
+    let (nodes, _channels) =
+        create_n_nodes_network_with_params(&configs, n + 1, Some(gen_rpc_config())).await;
+
+    loop {
+        let nodes = nodes[0].get_network_graph_nodes().await;
+        eprintln!("Graph nodes: {:#?}", nodes);
+        if nodes.len() >= n {
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
+    }
+}
