@@ -16,8 +16,7 @@ use crate::{debug_event, fiber::types::TxAbort, utils::tx::compute_tx_message};
 use musig2::BinaryEncoding;
 use musig2::SecNonceBuilder;
 use secp256k1::{Secp256k1, XOnlyPublicKey};
-use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::{
     backtrace::Backtrace,
@@ -426,9 +425,6 @@ where
                     state
                         .handle_reestablish_channel_message(myself, reestablish_channel)
                         .await?;
-                    if !state.reestablishing {
-                        self.trigger_all_retryable_tasks(myself, state).await;
-                    }
                 }
                 _ => {
                     debug!("Ignoring message while reestablishing: {:?}", message);
@@ -566,10 +562,6 @@ where
                 self.update_tlc_status_on_ack(myself, state).await;
                 if state.tlc_state.need_another_commitment_signed() {
                     self.handle_commitment_signed_command(myself, state).await?;
-                }
-                if !state.is_waiting_tlc_ack() {
-                    self.apply_retryable_tlc_operations(myself, state, false)
-                        .await;
                 }
                 Ok(())
             }
@@ -760,7 +752,7 @@ where
         let need_commitment_signed = state.tlc_state.update_for_commitment_signed();
 
         // flush remove tlc for received tlcs after replying ack for peer
-        self.apply_settled_remove_tlcs(state, true).await;
+        self.apply_settled_remove_tlcs(myself, state, true).await;
 
         // when we transfer to shutdown state, we need to build shutdown transaction
         // here `maybe_transfer_to_shutdown` must be called after `apply_settled_remove_tlcs`
@@ -774,7 +766,12 @@ where
         Ok(())
     }
 
-    async fn apply_settled_remove_tlcs(&self, state: &mut ChannelActorState, inbound: bool) {
+    async fn apply_settled_remove_tlcs(
+        &self,
+        myself: &ActorRef<ChannelActorMessage>,
+        state: &mut ChannelActorState,
+        inbound: bool,
+    ) {
         let previous_balance = state.get_local_balance();
         let pending_tlcs = if inbound {
             state.tlc_state.received_tlcs.tlcs.iter()
@@ -795,7 +792,7 @@ where
             .collect();
 
         for tlc_id in settled_tlcs {
-            self.apply_remove_tlc_operation(state, tlc_id)
+            self.apply_remove_tlc_operation(myself, state, tlc_id)
                 .await
                 .expect("expect remove tlc success");
         }
@@ -844,7 +841,8 @@ where
             state,
             tlc_id,
             RemoveTlcReason::RemoveTlcFail(error_packet),
-        );
+        )
+        .await;
     }
 
     async fn update_tlc_status_on_ack(
@@ -875,11 +873,12 @@ where
         }
 
         // flush outbound tlcs
-        self.apply_settled_remove_tlcs(state, false).await;
+        self.apply_settled_remove_tlcs(myself, state, false).await;
     }
 
     async fn try_to_relay_remove_tlc(
         &self,
+        myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
         tlc_info: &TlcInfo,
         remove_reason: RemoveTlcReason,
@@ -893,8 +892,9 @@ where
         let remove_reason = remove_reason.clone().backward(&tlc_info.shared_secret);
 
         self.register_retryable_relay_tlc_remove(
+            myself,
             state,
-            previous_tlc,
+            previous_tlc.into(),
             previous_channel_id,
             remove_reason,
         )
@@ -963,7 +963,8 @@ where
         }
 
         // remove tlc
-        self.register_retryable_tlc_remove(myself, state, tlc.tlc_id, remove_reason);
+        self.register_retryable_tlc_remove(myself, state, tlc.tlc_id, remove_reason)
+            .await;
     }
 
     async fn apply_add_tlc_operation(
@@ -987,9 +988,11 @@ where
                     .map_err(|err| ProcessingChannelError::PeelingOnionPacketError(err.to_string()))
                     .map_err(ProcessingChannelError::without_shared_secret)?;
                 let shared_secret = peeled.shared_secret;
-                self.apply_add_tlc_operation_with_peeled_onion_packet(state, add_tlc, peeled)
-                    .await
-                    .map_err(move |err| err.with_shared_secret(shared_secret))?;
+                self.apply_add_tlc_operation_with_peeled_onion_packet(
+                    myself, state, add_tlc, peeled,
+                )
+                .await
+                .map_err(move |err| err.with_shared_secret(shared_secret))?;
             }
             None => {
                 // The TLC is with a NO_SHARED_SECRET and no onion packet.
@@ -1027,6 +1030,7 @@ where
 
     async fn apply_add_tlc_operation_with_peeled_onion_packet(
         &self,
+        myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
         add_tlc: &TlcInfo,
         peeled_onion_packet: PeeledPaymentOnionPacket,
@@ -1166,10 +1170,11 @@ where
             let forward_fee = received_amount.saturating_sub(forward_amount);
 
             // if this is not the last hop, forward TLC to next hop
-            self.register_and_apply_forward_tlc(
+            self.register_retryable_forward_tlc(
+                myself,
                 state,
-                add_tlc.payment_hash,
                 add_tlc.tlc_id,
+                add_tlc.payment_hash,
                 peeled_onion_packet,
                 forward_fee,
             )
@@ -1325,6 +1330,7 @@ where
 
     async fn apply_remove_tlc_operation(
         &self,
+        myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
         tlc_id: TLCId,
     ) -> Result<(), ProcessingChannelError> {
@@ -1378,7 +1384,7 @@ where
             }
         } else {
             // relay RemoveTlc to previous channel if needed
-            self.try_to_relay_remove_tlc(state, &tlc_info, remove_reason)
+            self.try_to_relay_remove_tlc(myself, state, &tlc_info, remove_reason)
                 .await;
         }
         Ok(())
@@ -1724,7 +1730,7 @@ where
         Ok(())
     }
 
-    pub fn register_retryable_tlc_remove(
+    pub async fn register_retryable_tlc_remove(
         &self,
         myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
@@ -1732,163 +1738,216 @@ where
         reason: RemoveTlcReason,
     ) {
         let remove_tlc = RetryableTlcOperation::RemoveTlc(tlc_id, reason);
-        self.register_retryable_tlc_operation(myself, state, remove_tlc);
+        self.register_retryable_tlc_operation(myself, state, remove_tlc)
+            .await;
     }
 
-    pub fn register_retryable_tlc_add(
-        &self,
-        myself: &ActorRef<ChannelActorMessage>,
-        state: &mut ChannelActorState,
-        add_tlc_command: AddTlcCommand,
-    ) {
-        let add_tlc = RetryableTlcOperation::AddTlc(add_tlc_command);
-        self.register_retryable_tlc_operation(myself, state, add_tlc);
-    }
-
-    fn register_retryable_tlc_operation(
+    async fn register_retryable_tlc_operation(
         &self,
         myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
         operation: RetryableTlcOperation,
     ) {
-        state.retryable_tlc_operations.push_back(operation);
-        if state.retryable_tlc_operations.len() == 1 {
-            state.schedule_next_retry_task(myself);
+        if state.tlc_state.insert_retryable_tlc_operation(operation) {
+            state.trigger_retryable_tasks(myself, false);
         }
     }
 
-    pub async fn register_and_apply_forward_tlc(
+    pub async fn register_retryable_forward_tlc(
         &self,
+        myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
-        payment_hash: Hash256,
         tlc_id: TLCId,
+        payment_hash: Hash256,
         peeled_onion_packet: PeeledPaymentOnionPacket,
         forward_fee: u128,
     ) {
-        match self.network.send_message(NetworkActorMessage::Command(
-            NetworkActorCommand::SendPaymentOnionPacket(SendOnionPacketCommand {
-                peeled_onion_packet: peeled_onion_packet.clone(),
-                previous_tlc: Some(PrevTlcInfo::new(
-                    state.get_id(),
-                    u64::from(tlc_id),
-                    forward_fee,
-                )),
-                payment_hash,
-                // forward tlc always set attempt_id to None
-                attempt_id: None,
-            }),
-        )) {
-            Ok(_) => {
-                // we successfully sent the forward tlc, we will wait for the result
-                // here we just make sure the forward tlc is sent, we don't need to wait for the result
-                state.waiting_forward_tlc_tasks.insert(
-                    (payment_hash, tlc_id),
-                    ForwardTlc(payment_hash, tlc_id, peeled_onion_packet, forward_fee),
-                );
-            }
-            Err(err) => {
-                error!("Failed to send forward tlc onion packet command: {:?}", err);
-            }
-        }
+        let forward_tlc = RetryableTlcOperation::ForwardTlc(
+            payment_hash,
+            tlc_id,
+            peeled_onion_packet,
+            forward_fee,
+            true,
+        );
+        self.register_retryable_tlc_operation(myself, state, forward_tlc)
+            .await;
     }
 
     pub async fn register_retryable_relay_tlc_remove(
         &self,
+        myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
-        tlc_id: TLCId,
+        tlc_id: u64,
         channel_id: Hash256,
         reason: RemoveTlcReason,
     ) {
-        let prev_channel_state = self
-            .store
-            .get_channel_actor_state(&channel_id)
-            .expect("channel state not found");
-        let tlc_info = prev_channel_state.tlc_state.get(&tlc_id);
-        if tlc_info.is_none_or(|tlc| tlc.removed_reason.is_some()) {
-            // the tlc has been removed, we can remove the operation
-        } else {
-            // send relay remove tlc with network actor to previous hop
-            // if the previous channel is reestablishing, we need to retry it later
-            if !prev_channel_state.reestablishing {
-                let (send, _recv) = oneshot::channel::<Result<(), ProcessingChannelError>>();
-                let port = RpcReplyPort::from(send);
-                self.network
-                    .send_message(NetworkActorMessage::new_command(
-                        NetworkActorCommand::ControlFiberChannel(ChannelCommandWithId {
-                            channel_id,
-                            command: ChannelCommand::RemoveTlc(
-                                RemoveTlcCommand {
-                                    id: tlc_id.into(),
-                                    reason: reason.clone(),
-                                },
-                                port,
-                            ),
-                        }),
-                    ))
-                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-            }
-
-            state
-                .waiting_relay_remove_tasks
-                .insert(RelayRemoveTlc(channel_id, tlc_id, reason));
-        }
-    }
-
-    async fn trigger_all_retryable_tasks(
-        &self,
-        myself: &ActorRef<ChannelActorMessage>,
-        state: &mut ChannelActorState,
-    ) {
-        state.schedule_next_retry_task(myself);
-
-        let tasks: Vec<_> = state.waiting_relay_remove_tasks.drain().collect();
-        for RelayRemoveTlc(channel_id, tlc_id, reason) in tasks {
-            self.register_retryable_relay_tlc_remove(state, tlc_id, channel_id, reason)
-                .await;
-        }
+        let remove_tlc = RetryableTlcOperation::RelayRemoveTlc(channel_id, tlc_id, reason);
+        self.register_retryable_tlc_operation(myself, state, remove_tlc)
+            .await;
     }
 
     pub async fn apply_retryable_tlc_operations(
         &self,
         myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
-        trigger_next: bool,
     ) {
-        loop {
-            if state.is_waiting_tlc_ack() {
-                break;
-            }
-
-            let Some(operation) = state.retryable_tlc_operations.pop_front() else {
-                return;
-            };
-
-            let success = match operation {
-                RetryableTlcOperation::RemoveTlc(tlc_id, reason) => self
-                    .handle_remove_tlc_command(
-                        myself,
-                        state,
-                        RemoveTlcCommand {
-                            id: u64::from(tlc_id),
-                            reason,
-                        },
-                    )
-                    .await
-                    .is_ok(),
-                RetryableTlcOperation::AddTlc(command) => {
-                    let res = self.handle_add_tlc_command(myself, state, &command).await;
-                    self.post_add_tlc_command(myself, state, command, &res);
-                    res.is_ok()
+        if state.reestablishing {
+            myself.send_after(WAITING_REESTABLISH_FINISH_TIMEOUT, || {
+                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
+            });
+            return;
+        }
+        let pending_tlc_ops = state.tlc_state.get_pending_operations();
+        let mut apply_tlc_op = async |retryable_operation: &mut RetryableTlcOperation| {
+            match retryable_operation {
+                RetryableTlcOperation::RemoveTlc(tlc_id, ref reason) => {
+                    match self
+                        .handle_remove_tlc_command(
+                            myself,
+                            state,
+                            RemoveTlcCommand {
+                                id: u64::from(*tlc_id),
+                                reason: reason.clone(),
+                            },
+                        )
+                        .await
+                    {
+                        Ok(_) | Err(ProcessingChannelError::RepeatedProcessing(_)) => false,
+                        Err(ProcessingChannelError::WaitingTlcAck) => true,
+                        Err(_err) => false,
+                    }
                 }
-            };
-
-            if success {
-                break;
+                RetryableTlcOperation::RelayRemoveTlc(channel_id, tlc_id, ref reason) => {
+                    let prev_channel_state = self
+                        .store
+                        .get_channel_actor_state(channel_id)
+                        .expect("channel state not found");
+                    let tlc_info = prev_channel_state.tlc_state.get(&TLCId::Received(*tlc_id));
+                    if tlc_info.is_none_or(|tlc| tlc.removed_reason.is_some()) {
+                        // the tlc has been removed, we can remove the operation
+                        false
+                    } else {
+                        // send relay remove tlc with network actor to previous hop
+                        // if the previous channel is reestablishing, we need to retry it later
+                        if !prev_channel_state.reestablishing {
+                            let (send, _recv) =
+                                oneshot::channel::<Result<(), ProcessingChannelError>>();
+                            let port = RpcReplyPort::from(send);
+                            self.network
+                                .send_message(NetworkActorMessage::new_command(
+                                    NetworkActorCommand::ControlFiberChannel(
+                                        ChannelCommandWithId {
+                                            channel_id: *channel_id,
+                                            command: ChannelCommand::RemoveTlc(
+                                                RemoveTlcCommand {
+                                                    id: (*tlc_id),
+                                                    reason: reason.clone(),
+                                                },
+                                                port,
+                                            ),
+                                        },
+                                    ),
+                                ))
+                                .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                            // the previous hop will automatically retry if there is Waiting_Ack error
+                        }
+                        true
+                    }
+                }
+                RetryableTlcOperation::ForwardTlc(
+                    payment_hash,
+                    tlc_id,
+                    ref peeled_onion_packet,
+                    forward_fee,
+                    try_one_time,
+                ) => {
+                    // there is a potential deadlock for waiting the result from another channel actor
+                    // for the scenario these two things happen at the same time:
+                    //  1. channel A send forward tlc to channel B
+                    //  2. channel B send forward tlc to channel A
+                    // we may end up waiting for each other forever
+                    //
+                    // but we need the result for better error handling
+                    // so we introduce the ForwardTlcResult to get the result based on actor message
+                    if !*try_one_time {
+                        // we need to decide whether to retry it until we get ForwardTlcResult
+                        true
+                    } else {
+                        match self.network.send_message(NetworkActorMessage::Command(
+                            NetworkActorCommand::SendPaymentOnionPacket(SendOnionPacketCommand {
+                                peeled_onion_packet: peeled_onion_packet.clone(),
+                                previous_tlc: Some(PrevTlcInfo::new(
+                                    state.get_id(),
+                                    u64::from(*tlc_id),
+                                    *forward_fee,
+                                )),
+                                payment_hash: *payment_hash,
+                                // forward tlc always set attempt_id to None
+                                attempt_id: None,
+                            }),
+                        )) {
+                            Ok(_) => {
+                                // here we just make sure the forward tlc is sent, we don't need to wait for the result
+                                // retry it if necessary until we get ForwardTlcResult
+                                *try_one_time = false;
+                                true
+                            }
+                            Err(_err) => {
+                                // network actor is dead? we will retry it later
+                                false
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        let mut new_pending_tlc_ops = vec![];
+        for mut item in pending_tlc_ops.into_iter() {
+            if apply_tlc_op(&mut item).await {
+                new_pending_tlc_ops.push(item);
             }
         }
+        state.tlc_state.retryable_tlc_operations = new_pending_tlc_ops;
+        if state.tlc_state.has_pending_operations() {
+            state.trigger_retryable_tasks(myself, true);
+        }
+    }
 
-        if trigger_next {
-            state.schedule_next_retry_task(myself);
+    fn find_matching_forward_tlc_operation(
+        &self,
+        state: &ChannelActorState,
+        result: &ForwardTlcResult,
+    ) -> Option<(RetryableTlcOperation, PeeledPaymentOnionPacket)> {
+        state
+            .tlc_state
+            .get_pending_operations()
+            .iter()
+            .find_map(|op| match op {
+                RetryableTlcOperation::ForwardTlc(payment_hash, tlc_id, peel_packet, ..)
+                    if *payment_hash == result.payment_hash
+                        && u64::from(*tlc_id) == result.tlc_id =>
+                {
+                    Some((op.clone(), peel_packet.clone()))
+                }
+                _ => None,
+            })
+    }
+
+    fn set_forward_tlc_status(
+        &self,
+        state: &mut ChannelActorState,
+        forward_op: &RetryableTlcOperation,
+        retry: bool,
+    ) {
+        for op in state
+            .tlc_state
+            .retryable_tlc_operations
+            .iter_mut()
+            .filter(|op| *op == forward_op)
+        {
+            if let RetryableTlcOperation::ForwardTlc(.., ref mut sent) = op {
+                *sent = retry;
+            }
         }
     }
 
@@ -1898,19 +1957,24 @@ where
         state: &mut ChannelActorState,
         result: ForwardTlcResult,
     ) {
-        let key = (result.payment_hash, TLCId::Received(result.tlc_id));
-        let Some(ForwardTlc(_, _, onion_packet, _)) = state.waiting_forward_tlc_tasks.remove(&key)
+        let Some((tlc_op, peeled_onion)) = self.find_matching_forward_tlc_operation(state, &result)
         else {
             return;
         };
+
         if let Some((channel_err, tlc_err)) = result.error_info {
             match channel_err {
                 ProcessingChannelError::WaitingTlcAck => {
-                    error!("not expected WaitingTlcAck error in ForwardTlcResult");
+                    // if we get WaitingTlcAck error, we will retry it later
+                    self.set_forward_tlc_status(state, &tlc_op, true);
+                }
+                ProcessingChannelError::RepeatedProcessing(_) => {
+                    // ignore repeated processing error, we have already handled it
+                    state.tlc_state.remove_pending_tlc_operation(&tlc_op);
                 }
                 _ => {
                     let error = ProcessingChannelError::TlcForwardingError(tlc_err)
-                        .with_shared_secret(onion_packet.shared_secret);
+                        .with_shared_secret(peeled_onion.shared_secret);
                     self.process_add_tlc_error(
                         myself,
                         state,
@@ -1919,8 +1983,12 @@ where
                         error,
                     )
                     .await;
+                    state.tlc_state.remove_pending_tlc_operation(&tlc_op);
                 }
             }
+        } else {
+            // if we get success result from AddTlc, we will remove the pending operation
+            state.tlc_state.remove_pending_tlc_operation(&tlc_op);
         }
     }
 
@@ -2084,7 +2152,8 @@ where
                                 state,
                                 TLCId::Received(command.id),
                                 command.reason,
-                            );
+                            )
+                            .await;
                         }
                         let _ = reply.send(Err(err.clone()));
                         Err(err)
@@ -2182,9 +2251,8 @@ where
                 state.update_state(ChannelState::AwaitingChannelReady(flags));
                 state.maybe_channel_is_ready(myself).await;
             }
-            ChannelEvent::RunRetryTask => {
-                self.apply_retryable_tlc_operations(myself, state, true)
-                    .await;
+            ChannelEvent::CheckTlcRetryOperation => {
+                self.apply_retryable_tlc_operations(myself, state).await;
             }
             ChannelEvent::Stop(reason) => {
                 debug_event!(self.network, "ChannelActorStopped");
@@ -2243,35 +2311,27 @@ where
 
     fn post_add_tlc_command(
         &self,
-        myself: &ActorRef<ChannelActorMessage>,
+        _myself: &ActorRef<ChannelActorMessage>,
         state: &mut ChannelActorState,
         command: AddTlcCommand,
         res: &Result<u64, ProcessingChannelError>,
     ) {
-        match res {
-            Err(ProcessingChannelError::WaitingTlcAck) if command.previous_tlc.is_some() => {
-                // buffer the tlc add command to retry later
-                self.register_retryable_tlc_add(myself, state, command);
-            }
-            _ => {
-                let notify = res
-                    .as_ref()
-                    .err()
-                    .map(|err| (err.clone(), self.get_tlc_error(state, err)));
+        let notify = res
+            .as_ref()
+            .err()
+            .map(|err| (err.clone(), self.get_tlc_error(state, err)));
 
-                // notify the network actor about the add tlc result
-                self.network
-                    .send_message(NetworkActorMessage::new_event(
-                        NetworkActorEvent::AddTlcResult(
-                            command.payment_hash,
-                            command.attempt_id,
-                            notify,
-                            command.previous_tlc,
-                        ),
-                    ))
-                    .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-            }
-        }
+        // notify the network actor about the add tlc result
+        self.network
+            .send_message(NetworkActorMessage::new_event(
+                NetworkActorEvent::AddTlcResult(
+                    command.payment_hash,
+                    command.attempt_id,
+                    notify,
+                    command.previous_tlc,
+                ),
+            ))
+            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
     }
 
     fn get_invoice_status(&self, invoice: &CkbInvoice) -> CkbInvoiceStatus {
@@ -3090,56 +3150,8 @@ impl From<TlcInfo> for TlcNotifyInfo {
 #[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub enum RetryableTlcOperation {
     RemoveTlc(TLCId, RemoveTlcReason),
-    AddTlc(AddTlcCommand),
-}
-
-#[derive(Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
-pub struct RelayRemoveTlc(Hash256, TLCId, RemoveTlcReason);
-
-#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ForwardTlc(Hash256, TLCId, PeeledPaymentOnionPacket, u128);
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum WaitingTaskKey {
-    ForwardTlc { payment_hash: Hash256, tlc_id: u64 },
-    RelayRemoveTlc { channel_id: Hash256, tlc_id: u64 },
-    // Other task types can be added here in the future
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-pub struct RetryableTask {
-    pub next_retry_time: u64,
-    pub operation: RetryableTlcOperation,
-    pub retry_count: u32,
-}
-
-impl RetryableTask {
-    pub fn new(operation: RetryableTlcOperation, next_retry_time: u64) -> Self {
-        Self {
-            next_retry_time,
-            operation,
-            retry_count: 0,
-        }
-    }
-
-    pub fn with_retry_count(mut self, retry_count: u32) -> Self {
-        self.retry_count = retry_count;
-        self
-    }
-}
-
-impl Ord for RetryableTask {
-    fn cmp(&self, other: &Self) -> Ordering {
-        // Note: BinaryHeap is a max-heap, but we want min-heap behavior for earliest tasks first.
-        // So we reverse the ordering.
-        other.next_retry_time.cmp(&self.next_retry_time)
-    }
-}
-
-impl PartialOrd for RetryableTask {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
+    RelayRemoveTlc(Hash256, u64, RemoveTlcReason),
+    ForwardTlc(Hash256, TLCId, PeeledPaymentOnionPacket, u128, bool),
 }
 
 impl Debug for RetryableTlcOperation {
@@ -3150,9 +3162,19 @@ impl Debug for RetryableTlcOperation {
                 .field(tlc_id)
                 .field(reason)
                 .finish(),
-            RetryableTlcOperation::AddTlc(add_tlc) => {
-                f.debug_tuple("AddTlc").field(add_tlc).finish()
-            }
+            RetryableTlcOperation::RelayRemoveTlc(payment_hash, tlc_id, reason) => f
+                .debug_tuple("RelayRemoveTlc")
+                .field(payment_hash)
+                .field(tlc_id)
+                .field(reason)
+                .finish(),
+            RetryableTlcOperation::ForwardTlc(payment_hash, tlc_id, _, forward_fee, run_once) => f
+                .debug_tuple("ForwardTlc")
+                .field(payment_hash)
+                .field(tlc_id)
+                .field(forward_fee)
+                .field(run_once)
+                .finish(),
         }
     }
 }
@@ -3224,6 +3246,7 @@ impl PendingTlcs {
 pub struct TlcState {
     pub offered_tlcs: PendingTlcs,
     pub received_tlcs: PendingTlcs,
+    pub retryable_tlc_operations: Vec<RetryableTlcOperation>,
     pub applied_add_tlcs: HashSet<TLCId>,
     pub applied_remove_tlcs: HashSet<TLCId>,
     pub waiting_ack: bool,
@@ -3307,6 +3330,14 @@ impl TlcState {
         self.waiting_ack = waiting_ack;
     }
 
+    pub fn insert_retryable_tlc_operation(&mut self, operation: RetryableTlcOperation) -> bool {
+        if self.retryable_tlc_operations.contains(&operation) {
+            return false;
+        }
+        self.retryable_tlc_operations.push(operation);
+        true
+    }
+
     pub fn all_tlcs(&self) -> impl Iterator<Item = &TlcInfo> + '_ {
         self.offered_tlcs
             .tlcs
@@ -3337,6 +3368,29 @@ impl TlcState {
             self.received_tlcs.tlcs.retain(|tlc| tlc.tlc_id != tlc_id);
         }
     }
+
+    pub fn get_pending_operations(&self) -> Vec<RetryableTlcOperation> {
+        self.retryable_tlc_operations.clone()
+    }
+
+    pub fn has_pending_operations(&self) -> bool {
+        !self.retryable_tlc_operations.is_empty()
+    }
+
+    pub fn remove_pending_tlc_operation(&mut self, retryable_tlc_op: &RetryableTlcOperation) {
+        self.retryable_tlc_operations
+            .retain(|op| op != retryable_tlc_op);
+
+        // if we already finished the RemoveTlc operation for the tlc,
+        // we should also remove the ForwardTlc to avoid any later retry.
+        if let RetryableTlcOperation::RemoveTlc(tlc_id, _) = retryable_tlc_op {
+            self.retryable_tlc_operations.retain(|op| match op {
+                RetryableTlcOperation::ForwardTlc(_, id, ..) => id != tlc_id,
+                _ => true,
+            });
+        }
+    }
+
     pub fn add_offered_tlc(&mut self, tlc: TlcInfo) {
         self.offered_tlcs.add_tlc(tlc);
     }
@@ -3654,11 +3708,6 @@ pub struct ChannelActorState {
     // all the TLC related information
     pub tlc_state: TlcState,
 
-    // the retryable tlc operations that are waiting to be processed.
-    pub retryable_tlc_operations: VecDeque<RetryableTlcOperation>,
-    pub waiting_forward_tlc_tasks: HashMap<(Hash256, TLCId), ForwardTlc>,
-    pub waiting_relay_remove_tasks: HashSet<RelayRemoveTlc>,
-
     // The remote and local lock script for close channel, they are setup during the channel establishment.
     #[serde_as(as = "Option<EntityHex>")]
     pub remote_shutdown_script: Option<Script>,
@@ -3822,7 +3871,7 @@ pub enum ChannelEvent {
     FundingTransactionConfirmed(H256, u32, u64),
     // (tx_hash, force, close_by_us)
     ClosingTransactionConfirmed(H256, bool, bool),
-    RunRetryTask,
+    CheckTlcRetryOperation,
     CheckActiveChannel,
     CheckFundingTimeout,
 }
@@ -4483,15 +4532,18 @@ impl ChannelActorState {
         }
     }
 
-    fn schedule_next_retry_task(&mut self, myself: &ActorRef<ChannelActorMessage>) {
-        if !self.retryable_tlc_operations.is_empty() {
+    fn trigger_retryable_tasks(&mut self, myself: &ActorRef<ChannelActorMessage>, delay: bool) {
+        if delay {
             myself.send_after(RETRYABLE_TLC_OPS_INTERVAL, || {
-                ChannelActorMessage::Event(ChannelEvent::RunRetryTask)
+                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
             });
+        } else {
+            myself
+                .send_message(ChannelActorMessage::Event(
+                    ChannelEvent::CheckTlcRetryOperation,
+                ))
+                .expect("myself alive");
         }
-        let time = myself.get_accumulated_time();
-        let count = myself.get_message_count();
-        debug!("schedule_next_retry_task time {:?}, count {}", time, count);
     }
 
     pub fn get_unsigned_channel_update_message(&self) -> Option<ChannelUpdate> {
@@ -4574,9 +4626,6 @@ impl ChannelActorState {
             funding_fee_rate,
             id: channel_id,
             tlc_state: Default::default(),
-            retryable_tlc_operations: Default::default(),
-            waiting_forward_tlc_tasks: Default::default(),
-            waiting_relay_remove_tasks: Default::default(),
             local_shutdown_script,
             local_channel_public_keys: local_base_pubkeys,
             signer,
@@ -4661,9 +4710,6 @@ impl ChannelActorState {
             funding_fee_rate,
             id: temp_channel_id,
             tlc_state: Default::default(),
-            retryable_tlc_operations: Default::default(),
-            waiting_forward_tlc_tasks: Default::default(),
-            waiting_relay_remove_tasks: Default::default(),
             signer,
             local_channel_public_keys: local_pubkeys,
             local_constraints: ChannelConstraints::new(
@@ -6605,6 +6651,17 @@ impl ChannelActorState {
 
         self.reestablishing = false;
 
+        for op in self.tlc_state.retryable_tlc_operations.iter_mut() {
+            if let RetryableTlcOperation::ForwardTlc(_, _, _, _, try_one_time) = op {
+                *try_one_time = true;
+            }
+        }
+        if self.tlc_state.has_pending_operations() {
+            myself.send_after(WAITING_REESTABLISH_FINISH_TIMEOUT, || {
+                ChannelActorMessage::Event(ChannelEvent::CheckTlcRetryOperation)
+            });
+        }
+
         // If the channel is already ready, we should notify the network actor.
         // so that we update the network.outpoint_channel_map
         let channel_id = self.get_id();
@@ -8060,10 +8117,6 @@ impl ChannelActorState {
             }
             _ => false,
         }
-    }
-
-    pub fn has_pending_operations(&self) -> bool {
-        !self.retryable_tlc_operations.is_empty()
     }
 }
 
