@@ -110,7 +110,7 @@ pub const COMMITMENT_CELL_WITNESS_LEN: usize = 16 + 1 + 32 + 64;
 // is funded or not.
 pub const INITIAL_COMMITMENT_NUMBER: u64 = 0;
 
-const RETRYABLE_TLC_OPS_INTERVAL: Duration = Duration::from_millis(100);
+const RETRYABLE_TLC_OPS_INTERVAL: Duration = Duration::from_millis(1000);
 const WAITING_REESTABLISH_FINISH_TIMEOUT: Duration = Duration::from_millis(4000);
 
 // if a important TLC operation is not acked in 30 seconds, we will try to disconnect the peer.
@@ -4544,6 +4544,14 @@ impl ChannelActorState {
                 ))
                 .expect("myself alive");
         }
+        let time = myself.get_accumulated_time();
+        let count = myself.get_message_count();
+        debug!(
+            "trigger_retryable_tasks now time: {:?} count: {:?} ops: {:?}",
+            time,
+            count,
+            self.tlc_state.retryable_tlc_operations.len()
+        );
     }
 
     pub fn get_unsigned_channel_update_message(&self) -> Option<ChannelUpdate> {
