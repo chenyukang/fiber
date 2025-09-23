@@ -511,12 +511,12 @@ pub async fn run_integration_test() -> TestResult<()> {
     Ok(())
 }
 
-/// Run benchmark test with specified duration and number of workers
-pub async fn run_benchmark_test(duration: Duration, worker_number: usize) -> TestResult<()> {
+/// Run benchmark test with specified duration and number of workers using native threads
+pub fn run_benchmark_test(duration: Duration, worker_number: usize) -> TestResult<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
-    use tokio::task::JoinSet;
-    use tokio::time::{interval, Instant};
+    use std::thread;
+    use std::time::Instant;
 
     let ctx = Arc::new(TestContext::new());
     let success_count = Arc::new(AtomicU64::new(0));
@@ -524,177 +524,20 @@ pub async fn run_benchmark_test(duration: Duration, worker_number: usize) -> Tes
     let total_count = Arc::new(AtomicU64::new(0));
 
     println!(
-        "🚀 Starting benchmark test with {} workers for {:?}",
+        "🚀 原生线程基准测试: {} 工作线程, 持续 {:?}",
         worker_number, duration
     );
 
-    let mut task_set = JoinSet::new();
     let start_time = Instant::now();
+    let end_time = start_time + duration;
+    let mut thread_handles = Vec::new();
 
+    // 启动工作线程
     for worker_id in 0..worker_number {
         let ctx_clone = ctx.clone();
         let success_count_clone = success_count.clone();
         let error_count_clone = error_count.clone();
         let total_count_clone = total_count.clone();
-        let end_time = start_time + duration;
-
-        task_set.spawn(async move {
-            let mut local_success = 0u64;
-            let mut local_error = 0u64;
-            let mut local_total = 0u64;
-
-            while Instant::now() < end_time {
-                local_total += 1;
-
-                let result = ctx_clone
-                    .send_payment(
-                        &ctx_clone.node1.rpc_url,
-                        NODE_3_PUBKEY,
-                        "0x64", // 100 units
-                        true,
-                    )
-                    .await;
-
-                let Ok(result) = result else {
-                    continue;
-                };
-
-                let res = ctx_clone
-                    .wait_until_final_status(
-                        &ctx_clone.node1.rpc_url,
-                        result["result"]["payment_hash"].as_str().unwrap(),
-                    )
-                    .await;
-
-                match res {
-                    Ok(status) if status == "Success" => {
-                        local_success += 1;
-                        if local_total % 50 == 0 {
-                            println!(
-                                "Worker {}: {} transactions completed",
-                                worker_id, local_total
-                            );
-                        }
-                    }
-                    Ok(status) if status == "Failed" => {
-                        local_error += 1;
-                        if local_error % 10 == 0 {
-                            eprintln!("Worker {}: Error #{}: ", worker_id, local_error);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            success_count_clone.fetch_add(local_success, Ordering::Relaxed);
-            error_count_clone.fetch_add(local_error, Ordering::Relaxed);
-            total_count_clone.fetch_add(local_total, Ordering::Relaxed);
-
-            println!(
-                "Worker {} finished: {} success, {} errors, {} total",
-                worker_id, local_success, local_error, local_total
-            );
-        });
-    }
-
-    let progress_task = {
-        let success_count_clone = success_count.clone();
-        let error_count_clone = error_count.clone();
-        let total_count_clone = total_count.clone();
-        let end_time = start_time + duration;
-
-        tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(10));
-
-            while Instant::now() < end_time {
-                interval.tick().await;
-                let elapsed = start_time.elapsed().as_secs_f64();
-                let current_success = success_count_clone.load(Ordering::Relaxed);
-                let current_error = error_count_clone.load(Ordering::Relaxed);
-                let current_total = total_count_clone.load(Ordering::Relaxed);
-                let current_tps = current_success as f64 / elapsed;
-
-                println!(
-                    "📊 Progress: {:.1}s elapsed, {} success, {} errors, {} total, TPS: {:.2}",
-                    elapsed, current_success, current_error, current_total, current_tps
-                );
-            }
-        })
-    };
-
-    while let Some(result) = task_set.join_next().await {
-        if let Err(e) = result {
-            eprintln!("Worker task failed: {}", e);
-        }
-    }
-
-    progress_task.abort();
-
-    let final_elapsed = start_time.elapsed();
-    let final_success = success_count.load(Ordering::Relaxed);
-    let final_error = error_count.load(Ordering::Relaxed);
-    let final_total = total_count.load(Ordering::Relaxed);
-    let final_tps = final_success as f64 / final_elapsed.as_secs_f64();
-    let success_rate = if final_total > 0 {
-        (final_success as f64 / final_total as f64) * 100.0
-    } else {
-        0.0
-    };
-
-    println!("\n🎯 Benchmark Results:");
-    println!("=====================================");
-    println!("Duration: {:.2} seconds", final_elapsed.as_secs_f64());
-    println!("Workers: {}", worker_number);
-    println!("Total transactions: {}", final_total);
-    println!("Successful transactions: {}", final_success);
-    println!("Failed transactions: {}", final_error);
-    println!("Success rate: {:.2}%", success_rate);
-    println!(
-        "Average latency per worker: {:.2} ms",
-        (final_elapsed.as_millis() as f64) / (worker_number as f64)
-    );
-    println!("TPS (Transactions Per Second): {:.2}", final_tps);
-    println!("=====================================\n");
-
-    Ok(())
-}
-
-/// 使用原生线程池的高负载压力测试
-pub fn run_native_thread_benchmark(
-    duration: Duration,
-    thread_count: usize,
-    max_concurrent_per_thread: usize,
-) -> TestResult<()> {
-    use std::sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    };
-    use std::thread;
-    use std::time::Instant;
-
-    // 创建共享的测试上下文
-    let ctx = Arc::new(TestContext::new());
-    let success_count = Arc::new(AtomicU64::new(0));
-    let error_count = Arc::new(AtomicU64::new(0));
-    let sent_count = Arc::new(AtomicU64::new(0));
-
-    println!(
-        "🔥 原生线程池压测: {} 线程, 每线程 {} 并发, 持续 {:?}",
-        thread_count, max_concurrent_per_thread, duration
-    );
-
-    let start_time = Instant::now();
-    let end_time = start_time + duration;
-
-    // 创建线程句柄向量
-    let mut thread_handles = Vec::new();
-
-    // 启动工作线程
-    for thread_id in 0..thread_count {
-        let ctx_clone = ctx.clone();
-        let success_count_clone = success_count.clone();
-        let error_count_clone = error_count.clone();
-        let sent_count_clone = sent_count.clone();
 
         let handle = thread::spawn(move || {
             // 为每个线程创建独立的单线程 tokio runtime
@@ -704,151 +547,57 @@ pub fn run_native_thread_benchmark(
                 .unwrap();
 
             println!(
-                "🔥 工作线程 {} 启动，线程ID: {:?}",
-                thread_id,
+                "🚀 工作线程 {} 启动，线程ID: {:?}",
+                worker_id,
                 thread::current().id()
             );
 
             rt.block_on(async move {
                 let mut local_success = 0u64;
                 let mut local_error = 0u64;
-                let mut local_sent = 0u64;
-                let mut pending_payments: Vec<(String, Instant)> =
-                    Vec::with_capacity(max_concurrent_per_thread);
+                let mut local_total = 0u64;
 
-                // 主工作循环
                 while Instant::now() < end_time {
-                    // 检查已完成的支付（批量处理）
-                    let mut completed_indices = Vec::new();
+                    let Ok(result) = ctx_clone
+                        .send_payment(
+                            &ctx_clone.node1.rpc_url,
+                            NODE_3_PUBKEY,
+                            "0x64", // 100 units
+                            true,
+                        )
+                        .await
+                    else {
+                        continue;
+                    };
 
-                    for (i, (payment_hash, start_time)) in pending_payments.iter().enumerate() {
-                        // 对于超时的支付直接标记为失败
-                        if start_time.elapsed() > Duration::from_secs(15) {
-                            completed_indices.push(i);
+                    let res = ctx_clone
+                        .wait_until_final_status(
+                            &ctx_clone.node1.rpc_url,
+                            result["result"]["payment_hash"].as_str().unwrap(),
+                        )
+                        .await;
+
+                    match res {
+                        Ok(status) if status == "Success" => {
+                            local_success += 1;
+                            success_count_clone.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Ok(status) if status == "Failed" => {
                             local_error += 1;
-                            continue;
-                        }
-
-                        // 快速状态检查
-                        if let Ok(status) = ctx_clone
-                            .get_payment_status(&ctx_clone.node1.rpc_url, payment_hash)
-                            .await
-                        {
-                            match status.as_str() {
-                                "Success" => {
-                                    completed_indices.push(i);
-                                    local_success += 1;
-                                }
-                                "Failed" => {
-                                    completed_indices.push(i);
-                                    local_error += 1;
-                                }
-                                _ => {} // 仍在处理中
+                            error_count_clone.fetch_add(1, Ordering::Relaxed);
+                            if local_error % 10 == 0 {
+                                eprintln!("Worker {}: Error #{}: ", worker_id, local_error);
                             }
                         }
-                    }
-
-                    // 从后往前删除已完成的支付，避免索引问题
-                    for &index in completed_indices.iter().rev() {
-                        pending_payments.swap_remove(index);
-                    }
-
-                    // 如果有容量，发送新的支付
-                    if pending_payments.len() < max_concurrent_per_thread
-                        && Instant::now() < end_time
-                    {
-                        local_sent += 1;
-
-                        // 发送支付请求
-                        match ctx_clone
-                            .send_payment(
-                                &ctx_clone.node1.rpc_url,
-                                NODE_3_PUBKEY,
-                                "0x32", // 50 units
-                                true,
-                            )
-                            .await
-                        {
-                            Ok(result) => {
-                                if let Some(payment_hash) =
-                                    result["result"]["payment_hash"].as_str()
-                                {
-                                    pending_payments
-                                        .push((payment_hash.to_string(), Instant::now()));
-                                } else {
-                                    local_error += 1;
-                                }
-                            }
-                            Err(_) => {
-                                local_error += 1;
-                            }
-                        }
-
-                        // 定期报告进度
-                        if local_sent % 100 == 0 {
-                            println!(
-                                "线程 {}: {} 已发送, {} pending, {} ✅, {} ❌ (速率: {:.1}/s)",
-                                thread_id,
-                                local_sent,
-                                pending_payments.len(),
-                                local_success,
-                                local_error,
-                                local_sent as f64 / start_time.elapsed().as_secs_f64()
-                            );
-                        }
-                    } else if pending_payments.len() >= max_concurrent_per_thread {
-                        // 如果达到并发上限，短暂休眠
-                        tokio::time::sleep(Duration::from_millis(1)).await;
+                        _ => {}
                     }
                 }
 
-                // 结算阶段：等待剩余支付完成
+                local_total += 1;
+                total_count_clone.fetch_add(local_total, Ordering::Relaxed);
                 println!(
-                    "线程 {} 发送完毕，等待 {} 个支付结算...",
-                    thread_id,
-                    pending_payments.len()
-                );
-
-                let settlement_start = Instant::now();
-                while !pending_payments.is_empty()
-                    && settlement_start.elapsed() < Duration::from_secs(30)
-                {
-                    let mut i = 0;
-                    while i < pending_payments.len() {
-                        let (payment_hash, _) = &pending_payments[i];
-
-                        match ctx_clone
-                            .get_payment_status(&ctx_clone.node1.rpc_url, payment_hash)
-                            .await
-                        {
-                            Ok(status) if status == "Success" => {
-                                local_success += 1;
-                                pending_payments.swap_remove(i);
-                            }
-                            Ok(status) if status == "Failed" => {
-                                local_error += 1;
-                                pending_payments.swap_remove(i);
-                            }
-                            _ => i += 1,
-                        }
-                    }
-
-                    if !pending_payments.is_empty() {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                    }
-                }
-
-                // 剩余超时支付算作错误
-                local_error += pending_payments.len() as u64;
-
-                // 更新全局统计
-                success_count_clone.fetch_add(local_success, Ordering::Relaxed);
-                error_count_clone.fetch_add(local_error, Ordering::Relaxed);
-                sent_count_clone.fetch_add(local_sent, Ordering::Relaxed);
-
-                println!(
-                    "线程 {} 完成: {} 发送, {} ✅, {} ❌",
-                    thread_id, local_sent, local_success, local_error
+                    "🏁 Worker {} 完成: {} 成功, {} 错误, {} 总计",
+                    worker_id, local_success, local_error, local_total
                 );
             });
         });
@@ -860,27 +609,21 @@ pub fn run_native_thread_benchmark(
     let progress_handle = {
         let success_count_clone = success_count.clone();
         let error_count_clone = error_count.clone();
-        let sent_count_clone = sent_count.clone();
+        let total_count_clone = total_count.clone();
 
         thread::spawn(move || {
             while start_time.elapsed() < duration {
-                thread::sleep(std::time::Duration::from_secs(5));
+                thread::sleep(std::time::Duration::from_secs(10));
 
                 let elapsed = start_time.elapsed().as_secs_f64();
                 let current_success = success_count_clone.load(Ordering::Relaxed);
                 let current_error = error_count_clone.load(Ordering::Relaxed);
-                let current_sent = sent_count_clone.load(Ordering::Relaxed);
-                let send_rate = current_sent as f64 / elapsed;
-                let success_rate = current_success as f64 / elapsed;
-                let success_percentage = if current_sent > 0 {
-                    (current_success as f64 / current_sent as f64) * 100.0
-                } else {
-                    0.0
-                };
+                let current_total = total_count_clone.load(Ordering::Relaxed);
+                let current_tps = current_success as f64 / elapsed;
 
                 println!(
-                    "📊 [{:.1}s] 发送: {} ({:.1}发/s), 成功: {} ({:.1}成功/s), 失败: {}, 成功率: {:.1}%",
-                    elapsed, current_sent, send_rate, current_success, success_rate, current_error, success_percentage
+                    "📊 进度报告: {:.1}s 已过去, {} 成功, {} 错误, {} 总计, TPS: {:.2}",
+                    elapsed, current_success, current_error, current_total, current_tps
                 );
             }
         })
@@ -889,7 +632,7 @@ pub fn run_native_thread_benchmark(
     // 等待所有工作线程完成
     for (i, handle) in thread_handles.into_iter().enumerate() {
         if let Err(e) = handle.join() {
-            eprintln!("线程 {} 执行出错: {:?}", i, e);
+            eprintln!("工作线程 {} 执行出错: {:?}", i, e);
         }
     }
 
@@ -900,30 +643,27 @@ pub fn run_native_thread_benchmark(
     let final_elapsed = start_time.elapsed();
     let final_success = success_count.load(Ordering::Relaxed);
     let final_error = error_count.load(Ordering::Relaxed);
-    let final_sent = sent_count.load(Ordering::Relaxed);
-    let send_tps = final_sent as f64 / final_elapsed.as_secs_f64();
-    let success_tps = final_success as f64 / final_elapsed.as_secs_f64();
-    let success_rate = if final_sent > 0 {
-        (final_success as f64 / final_sent as f64) * 100.0
+    let final_total = total_count.load(Ordering::Relaxed);
+    let final_tps = final_success as f64 / final_elapsed.as_secs_f64();
+    let success_rate = if final_total > 0 {
+        (final_success as f64 / final_total as f64) * 100.0
     } else {
         0.0
     };
 
-    println!("\n🚀 原生线程池压测结果:");
+    println!("\n🎯 原生线程基准测试结果:");
     println!("=====================================");
     println!("测试时长: {:.2} 秒", final_elapsed.as_secs_f64());
-    println!("线程数量: {}", thread_count);
-    println!("每线程最大并发: {}", max_concurrent_per_thread);
-    println!("总发送数: {}", final_sent);
+    println!("工作线程数: {}", worker_number);
+    println!("总交易数: {}", final_total);
     println!("成功交易: {}", final_success);
     println!("失败交易: {}", final_error);
     println!("成功率: {:.2}%", success_rate);
-    println!("发送TPS: {:.2}", send_tps);
-    println!("成功TPS: {:.2}", success_tps);
     println!(
         "平均每线程延迟: {:.2} ms",
-        (final_elapsed.as_millis() as f64) / (thread_count as f64)
+        (final_elapsed.as_millis() as f64) / (worker_number as f64)
     );
+    println!("TPS (每秒交易数): {:.2}", final_tps);
     println!("=====================================\n");
 
     Ok(())
@@ -932,8 +672,8 @@ pub fn run_native_thread_benchmark(
 /// 超高负载压测：使用工作队列模式的原生线程池
 pub fn run_extreme_native_benchmark(
     duration: Duration,
-    worker_threads: usize,
     producer_threads: usize,
+    worker_threads: usize,
     queue_size: usize,
 ) -> TestResult<()> {
     use std::sync::{
@@ -1043,10 +783,9 @@ pub fn run_extreme_native_benchmark(
     }
 
     // 启动工作线程（负责处理支付结果）
-    let rx_clone = rx.clone();
     for worker_id in 0..worker_threads {
         let ctx_clone = ctx.clone();
-        let rx_clone = rx_clone.clone();
+        let rx_clone = rx.clone();
         let success_count_clone = success_count.clone();
         let error_count_clone = error_count.clone();
 
@@ -1067,42 +806,79 @@ pub fn run_extreme_native_benchmark(
                 let mut local_success = 0u64;
                 let mut local_error = 0u64;
 
-                // 工作循环
-                while Instant::now() < end_time {
-                    // 从队列接收支付哈希
-                    let payment_hash = {
+                // 存储正在处理的支付
+                let mut pending_payments: Vec<String> = Vec::new();
+
+                // 工作循环 - 修改这部分
+                loop {
+                    // 处理队列中的新支付哈希
+                    while let Ok(payment_hash) = {
                         let guard = rx_clone.lock().unwrap();
-                        match guard.recv_timeout(Duration::from_millis(100)) {
-                            Ok(payment_hash) => Some(payment_hash),
-                            Err(mpsc::RecvTimeoutError::Timeout) => None,
-                            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                                // 队列已关闭
-                                break;
+                        guard.try_recv()
+                    } {
+                        pending_payments.push(payment_hash);
+                    }
+
+                    // 检查所有待处理的支付状态
+                    let mut i = 0;
+                    while i < pending_payments.len() {
+                        let payment_hash = &pending_payments[i];
+
+                        match ctx_clone
+                            .get_payment_status(&ctx_clone.node1.rpc_url, payment_hash)
+                            .await
+                        {
+                            Ok(status) if status == "Success" => {
+                                local_success += 1;
+                                pending_payments.swap_remove(i); // 移除已完成的支付
                             }
+                            Ok(status) if status == "Failed" => {
+                                local_error += 1;
+                                pending_payments.swap_remove(i); // 移除已完成的支付
+                            }
+                            _ => {
+                                i += 1; // 仍在处理中，检查下一个
+                            }
+                        }
+                    }
+
+                    // 检查是否还有工作要做
+                    let has_pending = !pending_payments.is_empty();
+                    let queue_open = {
+                        let guard = rx_clone.lock().unwrap();
+                        match guard.try_recv() {
+                            Ok(payment_hash) => {
+                                // 如果还有新的支付，放回待处理列表
+                                pending_payments.push(payment_hash);
+                                true
+                            }
+                            Err(mpsc::TryRecvError::Empty) => true, // 队列空但还开着
+                            Err(mpsc::TryRecvError::Disconnected) => false, // 队列已关闭
                         }
                     };
 
-                    if let Some(payment_hash) = payment_hash {
-                        loop {
-                            // 查询支付状态
-                            match ctx_clone
-                                .get_payment_status(&ctx_clone.node1.rpc_url, &payment_hash)
-                                .await
-                            {
-                                Ok(status) if status == "Success" => {
-                                    local_success += 1;
-                                    break;
-                                }
-                                Ok(status) if status == "Failed" => {
-                                    local_error += 1;
-                                    break;
-                                }
-                                _ => {
-                                    // 仍在处理中，短暂等待
-                                    tokio::time::sleep(Duration::from_millis(100)).await;
-                                }
-                            }
-                        }
+                    // 如果队列已关闭且没有待处理的支付，退出
+                    if !queue_open && !has_pending {
+                        break;
+                    }
+
+                    // 短暂休眠，避免过度占用CPU
+                    if pending_payments.is_empty() {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    } else {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+
+                    // 定期报告进度
+                    if (local_success + local_error) % 100 == 0 && (local_success + local_error) > 0
+                    {
+                        println!(
+                            "工作线程 {}: {} pending, {} ✅, {} ❌",
+                            worker_id,
+                            pending_payments.len(),
+                            local_success,
+                            local_error
+                        );
                     }
                 }
 
@@ -1119,7 +895,17 @@ pub fn run_extreme_native_benchmark(
         handles.push(handle);
     }
 
-    // 等待所有线程完成
+    // 等待所有生产者线程完成
+    for (i, handle) in handles.drain(0..producer_threads).enumerate() {
+        if let Err(e) = handle.join() {
+            eprintln!("生产者线程 {} 执行出错: {:?}", i, e);
+        }
+    }
+
+    // 关闭发送端，这样工作线程就知道不会再有新的支付了
+    drop(tx);
+
+    // 等待所有工作线程完成
     for handle in handles {
         let _ = handle.join();
     }
@@ -1155,52 +941,6 @@ pub fn run_extreme_native_benchmark(
     );
     println!("=====================================\n");
 
-    Ok(())
-}
-
-pub fn run_simple_thread_demo() -> TestResult<()> {
-    // 演示真正的线程并发：6个线程，持续10秒
-    use std::thread;
-    use std::time::{Duration, Instant};
-
-    println!("🎯 演示真正的线程并发");
-    let start_time = Instant::now();
-    let duration = Duration::from_secs(100);
-    let thread_count = 6;
-
-    let handles: Vec<_> = (0..thread_count)
-        .map(|thread_id| {
-            thread::spawn(move || {
-                println!(
-                    "🚀 线程 {} 启动，线程ID: {:?}, PID: {}",
-                    thread_id,
-                    thread::current().id(),
-                    std::process::id()
-                );
-
-                let mut counter = 0;
-                while start_time.elapsed() < duration {
-                    counter += 1;
-                    // 模拟一些工作
-                    thread::sleep(Duration::from_millis(100));
-
-                    if counter % 10 == 0 {
-                        println!("线程 {} 处理了 {} 个任务", thread_id, counter);
-                    }
-                }
-
-                println!("🏁 线程 {} 完成，共处理 {} 个任务", thread_id, counter);
-                counter
-            })
-        })
-        .collect();
-
-    let mut total = 0;
-    for handle in handles {
-        total += handle.join().unwrap();
-    }
-
-    println!("✅ 所有线程完成，总处理: {} 个任务", total);
     Ok(())
 }
 
@@ -1270,98 +1010,29 @@ mod tests {
         run_integration_test().await
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
-    async fn test_benchmark() -> TestResult<()> {
-        run_benchmark_test(Duration::from_secs(180), 6).await
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_short_benchmark() -> TestResult<()> {
-        run_benchmark_test(Duration::from_secs(30), 2).await
+    fn test_benchmark() -> TestResult<()> {
+        run_benchmark_test(Duration::from_secs(180), 6)
     }
 
     #[test]
     #[ignore]
-    fn test_native_thread_benchmark() -> TestResult<()> {
-        // 原生线程池测试：8个线程，每个30并发，持续60秒
-        run_native_thread_benchmark(Duration::from_secs(60), 8, 30)
+    fn test_short_benchmark() -> TestResult<()> {
+        run_benchmark_test(Duration::from_secs(30), 2)
     }
 
     #[test]
     #[ignore]
     fn test_extreme_native_benchmark() -> TestResult<()> {
         // 极限原生线程测试：16个线程，每个50并发，持续30秒
-        run_extreme_native_benchmark(Duration::from_secs(30), 16, 50, 1000)
-    }
-
-    #[test]
-    #[ignore]
-    fn test_quick_native_benchmark() -> TestResult<()> {
-        // 快速原生线程测试：4个线程，每个20并发，持续10秒
-        run_native_thread_benchmark(Duration::from_secs(10), 4, 20)
+        run_extreme_native_benchmark(Duration::from_secs(30), 50, 16, 1000)
     }
 
     #[test]
     #[ignore]
     fn test_extreme_native_queue_benchmark() -> TestResult<()> {
         // 极限队列压测：6个生产者，4个工作者，队列1000，持续30秒
-        run_extreme_native_benchmark(Duration::from_secs(30), 3, 20, 1000)
-    }
-
-    #[test]
-    fn test_simple_thread_demo() -> TestResult<()> {
-        run_simple_thread_demo();
-        Ok(())
-    }
-
-    #[test]
-    #[ignore]
-    fn test_thread_count_in_test_mode() {
-        println!("🧪 Test 模式 - 线程演示");
-        println!(
-            "📱 PID: {}, 主线程ID: {:?}",
-            std::process::id(),
-            std::thread::current().id()
-        );
-
-        let thread_count = 8;
-
-        let handles: Vec<_> = (0..thread_count)
-            .map(|i| {
-                std::thread::spawn(move || {
-                    println!(
-                        "🚀 测试线程 {} 启动，线程ID: {:?}",
-                        i,
-                        std::thread::current().id()
-                    );
-
-                    // CPU密集型工作
-                    for cycle in 0..50 {
-                        let mut sum = 0u64;
-                        for j in 0..1000000 {
-                            sum = sum.wrapping_add(j);
-                        }
-
-                        if cycle % 10 == 0 {
-                            println!("测试线程 {} - 循环 {} (sum: {})", i, cycle, sum);
-                        }
-
-                        std::thread::sleep(Duration::from_millis(100));
-                    }
-
-                    println!("🏁 测试线程 {} 完成", i);
-                })
-            })
-            .collect();
-
-        println!("✅ 测试模式已创建 {} 个线程", thread_count);
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        println!("🧪 测试模式完成！");
+        run_extreme_native_benchmark(Duration::from_secs(30), 20, 3, 1000)
     }
 }

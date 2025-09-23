@@ -2753,6 +2753,11 @@ where
             Some((ProcessingChannelError::RepeatedProcessing(_), _)) => {
                 // do nothing
             }
+
+            Some((ProcessingChannelError::WaitingTlcAck, _)) => {
+                // do nothing
+            }
+
             Some((error, tlc_err)) => {
                 self.update_graph_with_tlc_fail(&myself, &tlc_err).await;
                 let (error, need_to_retry) =

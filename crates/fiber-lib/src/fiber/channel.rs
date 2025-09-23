@@ -2249,7 +2249,7 @@ where
         res: &Result<u64, ProcessingChannelError>,
     ) {
         match res {
-            Err(ProcessingChannelError::WaitingTlcAck) if command.previous_tlc.is_some() => {
+            Err(ProcessingChannelError::WaitingTlcAck) => {
                 // buffer the tlc add command to retry later
                 self.register_retryable_tlc_add(myself, state, command);
             }
