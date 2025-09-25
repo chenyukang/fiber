@@ -4135,6 +4135,16 @@ pub(crate) fn occupied_capacity(
 
 // Constructors for the channel actor state.
 impl ChannelActorState {
+    pub fn debug_size(&self) {
+        eprintln!(
+            "self.retryable_tlc_operations: {:?} remote_points: {:?} tlc_count: {:?} applied_add: {:?} applied_remove: {:?}",
+            self.retryable_tlc_operations.len(),
+            self.remote_commitment_points.len(),
+            self.tlc_state.all_tlcs().count(),
+            self.tlc_state.applied_add_tlcs.len(),
+            self.tlc_state.applied_remove_tlcs.len()
+        );
+    }
     pub fn network(&self) -> ActorRef<NetworkActorMessage> {
         self.network
             .as_ref()
