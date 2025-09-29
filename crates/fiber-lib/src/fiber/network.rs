@@ -59,6 +59,7 @@ use super::features::FeatureVector;
 use super::gossip::{GossipActorMessage, GossipMessageStore, GossipMessageUpdates};
 use super::graph::{NetworkGraph, NetworkGraphStateStore, OwnedChannelUpdateEvent, RouterHop};
 use super::key::blake2b_hash_with_salt;
+use super::max_flow_router::MaxFlowRouter;
 use super::types::{
     BasicMppPaymentData, BroadcastMessageWithTimestamp, EcdsaSignature, FiberMessage,
     ForwardTlcResult, GossipMessage, Hash256, Init, NodeAnnouncement, OpenChannel, Privkey, Pubkey,
@@ -2545,9 +2546,9 @@ where
         let graph = self.network_graph.read().await;
         let source = graph.get_source_pubkey();
         let active_parts = session.attempts().filter(|a| a.is_active()).count();
-        let mut remain_amount = session.remain_amount();
-        let mut max_fee = session.remain_fee_amount();
-        let mut result = vec![];
+        let remain_amount = session.remain_amount();
+        let max_fee = session.remain_fee_amount();
+        let max_parts = session.max_parts() - active_parts;
 
         if remain_amount == 0 {
             let error = format!("Send amount {} is not expected to be 0", remain_amount);
@@ -2556,83 +2557,161 @@ where
         }
 
         session.request.channel_stats = GraphChannelStat::new(Some(graph.channel_stats()));
-        let mut attempt_id = session.attempts_count() as u64;
-        let mut target_amount = remain_amount;
-        let amount_low_bound = Some(1);
-        let mut iteration = 0;
 
-        while (result.len() < session.max_parts() - active_parts) && remain_amount > 0 {
-            iteration += 1;
-
-            debug!(
-                "build route iteration {}, target_amount: {} amount_low_bound: {:?} remain_amount: {}",
-                iteration,
-                target_amount,
-                amount_low_bound,
+        // 使用最大流算法一次性分配所有路径
+        match self
+            .build_payment_routes_with_max_flow(
+                &graph,
+                session,
+                source,
                 remain_amount,
-            );
-            match graph.build_route(target_amount, amount_low_bound, max_fee, &session.request) {
-                Err(e) => {
-                    let error = format!("Failed to build route, {}", e);
-                    self.set_payment_fail_with_error(session, &error);
-                    return Err(Error::SendPaymentError(error));
+                max_fee,
+                max_parts,
+            )
+            .await
+        {
+            Ok(attempts) => {
+                for attempt in &attempts {
+                    session.append_attempt(attempt.clone());
                 }
-                Ok(hops) => {
-                    assert_ne!(hops[0].funding_tx_hash, Hash256::default());
-                    let new_attempt_id = if session.is_dry_run() {
-                        0
-                    } else {
-                        attempt_id += 1;
-                        attempt_id
-                    };
+                Ok(attempts)
+            }
+            Err(e) => {
+                self.set_payment_fail_with_error(session, &e.to_string());
+                Err(e)
+            }
+        }
+    }
 
-                    let attempt = session.new_attempt(
-                        new_attempt_id,
-                        source,
-                        session.request.target_pubkey,
-                        hops,
-                    );
+    // 新增：基于最大流算法的路径分配实现
+    async fn build_payment_routes_with_max_flow(
+        &self,
+        graph: &NetworkGraph<S>,
+        session: &mut PaymentSession,
+        source: Pubkey,
+        amount: u128,
+        max_fee: Option<u128>,
+        max_parts: usize,
+    ) -> Result<Vec<Attempt>, Error> {
+        // 构建网络图的内部表示
+        let (node_map, edges) =
+            MaxFlowRouter::extract_network_topology(graph, &session.request, max_fee)?;
 
-                    let session_route = &attempt.route;
-                    #[cfg(debug_assertions)]
-                    dbg!(
-                        "left amount: {}, minimal_amount: {} target amount: {}",
-                        remain_amount - session_route.receiver_amount(),
-                        target_amount,
-                        session_route.receiver_amount()
-                    );
+        let source_idx = *node_map.get(&source).ok_or_else(|| {
+            Error::SendPaymentError("Source node not found in network".to_string())
+        })?;
 
-                    for (from, channel_outpoint, amount) in session_route.channel_outpoints() {
-                        if let Some(sent_node) = graph.get_channel_sent_node(channel_outpoint, from)
-                        {
-                            session.request.channel_stats.add_channel(
-                                channel_outpoint,
-                                sent_node,
-                                amount,
-                            );
-                        }
-                    }
-                    remain_amount -= session_route.receiver_amount();
-                    target_amount = remain_amount;
-                    if let Some(fee) = max_fee {
-                        max_fee = Some(fee - session_route.fee());
-                    }
-                    result.push(attempt);
+        let target_idx = *node_map
+            .get(&session.request.target_pubkey)
+            .ok_or_else(|| {
+                Error::SendPaymentError("Target node not found in network".to_string())
+            })?;
+
+        // 使用最大流算法求解路径分配
+        let solution_paths = MaxFlowRouter::solve_max_flow_routing(
+            node_map.len(),
+            &edges,
+            source_idx,
+            target_idx,
+            amount as i64,
+            max_parts,
+        )?;
+
+        // 将解决方案转换为 Attempt 对象
+        self.convert_solution_to_attempts(solution_paths, &node_map, &edges, graph, session, source)
+            .await
+    }
+
+    /// 将解决方案转换为 Attempt 对象
+    async fn convert_solution_to_attempts(
+        &self,
+        solution_paths: Vec<super::max_flow_router::SolutionPath>,
+        node_map: &std::collections::HashMap<Pubkey, usize>,
+        edges: &[super::max_flow_router::FlowEdge],
+        graph: &NetworkGraph<S>,
+        session: &mut PaymentSession,
+        source: Pubkey,
+    ) -> Result<Vec<Attempt>, Error> {
+        let mut attempts = Vec::new();
+        let reverse_node_map: std::collections::HashMap<usize, Pubkey> =
+            node_map.iter().map(|(k, v)| (*v, *k)).collect();
+
+        for (idx, solution_path) in solution_paths.iter().enumerate() {
+            // 将节点索引转换回 Pubkey
+            let mut pubkey_path = Vec::new();
+            for &node_idx in &solution_path.path {
+                if let Some(&pubkey) = reverse_node_map.get(&node_idx) {
+                    pubkey_path.push(pubkey);
+                } else {
+                    return Err(Error::SendPaymentError(format!(
+                        "Could not find pubkey for node index {}",
+                        node_idx
+                    )));
                 }
+            }
+
+            // 构建路由跳点
+            let mut hops = Vec::new();
+            for i in 0..pubkey_path.len() - 1 {
+                let from = pubkey_path[i];
+                let to = pubkey_path[i + 1];
+
+                // 查找对应的边和通道信息
+                let flow_edge = edges
+                    .iter()
+                    .find(|e| {
+                        let from_idx = node_map.get(&from).unwrap();
+                        let to_idx = node_map.get(&to).unwrap();
+                        e.from == *from_idx && e.to == *to_idx
+                    })
+                    .ok_or_else(|| {
+                        Error::SendPaymentError(format!(
+                            "Could not find edge between {:?} and {:?}",
+                            from, to
+                        ))
+                    })?;
+
+                let next_hop = if i + 2 < pubkey_path.len() {
+                    Some(pubkey_path[i + 2])
+                } else {
+                    None
+                };
+
+                hops.push(crate::fiber::types::PaymentHopData {
+                    amount: solution_path.flow as u128,
+                    expiry: session.request.final_tlc_expiry_delta as u64,
+                    payment_preimage: None,
+                    hash_algorithm: crate::fiber::hash_algorithm::HashAlgorithm::CkbHash,
+                    funding_tx_hash: flow_edge.channel_outpoint.tx_hash().into(),
+                    next_hop,
+                    custom_records: None,
+                });
+            }
+
+            let attempt_id = if session.is_dry_run() {
+                0
+            } else {
+                session.attempts_count() as u64 + idx as u64 + 1
             };
+
+            let attempt =
+                session.new_attempt(attempt_id, source, session.request.target_pubkey, hops);
+
+            // 更新通道统计信息
+            let session_route = &attempt.route;
+            for (from, channel_outpoint, amount) in session_route.channel_outpoints() {
+                if let Some(sent_node) = graph.get_channel_sent_node(channel_outpoint, from) {
+                    session
+                        .request
+                        .channel_stats
+                        .add_channel(channel_outpoint, sent_node, amount);
+                }
+            }
+
+            attempts.push(attempt);
         }
 
-        if remain_amount > 0 {
-            let error = "Failed to build enough routes for MPP payment".to_string();
-            self.set_payment_fail_with_error(session, &error);
-            return Err(Error::SendPaymentError(error));
-        }
-
-        for attempt in &result {
-            session.append_attempt(attempt.clone());
-        }
-
-        return Ok(result);
+        Ok(attempts)
     }
 
     async fn send_payment_onion_packet(

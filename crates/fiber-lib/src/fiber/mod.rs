@@ -6,6 +6,7 @@ pub mod gossip;
 pub mod graph;
 pub mod hash_algorithm;
 pub mod history;
+pub mod max_flow_router;
 pub mod network;
 pub mod payment;
 pub mod serde_utils;
