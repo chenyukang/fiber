@@ -4132,20 +4132,6 @@ impl ChannelActorState {
             "remote_revoke_verify: {:?}",
             self.remote_revocation_nonce_for_verify
         );
-
-        // for op in &self.retryable_tlc_operations {
-        //     match op {
-        //         RetryableTlcOperation::AddTlc(cmd) => {
-        //             eprintln!(
-        //                 "  AddTlc: amount: {:?}, payment_hash: {:?}",
-        //                 cmd.amount, cmd.payment_hash
-        //             );
-        //         }
-        //         RetryableTlcOperation::RemoveTlc(id, _) => {
-        //             eprintln!("  RemoveTlc: tlc_id: {:?}", id);
-        //         }
-        //     }
-        // }
     }
     pub fn network(&self) -> ActorRef<NetworkActorMessage> {
         self.network
