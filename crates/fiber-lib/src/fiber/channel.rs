@@ -4099,14 +4099,53 @@ pub(crate) fn occupied_capacity(
 // Constructors for the channel actor state.
 impl ChannelActorState {
     pub fn debug_size(&self) {
+        let add_tlc_count = self
+            .retryable_tlc_operations
+            .iter()
+            .filter(|op| matches!(op, RetryableTlcOperation::AddTlc(_)))
+            .count();
+        let remove_tlc_count = self
+            .retryable_tlc_operations
+            .iter()
+            .filter(|op| matches!(op, RetryableTlcOperation::RemoveTlc(_, _)))
+            .count();
+
         eprintln!(
-            "self.retryable_tlc_operations: {:?} remote_points: {:?} tlc_count: {:?} applied_add: {:?} applied_remove: {:?}",
+            "self.retryable_tlc_operations: {:?} ({:?} {:?}) remote_points: {:?} tlc_count: {:?} applied_add: {:?} applied_remove: {:?} state: {:?}, waiting_ack: {:?}",
             self.retryable_tlc_operations.len(),
+            add_tlc_count,
+            remove_tlc_count,
             self.remote_commitment_points.len(),
             self.tlc_state.all_tlcs().count(),
             self.tlc_state.applied_add_tlcs.len(),
-            self.tlc_state.applied_remove_tlcs.len()
+            self.tlc_state.applied_remove_tlcs.len(),
+            self.state,
+            self.is_waiting_tlc_ack(),
         );
+
+        eprintln!("is_waiting: {:?}", self.tlc_state.waiting_ack);
+        eprintln!(
+            "remote_revoke_send: {:?}",
+            self.remote_revocation_nonce_for_send
+        );
+        eprintln!(
+            "remote_revoke_verify: {:?}",
+            self.remote_revocation_nonce_for_verify
+        );
+
+        // for op in &self.retryable_tlc_operations {
+        //     match op {
+        //         RetryableTlcOperation::AddTlc(cmd) => {
+        //             eprintln!(
+        //                 "  AddTlc: amount: {:?}, payment_hash: {:?}",
+        //                 cmd.amount, cmd.payment_hash
+        //             );
+        //         }
+        //         RetryableTlcOperation::RemoveTlc(id, _) => {
+        //             eprintln!("  RemoveTlc: tlc_id: {:?}", id);
+        //         }
+        //     }
+        // }
     }
     pub fn network(&self) -> ActorRef<NetworkActorMessage> {
         self.network
