@@ -1838,13 +1838,15 @@ where
         trigger_next: bool,
     ) {
         loop {
-            if state.is_waiting_tlc_ack() {
-                break;
-            }
-
             let Some(operation) = state.retryable_tlc_operations.pop_front() else {
                 return;
             };
+
+            state.debug_size();
+
+            if state.is_waiting_tlc_ack() {
+                break;
+            }
 
             let success = match operation {
                 RetryableTlcOperation::RemoveTlc(tlc_id, reason) => self
@@ -4110,8 +4112,8 @@ impl ChannelActorState {
             .filter(|op| matches!(op, RetryableTlcOperation::RemoveTlc(_, _)))
             .count();
 
-        eprintln!(
-            "self.retryable_tlc_operations: {:?} ({:?} {:?}) remote_points: {:?} tlc_count: {:?} applied_add: {:?} applied_remove: {:?} state: {:?}, waiting_ack: {:?}",
+        debug!(
+            "debug_size self.retryable_tlc_operations: {:?} ({:?} {:?}) remote_points: {:?} tlc_count: {:?} applied_add: {:?} applied_remove: {:?} state: {:?}, waiting_ack: {:?}",
             self.retryable_tlc_operations.len(),
             add_tlc_count,
             remove_tlc_count,
@@ -4123,13 +4125,13 @@ impl ChannelActorState {
             self.is_waiting_tlc_ack(),
         );
 
-        eprintln!("is_waiting: {:?}", self.tlc_state.waiting_ack);
-        eprintln!(
-            "remote_revoke_send: {:?}",
+        debug!("debug_size is_waiting: {:?}", self.tlc_state.waiting_ack);
+        debug!(
+            "debug_size remote_revoke_send: {:?}",
             self.remote_revocation_nonce_for_send
         );
-        eprintln!(
-            "remote_revoke_verify: {:?}",
+        debug!(
+            "debug_size remote_revoke_verify: {:?}",
             self.remote_revocation_nonce_for_verify
         );
     }
