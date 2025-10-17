@@ -1838,15 +1838,15 @@ where
         trigger_next: bool,
     ) {
         loop {
+            if state.is_waiting_tlc_ack() {
+                break;
+            }
+
             let Some(operation) = state.retryable_tlc_operations.pop_front() else {
                 return;
             };
 
             state.debug_size();
-
-            if state.is_waiting_tlc_ack() {
-                break;
-            }
 
             let success = match operation {
                 RetryableTlcOperation::RemoveTlc(tlc_id, reason) => self
@@ -5872,8 +5872,8 @@ impl ChannelActorState {
 
     fn is_waiting_tlc_ack(&self) -> bool {
         self.tlc_state.waiting_ack
-            || (self.remote_revocation_nonce_for_send.is_none()
-                || self.remote_revocation_nonce_for_verify.is_none())
+            || self.remote_revocation_nonce_for_send.is_none()
+            || self.remote_revocation_nonce_for_verify.is_none()
     }
 
     fn check_tlc_limits(&self, add_amount: u128, is_sent: bool) -> ProcessingChannelResult {

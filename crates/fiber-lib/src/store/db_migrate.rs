@@ -32,6 +32,10 @@ impl<'a> DbMigrate<'a> {
     /// - Greater: The database version is greater than the matched version of the executable binary.
     ///   Requires upgrade the executable binary.
     pub fn check(&self) -> Ordering {
+        // if set panic environment variable, then panic
+        if std::env::var("SKIP_MIGRATION").is_ok() {
+            return Ordering::Equal;
+        }
         self.migrations.check(self.db)
     }
 
