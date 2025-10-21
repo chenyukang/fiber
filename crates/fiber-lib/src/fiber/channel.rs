@@ -1743,6 +1743,13 @@ where
         state: &mut ChannelActorState,
         operation: RetryableTlcOperation,
     ) {
+        for o in state.retryable_tlc_operations.iter() {
+            if o == &operation {
+                // already registered
+                error!("operation: {:?} already registered", operation);
+                return;
+            }
+        }
         state.retryable_tlc_operations.push_back(operation);
         if state.retryable_tlc_operations.len() == 1 {
             // if there are already some retryable tasks in queue, we don't need to trigger again
@@ -1846,7 +1853,6 @@ where
                 {
                     state.error_debug_size();
                     error!("got it ....................");
-                    panic!("now");
                 }
                 break;
             }
