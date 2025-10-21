@@ -2675,7 +2675,7 @@ async fn test_send_payment_three_nodes_send_each_other_no_wait() {
             .send_payment_keysend(&nodes[2], amount, false)
             .await
             .unwrap();
-        eprintln!(
+        error!(
             "send: {} payment_hash: {:?} sent, fee: {:?}",
             _i, payment1.payment_hash, payment1.fee
         );
@@ -2688,7 +2688,7 @@ async fn test_send_payment_three_nodes_send_each_other_no_wait() {
             .await
             .unwrap();
         all_sent.push((2, payment2.payment_hash));
-        eprintln!(
+        error!(
             "send: {} payment_hash: {:?} sent, fee: {:?}",
             _i, payment2.payment_hash, payment2.fee
         );
@@ -2714,7 +2714,7 @@ async fn test_send_payment_three_nodes_send_each_other_no_wait() {
         let channel_state_2 = nodes[1].get_channel_actor_state(channels[1]);
         let channel_state_3 = nodes[2].get_channel_actor_state(channels[1]);
 
-        eprintln!("channel_state0: {:?}, channel_state1: {:?}, channel_state2: {:?}, channel_state3: {:?}",
+        error!("channel_state0: {:?}, channel_state1: {:?}, channel_state2: {:?}, channel_state3: {:?}",
             channel_state_0.state, channel_state_1.state, channel_state_2.state, channel_state_3.state);
     }
     let new_node_0_balance = nodes[0].get_local_balance_from_channel(channels[0]);
