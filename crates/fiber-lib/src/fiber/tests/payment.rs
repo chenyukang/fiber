@@ -2699,12 +2699,23 @@ async fn test_send_payment_three_nodes_send_each_other_no_wait() {
     loop {
         for (node_index, payment_hash) in all_sent.clone().iter() {
             let node = &nodes[*node_index];
-            node.wait_until_success(*payment_hash).await;
-            all_sent.retain(|x| x.1 != *payment_hash);
+            //node.wait_until_success(*payment_hash).await;
+            let payment_state = node.get_payment_status(*payment_hash).await;
+            if payment_state == PaymentStatus::Success {
+                all_sent.retain(|x| x.1 != *payment_hash);
+            }
         }
         if all_sent.is_empty() {
             break;
         }
+        tokio::time::sleep(tokio::time::Duration::from_millis(3000)).await;
+        let channel_state_0 = nodes[0].get_channel_actor_state(channels[0]);
+        let channel_state_1 = nodes[1].get_channel_actor_state(channels[0]);
+        let channel_state_2 = nodes[1].get_channel_actor_state(channels[1]);
+        let channel_state_3 = nodes[2].get_channel_actor_state(channels[1]);
+
+        eprintln!("channel_state0: {:?}, channel_state1: {:?}, channel_state2: {:?}, channel_state3: {:?}",
+            channel_state_0.state, channel_state_1.state, channel_state_2.state, channel_state_3.state);
     }
     let new_node_0_balance = nodes[0].get_local_balance_from_channel(channels[0]);
     let new_node_2_balance = nodes[2].get_local_balance_from_channel(channels[1]);

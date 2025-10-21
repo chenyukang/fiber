@@ -1839,6 +1839,7 @@ where
     ) {
         loop {
             if state.is_waiting_tlc_ack() {
+                state.error_debug_size();
                 break;
             }
 
@@ -4135,6 +4136,46 @@ impl ChannelActorState {
             self.remote_revocation_nonce_for_verify
         );
     }
+
+    pub fn error_debug_size(&self) {
+        let add_tlc_count = self
+            .retryable_tlc_operations
+            .iter()
+            .filter(|op| matches!(op, RetryableTlcOperation::AddTlc(_)))
+            .count();
+        let remove_tlc_count = self
+            .retryable_tlc_operations
+            .iter()
+            .filter(|op| matches!(op, RetryableTlcOperation::RemoveTlc(_, _)))
+            .count();
+
+        error!(
+            "error debug_size self.retryable_tlc_operations: {:?} ({:?} {:?}) remote_points: {:?} tlc_count: {:?} applied_add: {:?} applied_remove: {:?} state: {:?}, waiting_ack: {:?}",
+            self.retryable_tlc_operations.len(),
+            add_tlc_count,
+            remove_tlc_count,
+            self.remote_commitment_points.len(),
+            self.tlc_state.all_tlcs().count(),
+            self.tlc_state.applied_add_tlcs.len(),
+            self.tlc_state.applied_remove_tlcs.len(),
+            self.state,
+            self.is_waiting_tlc_ack(),
+        );
+
+        error!(
+            "error debug_size is_waiting: {:?}",
+            self.tlc_state.waiting_ack
+        );
+        error!(
+            "error debug_size remote_revoke_send: {:?}",
+            self.remote_revocation_nonce_for_send
+        );
+        error!(
+            "error debug_size remote_revoke_verify: {:?}",
+            self.remote_revocation_nonce_for_verify
+        );
+    }
+
     pub fn network(&self) -> ActorRef<NetworkActorMessage> {
         self.network
             .as_ref()
