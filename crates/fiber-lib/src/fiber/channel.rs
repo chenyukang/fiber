@@ -1839,7 +1839,15 @@ where
     ) {
         loop {
             if state.is_waiting_tlc_ack() {
-                state.error_debug_size();
+                //state.error_debug_size();
+                if !state.tlc_state.waiting_ack
+                    && (state.remote_revocation_nonce_for_send.is_none()
+                        || state.remote_revocation_nonce_for_verify.is_none())
+                {
+                    state.error_debug_size();
+                    error!("got it ....................");
+                    panic!("now");
+                }
                 break;
             }
 
