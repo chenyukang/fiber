@@ -2716,6 +2716,10 @@ async fn test_send_payment_three_nodes_send_each_other_no_wait() {
 
         error!("channel_state0: {:?}, channel_state1: {:?}, channel_state2: {:?}, channel_state3: {:?}",
             channel_state_0.state, channel_state_1.state, channel_state_2.state, channel_state_3.state);
+        channel_state_0.error_debug_size();
+        channel_state_1.error_debug_size();
+        channel_state_2.error_debug_size();
+        channel_state_3.error_debug_size();
     }
     let new_node_0_balance = nodes[0].get_local_balance_from_channel(channels[0]);
     let new_node_2_balance = nodes[2].get_local_balance_from_channel(channels[1]);
