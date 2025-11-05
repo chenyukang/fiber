@@ -4430,11 +4430,19 @@ impl ChannelActorState {
         }
         debug!(
             "schedule_next_retry_task retryable tlc ops: {:?} \
-            waiting_forward: {:?} tlc_state: {:?}",
+            waiting_forward: {:?} tlc_state: {:?} waiting_ack: {}, is_waiting_tlc_ack: {} remote_nonce: {:?} local_amount: {:?}",
             self.retryable_tlc_operations.len(),
             self.waiting_forward_tlc_tasks.len(),
-            self.tlc_state.info()
+            self.tlc_state.info(),
+            self.tlc_state.waiting_ack,
+            self.is_waiting_tlc_ack(),
+            self.remote_revocation_nonce_for_send,
+            self.remote_revocation_nonce_for_verify,
         );
+        for op in &self.retryable_tlc_operations {
+            debug!("  retryable tlc op: {:?}", op);
+        }
+        debug!("===================================");
     }
 
     pub fn get_unsigned_channel_update_message(&self) -> Option<ChannelUpdate> {
