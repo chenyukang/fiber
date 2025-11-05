@@ -1847,6 +1847,7 @@ where
     ) {
         loop {
             if state.is_waiting_tlc_ack() {
+                debug!("apply_retryable_tlc_operations waiting tlc ack ...");
                 break;
             }
 
@@ -4090,8 +4091,9 @@ pub(crate) fn occupied_capacity(
 impl ChannelActorState {
     pub fn debug_ops(&self) {
         debug!(
-            "schedule_next_retry_task retryable tlc ops: {:?} \
+            "schedule_next_retry_task:{:?} retryable tlc ops: {:?} \
             waiting_forward: {:?} tlc_state: {:?} waiting_ack: {}, is_waiting_tlc_ack: {} nonce_for_send: {:?} nonce_for_verify: {:?}, wait_response: {:?}",
+            self.id,
             self.retryable_tlc_operations.len(),
             self.waiting_forward_tlc_tasks.len(),
             self.tlc_state.info(),
@@ -5054,9 +5056,17 @@ impl ChannelActorState {
 
         // update the remote_revocation_nonce_for_send and remote_revocation_nonce_for_verify for next round if needed
         if self.remote_revocation_nonce_for_verify.is_none() {
+            debug!(
+                "send_revoke_and_ack_message debug-nonce {:?} +: set send and verify",
+                self.id
+            );
             self.remote_revocation_nonce_for_send = self.remote_revocation_nonce_for_next.clone();
             self.remote_revocation_nonce_for_verify = self.remote_revocation_nonce_for_next.clone();
         } else {
+            debug!(
+                "send_revoke_and_ack_message debug-nonce {:?} -: clearing send",
+                self.id
+            );
             self.remote_revocation_nonce_for_send = None;
         }
 
@@ -6851,9 +6861,17 @@ impl ChannelActorState {
         // update the remote_revocation_nonce_for_send and remote_revocation_nonce_for_verify for next round if needed
         self.remote_revocation_nonce_for_next = Some(next_revocation_nonce);
         if self.remote_revocation_nonce_for_send.is_none() {
+            debug!(
+                "handle_revoke_ack debug-nonce {:?} +: set send and verify",
+                self.id
+            );
             self.remote_revocation_nonce_for_send = self.remote_revocation_nonce_for_next.clone();
             self.remote_revocation_nonce_for_verify = self.remote_revocation_nonce_for_next.clone();
         } else {
+            debug!(
+                "handle_revoke_ack debug-nonce {:?} -: clear verify",
+                self.id
+            );
             self.remote_revocation_nonce_for_verify = None;
         }
 
