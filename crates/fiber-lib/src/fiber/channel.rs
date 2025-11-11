@@ -2813,9 +2813,6 @@ where
             }
         }
 
-        #[cfg(feature = "metrics")]
-        metrics::gauge!(crate::metrics::TOTAL_CHANNEL_COUNT).increment(1);
-
         Ok(())
     }
 
@@ -2849,8 +2846,6 @@ where
             NetworkActorEvent::ChannelActorStopped(state.get_id(), stop_reason),
         ));
 
-        #[cfg(feature = "metrics")]
-        metrics::gauge!(crate::metrics::TOTAL_CHANNEL_COUNT).decrement(1);
         Ok(())
     }
 }
