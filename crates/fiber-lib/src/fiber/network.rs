@@ -1641,6 +1641,9 @@ where
                                 );
                                 let (send, _recv) = oneshot::channel();
                                 let rpc_reply = RpcReplyPort::from(send);
+                                #[cfg(feature = "metrics")]
+                                metrics::gauge!(crate::metrics::CHANNEL_SENT_SHUTDOWN_FORCE)
+                                    .increment(1);
                                 if let Err(err) = state
                                     .send_command_to_channel(
                                         channel_id,
