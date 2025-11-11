@@ -4092,7 +4092,7 @@ impl ChannelActorState {
     pub fn debug_ops(&self) {
         debug!(
             "schedule_next_retry_task:{:?} retryable tlc ops: {:?} \
-            waiting_forward: {:?} tlc_state: {:?} waiting_ack: {}, is_waiting_tlc_ack: {} nonce_for_send: {:?} nonce_for_verify: {:?}, wait_response: {:?}",
+            waiting_forward: {:?} tlc_state: {:?} waiting_ack: {}, is_waiting_tlc_ack: {} nonce_for_send: {:?} nonce_for_verify: {:?}, wait_response: {:?} status: {:?}",
             self.id,
             self.retryable_tlc_operations.len(),
             self.waiting_forward_tlc_tasks.len(),
@@ -4102,6 +4102,7 @@ impl ChannelActorState {
             self.remote_revocation_nonce_for_send,
             self.remote_revocation_nonce_for_verify,
             self.waiting_peer_response,
+            self.state,
         );
         for op in &self.retryable_tlc_operations {
             debug!("  retryable tlc op: {:?}", op);

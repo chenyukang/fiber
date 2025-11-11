@@ -5169,10 +5169,10 @@ dependencies = [
 
 [[package]]
 name = "tentacle"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f506abf5f90f9a082c8368b34bc62026bfc9138c6e6e706c3ea3e9906dc34564"
+version = "0.7.3"
+source = "git+https://github.com/jjyr/p2p.git?branch=error-with-context#885c83ab701862583a5a2dff01f285f578b51a93"
 dependencies = [
+ "anyhow",
  "async-trait",
  "bytes",
  "fast-socks5",
@@ -5204,8 +5204,7 @@ dependencies = [
 [[package]]
 name = "tentacle-multiaddr"
 version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11d2d1d3511bbe6d6a662ee13616a31268d0558c73d25dfe6b5a5dcb376719c7"
+source = "git+https://github.com/jjyr/p2p.git?branch=error-with-context#885c83ab701862583a5a2dff01f285f578b51a93"
 dependencies = [
  "arrayref",
  "bs58",
@@ -5220,8 +5219,7 @@ dependencies = [
 [[package]]
 name = "tentacle-secio"
 version = "0.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60516aaca2ce3d00ef741d1bb01216921a062371bb63dd2ef53775b42afb9865"
+source = "git+https://github.com/jjyr/p2p.git?branch=error-with-context#885c83ab701862583a5a2dff01f285f578b51a93"
 dependencies = [
  "bs58",
  "bytes",
@@ -5472,10 +5470,10 @@ dependencies = [
 
 [[package]]
 name = "tokio-yamux"
-version = "0.3.16"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ceca7847b5aea2d1974df016012fddcef3e9fbdda3ae2474fb2618e2b3ddda7"
+version = "0.3.17"
+source = "git+https://github.com/jjyr/p2p.git?branch=error-with-context#885c83ab701862583a5a2dff01f285f578b51a93"
 dependencies = [
+ "anyhow",
  "bytes",
  "futures",
  "futures-timer",
