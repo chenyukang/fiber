@@ -24,7 +24,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 use strum::AsRefStr;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 use super::types::{ChannelUpdateChannelFlags, ChannelUpdateMessageFlags, UpdateTlcInfo};
 use crate::time::{SystemTime, UNIX_EPOCH};
@@ -1494,9 +1494,14 @@ where
                 state.maybe_transfer_to_tx_signatures(flags)?;
             }
             CommitmentSignedFlags::ChannelReady() => {
+                debug!("Sent channel: {:?} waiting ack true", state.get_id());
                 state.set_waiting_ack(myself, true);
             }
             CommitmentSignedFlags::PendingShutdown() => {
+                debug!(
+                    "Sent channel: {:?} waiting ack true pending shutdown",
+                    state.get_id()
+                );
                 state.set_waiting_ack(myself, true);
                 state.maybe_transfer_to_shutdown().await?;
             }
@@ -2672,7 +2677,7 @@ where
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
-        trace!(
+        debug!(
             "Channel actor processing message: peer: {:?} id: {:?}, state: {:?}, message: {:?}",
             state.get_local_peer_id(),
             &state.get_id(),
@@ -6873,6 +6878,11 @@ impl ChannelActorState {
         self.append_remote_commitment_point(next_per_commitment_point);
         self.tlc_state
             .update_for_revoke_and_ack(self.commitment_numbers);
+
+        debug!(
+            "Sent channel: {:?} waiting ack false by revoke_and_ack",
+            self.get_id()
+        );
         self.set_waiting_ack(myself, false);
 
         // update the remote_revocation_nonce_for_send and remote_revocation_nonce_for_verify for next round if needed
@@ -6996,6 +7006,10 @@ impl ChannelActorState {
     }
 
     fn resend_tlcs_on_reestablish(&self, send_commitment_signed: bool) -> ProcessingChannelResult {
+        debug!(
+            "Resending tlcs on reestablish for channel {:?}",
+            self.get_id()
+        );
         let network = self.network();
         let mut need_commitment_signed = false;
         for info in self.tlc_state.all_tlcs() {
