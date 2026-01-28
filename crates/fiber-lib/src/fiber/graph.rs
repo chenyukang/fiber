@@ -7,8 +7,8 @@ use super::network::{get_chain_hash, BuildRouterCommand};
 use super::path::NodeHeap;
 use super::payment::{HopHint, SendPaymentData};
 use super::types::{
-    BroadcastMessageID, BroadcastMessageWithTimestamp, ChannelAnnouncement, ChannelUpdate, Hash256,
-    NodeAnnouncement,
+    BroadcastMessageID, BroadcastMessageWithTimestamp, CachedPubkey, ChannelAnnouncement,
+    ChannelUpdate, Hash256, NodeAnnouncement,
 };
 use super::types::{Cursor, Pubkey, TlcErr};
 use crate::ckb::config::UdtCfgInfos;
@@ -93,8 +93,8 @@ pub struct ChannelInfo {
     pub timestamp: u64,
 
     pub features: u64,
-    pub node1: Pubkey,
-    pub node2: Pubkey,
+    pub node1: CachedPubkey,
+    pub node2: CachedPubkey,
     // The total capacity of the channel.
     pub capacity: u128,
     // UDT script
@@ -120,11 +120,11 @@ impl ChannelInfo {
     }
 
     pub fn node1(&self) -> Pubkey {
-        self.node1
+        self.node1.pubkey()
     }
 
     pub fn node2(&self) -> Pubkey {
-        self.node2
+        self.node2.pubkey()
     }
 
     pub fn node1_peerid(&self) -> PeerId {
@@ -203,8 +203,8 @@ impl TryFrom<&ChannelActorState> for ChannelInfo {
             channel_outpoint,
             timestamp,
             features: 0,
-            node1,
-            node2,
+            node1: CachedPubkey::new(node1),
+            node2: CachedPubkey::new(node2),
             capacity,
             udt_type_script,
             update_of_node1,
@@ -219,8 +219,8 @@ impl From<(u64, ChannelAnnouncement)> for ChannelInfo {
             channel_outpoint: channel_announcement.channel_outpoint,
             timestamp,
             features: channel_announcement.features,
-            node1: channel_announcement.node1_id,
-            node2: channel_announcement.node2_id,
+            node1: CachedPubkey::new(channel_announcement.node1_id),
+            node2: CachedPubkey::new(channel_announcement.node2_id),
             capacity: channel_announcement.capacity,
             udt_type_script: channel_announcement.udt_type_script,
             update_of_node2: None,
@@ -448,7 +448,7 @@ pub struct NetworkGraph<S> {
     pub(crate) channels: HashMap<OutPoint, ChannelInfo>,
     // Index: node_id -> set of channel outpoints involving this node
     // This accelerates queries like get_node_inbounds/get_channels_by_peer
-    node_channels: HashMap<Pubkey, HashSet<OutPoint>>,
+    node_channels: HashMap<CachedPubkey, HashSet<OutPoint>>,
     // All the nodes in the network.
     nodes: HashMap<Pubkey, NodeInfo>,
 
@@ -632,11 +632,11 @@ where
                     .remove_channel_history(&channel_info.channel_outpoint);
                 // Update node_channels index
                 self.node_channels
-                    .entry(channel_info.node1())
+                    .entry(channel_info.node1.clone())
                     .or_default()
                     .insert(channel_info.channel_outpoint.clone());
                 self.node_channels
-                    .entry(channel_info.node2())
+                    .entry(channel_info.node2.clone())
                     .or_default()
                     .insert(channel_info.channel_outpoint.clone());
                 self.channels
@@ -645,10 +645,10 @@ where
             OwnedChannelUpdateEvent::Down(channel_outpoint) => {
                 // Remove from node_channels index
                 if let Some(channel) = self.channels.get(&channel_outpoint) {
-                    if let Some(set) = self.node_channels.get_mut(&channel.node1()) {
+                    if let Some(set) = self.node_channels.get_mut(&channel.node1) {
                         set.remove(&channel_outpoint);
                     }
-                    if let Some(set) = self.node_channels.get_mut(&channel.node2()) {
+                    if let Some(set) = self.node_channels.get_mut(&channel.node2) {
                         set.remove(&channel_outpoint);
                     }
                 }
@@ -772,16 +772,16 @@ where
                 // associated with the node as failed. Here we tell the history about
                 // the mapping between nodes and channels.
                 self.history
-                    .add_node_channel_map(channel_info.node1, channel_info.out_point().clone());
+                    .add_node_channel_map(channel_info.node1(), channel_info.out_point().clone());
                 self.history
-                    .add_node_channel_map(channel_info.node2, channel_info.out_point().clone());
+                    .add_node_channel_map(channel_info.node2(), channel_info.out_point().clone());
                 // Update node_channels index
                 self.node_channels
-                    .entry(channel_info.node1)
+                    .entry(channel_info.node1.clone())
                     .or_default()
                     .insert(channel_info.channel_outpoint.clone());
                 self.node_channels
-                    .entry(channel_info.node2)
+                    .entry(channel_info.node2.clone())
                     .or_default()
                     .insert(channel_info.channel_outpoint.clone());
                 self.channels
@@ -807,8 +807,10 @@ where
         }
         match self.get_channel(&channel_update.channel_outpoint) {
             Some(channel)
-                if !self
-                    .should_process_gossip_message_for_nodes(&channel.node1, &channel.node2) =>
+                if !self.should_process_gossip_message_for_nodes(
+                    &channel.node1(),
+                    &channel.node2(),
+                ) =>
             {
                 return None;
             }
@@ -995,8 +997,9 @@ where
 
     pub fn get_channels_by_peer(&self, node_id: Pubkey) -> impl Iterator<Item = &ChannelInfo> {
         // Use index to avoid iterating all channels
+        let cached_key = CachedPubkey::new(node_id);
         self.node_channels
-            .get(&node_id)
+            .get(&cached_key)
             .into_iter()
             .flat_map(|outpoints| outpoints.iter())
             .filter_map(move |outpoint| self.channels.get(outpoint))
@@ -1007,22 +1010,25 @@ where
         node_id: Pubkey,
     ) -> impl Iterator<Item = (Pubkey, &ChannelInfo, &ChannelUpdateInfo)> {
         // Use index to avoid iterating all channels
+        // Create CachedPubkey once for both HashMap lookup and comparisons
+        let cached_node_id = CachedPubkey::new(node_id);
         let channels: Vec<_> = self
             .node_channels
-            .get(&node_id)
+            .get(&cached_node_id)
             .into_iter()
             .flat_map(|outpoints| outpoints.iter())
             .filter_map(move |outpoint| self.channels.get(outpoint))
             .filter_map(move |channel| {
                 match channel.update_of_node1.as_ref() {
-                    Some(info) if node_id == channel.node1() && info.enabled => {
-                        return Some((channel.node2(), channel, info));
+                    // Compare CachedPubkey directly (fast!)
+                    Some(info) if &cached_node_id == &channel.node1 && info.enabled => {
+                        return Some((channel.node2.pubkey(), channel, info));
                     }
                     _ => {}
                 }
                 match channel.update_of_node2.as_ref() {
-                    Some(info) if node_id == channel.node2() && info.enabled => {
-                        return Some((channel.node1(), channel, info));
+                    Some(info) if &cached_node_id == &channel.node2 && info.enabled => {
+                        return Some((channel.node1.pubkey(), channel, info));
                     }
                     _ => {}
                 }
@@ -1038,22 +1044,34 @@ where
         node_id: Pubkey,
     ) -> impl Iterator<Item = (Pubkey, Pubkey, &ChannelInfo, &ChannelUpdateInfo)> {
         // Use index to avoid iterating all channels
+        // Create CachedPubkey once for both HashMap lookup and comparisons
+        let cached_node_id = CachedPubkey::new(node_id);
         let mut channels: Vec<_> = self
             .node_channels
-            .get(&node_id)
+            .get(&cached_node_id)
             .into_iter()
             .flat_map(|outpoints| outpoints.iter())
             .filter_map(move |outpoint| self.channels.get(outpoint))
             .filter_map(move |channel| {
                 match channel.update_of_node1.as_ref() {
-                    Some(info) if node_id == channel.node2() && info.enabled => {
-                        return Some((channel.node1(), channel.node2(), channel, info));
+                    Some(info) if &cached_node_id == &channel.node2 && info.enabled => {
+                        return Some((
+                            channel.node1.pubkey(),
+                            channel.node2.pubkey(),
+                            channel,
+                            info,
+                        ));
                     }
                     _ => {}
                 }
                 match channel.update_of_node2.as_ref() {
-                    Some(info) if node_id == channel.node1() && info.enabled => {
-                        return Some((channel.node2(), channel.node1(), channel, info));
+                    Some(info) if &cached_node_id == &channel.node1 && info.enabled => {
+                        return Some((
+                            channel.node2.pubkey(),
+                            channel.node1.pubkey(),
+                            channel,
+                            info,
+                        ));
                     }
                     _ => {}
                 }
@@ -1105,9 +1123,10 @@ where
 
     pub(crate) fn mark_node_failed(&mut self, node_id: Pubkey) {
         // Use index to get relevant channel outpoints
+        let cached_key = CachedPubkey::new(node_id);
         let outpoints: Vec<_> = self
             .node_channels
-            .get(&node_id)
+            .get(&cached_key)
             .into_iter()
             .flat_map(|set| set.iter().cloned())
             .collect();

@@ -408,6 +408,118 @@ impl Pubkey {
     }
 }
 
+/// A wrapper around Pubkey that caches the serialized form for faster comparisons and hashing.
+/// This reduces the overhead of repeated serialization in hot paths like pathfinding.
+#[derive(Copy, Clone, Debug)]
+pub struct CachedPubkey {
+    pubkey: Pubkey,
+    serialized: [u8; PUBKEY_SIZE],
+}
+
+impl CachedPubkey {
+    /// Create a new CachedPubkey from a Pubkey
+    pub fn new(pubkey: Pubkey) -> Self {
+        let serialized = pubkey.serialize();
+        Self { pubkey, serialized }
+    }
+
+    /// Get the underlying Pubkey
+    pub fn pubkey(&self) -> Pubkey {
+        self.pubkey
+    }
+
+    /// Get the serialized form (cached)
+    pub fn serialized(&self) -> &[u8; PUBKEY_SIZE] {
+        &self.serialized
+    }
+
+    /// Get tentacle peer id
+    pub fn tentacle_peer_id(&self) -> PeerId {
+        self.pubkey.tentacle_peer_id()
+    }
+}
+
+impl From<Pubkey> for CachedPubkey {
+    fn from(pubkey: Pubkey) -> Self {
+        Self::new(pubkey)
+    }
+}
+
+impl From<CachedPubkey> for Pubkey {
+    fn from(cached: CachedPubkey) -> Self {
+        cached.pubkey
+    }
+}
+
+impl From<&CachedPubkey> for Pubkey {
+    fn from(cached: &CachedPubkey) -> Self {
+        cached.pubkey
+    }
+}
+
+// Fast comparison using cached serialized form
+impl PartialEq for CachedPubkey {
+    fn eq(&self, other: &Self) -> bool {
+        self.serialized == other.serialized
+    }
+}
+
+impl Eq for CachedPubkey {}
+
+// Allow comparing CachedPubkey with Pubkey directly
+impl PartialEq<Pubkey> for CachedPubkey {
+    fn eq(&self, other: &Pubkey) -> bool {
+        // Compare cached bytes with on-the-fly serialization
+        &self.serialized == &other.serialize()
+    }
+}
+
+// Symmetric comparison
+impl PartialEq<CachedPubkey> for Pubkey {
+    fn eq(&self, other: &CachedPubkey) -> bool {
+        &self.serialize() == &other.serialized
+    }
+}
+
+// Fast hashing using cached serialized form
+impl std::hash::Hash for CachedPubkey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.serialized.hash(state);
+    }
+}
+
+impl PartialOrd for CachedPubkey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CachedPubkey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.serialized.cmp(&other.serialized)
+    }
+}
+
+impl Serialize for CachedPubkey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Use the Pubkey's Serialize implementation
+        Serialize::serialize(&self.pubkey, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for CachedPubkey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let pubkey = Pubkey::deserialize(deserializer)?;
+        Ok(CachedPubkey::new(pubkey))
+    }
+}
+
 #[derive(Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize, Debug)]
 pub struct EcdsaSignature(pub Secp256k1Signature);
 
