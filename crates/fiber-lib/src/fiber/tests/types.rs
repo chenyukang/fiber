@@ -729,3 +729,936 @@ fn test_basic_mpp_custom_records() {
     let new_record = BasicMppPaymentData::read(&payment_custom_records).unwrap();
     assert_eq!(new_record, record);
 }
+
+// ============================================================================
+// Corner case tests for Hash256
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_hash256_default() {
+    let hash = Hash256::default();
+    assert_eq!(hash.as_ref(), &[0u8; 32]);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_hash256_from_array() {
+    let bytes = [42u8; 32];
+    let hash: Hash256 = bytes.into();
+    assert_eq!(hash.as_ref(), &bytes);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_hash256_from_str_valid() {
+    // Without 0x prefix
+    let hash1 =
+        Hash256::from_str("0000000000000000000000000000000000000000000000000000000000000000");
+    assert!(hash1.is_ok());
+    assert_eq!(hash1.unwrap().as_ref(), &[0u8; 32]);
+
+    // With 0x prefix
+    let hash2 =
+        Hash256::from_str("0x0000000000000000000000000000000000000000000000000000000000000000");
+    assert!(hash2.is_ok());
+    assert_eq!(hash2.unwrap().as_ref(), &[0u8; 32]);
+
+    // All 0xff
+    let hash3 =
+        Hash256::from_str("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    assert!(hash3.is_ok());
+    assert_eq!(hash3.unwrap().as_ref(), &[0xff; 32]);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_hash256_from_str_invalid() {
+    // Too short
+    let hash1 = Hash256::from_str("00000000");
+    assert!(hash1.is_err());
+
+    // Too long
+    let hash2 =
+        Hash256::from_str("00000000000000000000000000000000000000000000000000000000000000000000");
+    assert!(hash2.is_err());
+
+    // Invalid hex characters
+    let hash3 =
+        Hash256::from_str("0xgggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg");
+    assert!(hash3.is_err());
+
+    // Empty string
+    let hash4 = Hash256::from_str("");
+    assert!(hash4.is_err());
+
+    // Odd length
+    let hash5 = Hash256::from_str("0x000");
+    assert!(hash5.is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_hash256_try_from_slice() {
+    // Valid slice
+    let bytes = [42u8; 32];
+    let hash = Hash256::try_from(bytes.as_slice());
+    assert!(hash.is_ok());
+    assert_eq!(hash.unwrap().as_ref(), &bytes);
+
+    // Too short
+    let short_bytes = [42u8; 16];
+    let hash = Hash256::try_from(short_bytes.as_slice());
+    assert!(hash.is_err());
+
+    // Too long
+    let long_bytes = [42u8; 64];
+    let hash = Hash256::try_from(long_bytes.as_slice());
+    assert!(hash.is_err());
+
+    // Empty slice
+    let empty: &[u8] = &[];
+    let hash = Hash256::try_from(empty);
+    assert!(hash.is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_hash256_display_and_debug() {
+    let bytes = [0x42u8; 32];
+    let hash: Hash256 = bytes.into();
+
+    let display_str = format!("{}", hash);
+    assert!(display_str.contains("Hash256"));
+    assert!(display_str.contains("42"));
+
+    let debug_str = format!("{:?}", hash);
+    assert!(debug_str.contains("Hash256"));
+
+    let lower_hex = format!("{:x}", hash);
+    assert!(lower_hex.contains("42"));
+
+    let lower_hex_alt = format!("{:#x}", hash);
+    assert!(lower_hex_alt.starts_with("0x"));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_hash256_to_vec() {
+    let bytes = [42u8; 32];
+    let hash: Hash256 = bytes.into();
+    let vec: Vec<u8> = hash.into();
+    assert_eq!(vec.len(), 32);
+    assert_eq!(&vec[..], &bytes[..]);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_hash256_h256_conversion() {
+    let bytes = [42u8; 32];
+    let hash: Hash256 = bytes.into();
+
+    // Convert to H256 and back
+    let h256: H256 = hash.into();
+    let hash_back: Hash256 = h256.into();
+    assert_eq!(hash, hash_back);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_hash256_equality() {
+    let hash1: Hash256 = [1u8; 32].into();
+    let hash2: Hash256 = [1u8; 32].into();
+    let hash3: Hash256 = [2u8; 32].into();
+
+    assert_eq!(hash1, hash2);
+    assert_ne!(hash1, hash3);
+}
+
+// ============================================================================
+// Corner case tests for Privkey
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_privkey_from_array() {
+    let bytes = [42u8; 32];
+    let privkey: Privkey = bytes.into();
+    assert_eq!(privkey.as_ref(), &bytes);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_privkey_pubkey_derivation() {
+    let privkey = gen_rand_fiber_private_key();
+    let pubkey = privkey.pubkey();
+
+    // Verify pubkey is valid (33 bytes compressed)
+    assert_eq!(pubkey.serialize().len(), 33);
+
+    // Same privkey should always produce same pubkey
+    let pubkey2 = privkey.pubkey();
+    assert_eq!(pubkey, pubkey2);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_privkey_sign_and_verify() {
+    let privkey = gen_rand_fiber_private_key();
+    let pubkey = privkey.pubkey();
+
+    let message = [42u8; 32];
+    let signature = privkey.sign(message);
+
+    // Verify the signature
+    assert!(signature.verify(&pubkey, &message));
+
+    // Different message should fail verification
+    let different_message = [43u8; 32];
+    assert!(!signature.verify(&pubkey, &different_message));
+
+    // Different pubkey should fail verification
+    let other_privkey = gen_rand_fiber_private_key();
+    let other_pubkey = other_privkey.pubkey();
+    assert!(!signature.verify(&other_pubkey, &message));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_privkey_tweak() {
+    let privkey = gen_rand_fiber_private_key();
+    let scalar = [1u8; 32];
+
+    let tweaked = privkey.tweak(scalar);
+
+    // Tweaked key should be different
+    assert_ne!(privkey.as_ref(), tweaked.as_ref());
+
+    // Same tweak should produce same result
+    let tweaked2 = privkey.tweak(scalar);
+    assert_eq!(tweaked.as_ref(), tweaked2.as_ref());
+
+    // Different tweak should produce different result
+    let different_scalar = [2u8; 32];
+    let tweaked3 = privkey.tweak(different_scalar);
+    assert_ne!(tweaked.as_ref(), tweaked3.as_ref());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_privkey_from_hash256() {
+    let hash = gen_rand_sha256_hash();
+    let privkey: Privkey = hash.into();
+
+    // Should be able to derive a pubkey
+    let pubkey = privkey.pubkey();
+    assert_eq!(pubkey.serialize().len(), 33);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_privkey_x_only_pubkey() {
+    let privkey = gen_rand_fiber_private_key();
+    let x_only = privkey.x_only_pub_key();
+
+    // X-only pubkey should be 32 bytes
+    assert_eq!(x_only.serialize().len(), 32);
+}
+
+// ============================================================================
+// Corner case tests for Pubkey
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_pubkey_from_slice_valid() {
+    let privkey = gen_rand_fiber_private_key();
+    let pubkey = privkey.pubkey();
+    let bytes = pubkey.serialize();
+
+    let pubkey2 = Pubkey::from_slice(&bytes);
+    assert!(pubkey2.is_ok());
+    assert_eq!(pubkey, pubkey2.unwrap());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_pubkey_from_slice_invalid() {
+    // Too short
+    let short = [0u8; 16];
+    assert!(Pubkey::from_slice(&short).is_err());
+
+    // Too long
+    let long = [0u8; 64];
+    assert!(Pubkey::from_slice(&long).is_err());
+
+    // Invalid pubkey (all zeros)
+    let zeros = [0u8; 33];
+    assert!(Pubkey::from_slice(&zeros).is_err());
+
+    // Invalid prefix byte
+    let invalid = [0u8; 33];
+    assert!(Pubkey::from_slice(&invalid).is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_pubkey_tweak() {
+    let privkey = gen_rand_fiber_private_key();
+    let pubkey = privkey.pubkey();
+
+    let scalar = [1u8; 32];
+    let tweaked = pubkey.tweak(scalar);
+
+    // Tweaked key should be different
+    assert_ne!(pubkey, tweaked);
+
+    // Same tweak should produce same result
+    let tweaked2 = pubkey.tweak(scalar);
+    assert_eq!(tweaked, tweaked2);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_pubkey_peer_id_conversion() {
+    let privkey = gen_rand_fiber_private_key();
+    let pubkey = privkey.pubkey();
+
+    let peer_id = pubkey.tentacle_peer_id();
+
+    // PeerId should be deterministic
+    let peer_id2 = pubkey.tentacle_peer_id();
+    assert_eq!(peer_id, peer_id2);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_pubkey_tentacle_conversion() {
+    let privkey = gen_rand_fiber_private_key();
+    let pubkey = privkey.pubkey();
+
+    // Convert to tentacle pubkey and back
+    let tentacle_pk: tentacle::secio::PublicKey = pubkey.into();
+    let pubkey_back: Pubkey = tentacle_pk.into();
+    assert_eq!(pubkey, pubkey_back);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_pubkey_ordering() {
+    let privkey1 = gen_rand_fiber_private_key();
+    let privkey2 = gen_rand_fiber_private_key();
+
+    let pubkey1 = privkey1.pubkey();
+    let pubkey2 = privkey2.pubkey();
+
+    // Ordering should be consistent
+    let cmp1 = pubkey1.cmp(&pubkey2);
+    let cmp2 = pubkey2.cmp(&pubkey1);
+    assert_eq!(cmp1.reverse(), cmp2);
+
+    // Same pubkey should be equal
+    assert_eq!(pubkey1.cmp(&pubkey1), std::cmp::Ordering::Equal);
+}
+
+// ============================================================================
+// Corner case tests for TlcErrorCode
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_tlc_error_code_all_variants() {
+    // Test that all known error codes can be converted to/from u16
+    let codes = vec![
+        TlcErrorCode::TemporaryNodeFailure,
+        TlcErrorCode::PermanentNodeFailure,
+        TlcErrorCode::RequiredNodeFeatureMissing,
+        TlcErrorCode::InvalidOnionVersion,
+        TlcErrorCode::InvalidOnionHmac,
+        TlcErrorCode::InvalidOnionKey,
+        TlcErrorCode::TemporaryChannelFailure,
+        TlcErrorCode::PermanentChannelFailure,
+        TlcErrorCode::RequiredChannelFeatureMissing,
+        TlcErrorCode::UnknownNextPeer,
+        TlcErrorCode::AmountBelowMinimum,
+        TlcErrorCode::FeeInsufficient,
+        TlcErrorCode::IncorrectTlcExpiry,
+        TlcErrorCode::ExpiryTooSoon,
+        TlcErrorCode::IncorrectOrUnknownPaymentDetails,
+        TlcErrorCode::FinalIncorrectTlcAmount,
+        TlcErrorCode::FinalIncorrectExpiryDelta,
+        TlcErrorCode::ExpiryTooFar,
+        TlcErrorCode::InvalidOnionPayload,
+        TlcErrorCode::InvoiceExpired,
+        TlcErrorCode::InvoiceCancelled,
+        TlcErrorCode::ChannelDisabled,
+        TlcErrorCode::HoldTlcTimeout,
+        TlcErrorCode::InvalidOnionError,
+    ];
+
+    for code in codes {
+        let code_int: u16 = code.into();
+        let code_back = TlcErrorCode::try_from(code_int);
+        assert!(code_back.is_ok(), "Failed for code {:?}", code);
+        assert_eq!(code, code_back.unwrap());
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_tlc_error_code_invalid_value() {
+    // Test that invalid values are handled properly
+    let invalid_code = 0xFFFF_u16;
+    let result = TlcErrorCode::try_from(invalid_code);
+    assert!(result.is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_tlc_error_code_string_conversion() {
+    let code = TlcErrorCode::PermanentNodeFailure;
+    let code_str = code.as_ref().to_string();
+
+    let code_back = TlcErrorCode::from_str(&code_str);
+    assert!(code_back.is_ok());
+    assert_eq!(code, code_back.unwrap());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_tlc_error_code_flags() {
+    // Test is_node flag
+    let node_error = TlcErrorCode::PermanentNodeFailure;
+    assert!(node_error.is_node());
+    assert!(node_error.is_perm());
+
+    let temp_node_error = TlcErrorCode::TemporaryNodeFailure;
+    assert!(temp_node_error.is_node());
+    assert!(!temp_node_error.is_perm());
+
+    // Test is_bad_onion flag
+    let onion_error = TlcErrorCode::InvalidOnionVersion;
+    assert!(onion_error.is_bad_onion());
+    assert!(onion_error.is_perm());
+
+    // Test channel failure
+    let channel_error = TlcErrorCode::TemporaryChannelFailure;
+    assert!(!channel_error.is_node());
+    assert!(!channel_error.is_perm());
+}
+
+// ============================================================================
+// Corner case tests for Cursor
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_cursor_boundary_timestamps() {
+    let node_id = gen_rand_fiber_public_key();
+
+    // Test with 0 timestamp
+    let cursor_zero = Cursor::new(0, BroadcastMessageID::NodeAnnouncement(node_id));
+
+    // Test with max timestamp
+    let cursor_max = Cursor::new(u64::MAX, BroadcastMessageID::NodeAnnouncement(node_id));
+
+    assert!(cursor_zero < cursor_max);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_cursor_same_timestamp_different_message_types() {
+    let node_id = gen_rand_fiber_public_key();
+    let channel_outpoint = gen_rand_channel_outpoint();
+
+    let cursor_node = Cursor::new(100, BroadcastMessageID::NodeAnnouncement(node_id));
+    let cursor_channel = Cursor::new(
+        100,
+        BroadcastMessageID::ChannelAnnouncement(channel_outpoint.clone()),
+    );
+    let cursor_update = Cursor::new(100, BroadcastMessageID::ChannelUpdate(channel_outpoint));
+
+    // Verify ordering: ChannelAnnouncement < ChannelUpdate < NodeAnnouncement
+    assert!(cursor_channel < cursor_update);
+    assert!(cursor_update < cursor_node);
+    assert!(cursor_channel < cursor_node);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_cursor_equality() {
+    let node_id = gen_rand_fiber_public_key();
+
+    let cursor1 = Cursor::new(100, BroadcastMessageID::NodeAnnouncement(node_id));
+    let cursor2 = Cursor::new(100, BroadcastMessageID::NodeAnnouncement(node_id));
+    let cursor3 = Cursor::new(101, BroadcastMessageID::NodeAnnouncement(node_id));
+
+    assert_eq!(cursor1, cursor2);
+    assert_ne!(cursor1, cursor3);
+}
+
+// ============================================================================
+// Corner case tests for PaymentHopData
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_payment_hop_data_minimal() {
+    let hop_data = PaymentHopData {
+        amount: 0,
+        expiry: 0,
+        next_hop: None,
+        funding_tx_hash: Hash256::default(),
+        hash_algorithm: HashAlgorithm::Sha256,
+        payment_preimage: None,
+        custom_records: None,
+    };
+
+    let data = pack_hop_data(&hop_data);
+    let unpacked: PaymentHopData = unpack_hop_data(&data).expect("unpack error");
+    assert_eq!(hop_data, unpacked);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_payment_hop_data_max_values() {
+    let privkey = gen_rand_fiber_private_key();
+
+    let hop_data = PaymentHopData {
+        amount: u128::MAX,
+        expiry: u64::MAX,
+        next_hop: Some(privkey.pubkey()),
+        funding_tx_hash: [0xff; 32].into(),
+        hash_algorithm: HashAlgorithm::Sha256,
+        payment_preimage: Some([0xff; 32].into()),
+        custom_records: None,
+    };
+
+    let data = pack_hop_data(&hop_data);
+    let unpacked: PaymentHopData = unpack_hop_data(&data).expect("unpack error");
+    assert_eq!(hop_data, unpacked);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_payment_hop_data_with_custom_records() {
+    let mut records = PaymentCustomRecords::default();
+    records.data.insert(65536, vec![1, 2, 3, 4]);
+    records.data.insert(65537, vec![5, 6, 7, 8]);
+
+    let hop_data = PaymentHopData {
+        amount: 1000,
+        expiry: 2000,
+        next_hop: None,
+        funding_tx_hash: Hash256::default(),
+        hash_algorithm: HashAlgorithm::CkbHash,
+        payment_preimage: None,
+        custom_records: Some(records),
+    };
+
+    let data = pack_hop_data(&hop_data);
+    let unpacked: PaymentHopData = unpack_hop_data(&data).expect("unpack error");
+    assert_eq!(hop_data, unpacked);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_payment_hop_data_empty_custom_records() {
+    let hop_data = PaymentHopData {
+        amount: 1000,
+        expiry: 2000,
+        next_hop: None,
+        funding_tx_hash: Hash256::default(),
+        hash_algorithm: HashAlgorithm::Sha256,
+        payment_preimage: None,
+        custom_records: Some(PaymentCustomRecords::default()),
+    };
+
+    let data = pack_hop_data(&hop_data);
+    let unpacked: PaymentHopData = unpack_hop_data(&data).expect("unpack error");
+    assert_eq!(hop_data, unpacked);
+}
+
+// ============================================================================
+// Corner case tests for AddTlc serialization
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_add_tlc_boundary_values() {
+    // Test with minimum values
+    let add_tlc_min = AddTlc {
+        channel_id: [0; 32].into(),
+        tlc_id: 0,
+        amount: 0,
+        payment_hash: [0; 32].into(),
+        expiry: 0,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: None,
+    };
+    let mol_min: molecule_fiber::AddTlc = add_tlc_min.clone().into();
+    let back_min: AddTlc = mol_min.try_into().expect("decode");
+    assert_eq!(add_tlc_min, back_min);
+
+    // Test with maximum values
+    let add_tlc_max = AddTlc {
+        channel_id: [0xff; 32].into(),
+        tlc_id: u64::MAX,
+        amount: u128::MAX,
+        payment_hash: [0xff; 32].into(),
+        expiry: u64::MAX,
+        hash_algorithm: HashAlgorithm::CkbHash,
+        onion_packet: None,
+    };
+    let mol_max: molecule_fiber::AddTlc = add_tlc_max.clone().into();
+    let back_max: AddTlc = mol_max.try_into().expect("decode");
+    assert_eq!(add_tlc_max, back_max);
+}
+
+// ============================================================================
+// Corner case tests for TlcErr and TlcErrPacket
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_tlc_err_all_error_types() {
+    // Test various error types
+    let errors = vec![
+        TlcErr::new(TlcErrorCode::TemporaryNodeFailure),
+        TlcErr::new(TlcErrorCode::InvalidOnionVersion),
+        TlcErr::new(TlcErrorCode::TemporaryChannelFailure),
+        TlcErr::new(TlcErrorCode::AmountBelowMinimum),
+        TlcErr::new(TlcErrorCode::HoldTlcTimeout),
+    ];
+
+    for err in errors {
+        let packet = TlcErrPacket::new(err.clone(), &NO_SHARED_SECRET);
+        let decoded = packet.decode(&[0u8; 32], vec![]).expect("decode");
+        assert_eq!(err, decoded);
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_tlc_err_node_fail() {
+    let node_id = gen_rand_fiber_public_key();
+    let err = TlcErr::new_node_fail(TlcErrorCode::PermanentNodeFailure, node_id);
+
+    assert!(err.error_code.is_node());
+    assert!(err.error_code.is_perm());
+
+    let packet = TlcErrPacket::new(err.clone(), &NO_SHARED_SECRET);
+    let decoded = packet.decode(&[0u8; 32], vec![]).expect("decode");
+    assert_eq!(err, decoded);
+}
+
+// ============================================================================
+// Corner case tests for BasicMppPaymentData
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_basic_mpp_payment_data_boundary_values() {
+    // Test with zero total amount
+    let payment_secret = gen_rand_sha256_hash();
+    let record = BasicMppPaymentData::new(payment_secret, 0);
+    let mut records = PaymentCustomRecords::default();
+    record.write(&mut records);
+    let read_back = BasicMppPaymentData::read(&records).unwrap();
+    assert_eq!(record, read_back);
+
+    // Test with max total amount
+    let record_max = BasicMppPaymentData::new(payment_secret, u128::MAX);
+    let mut records_max = PaymentCustomRecords::default();
+    record_max.write(&mut records_max);
+    let read_back_max = BasicMppPaymentData::read(&records_max).unwrap();
+    assert_eq!(record_max, read_back_max);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_payment_custom_records_boundary_keys() {
+    let mut records = PaymentCustomRecords::default();
+
+    // Add records with boundary key values (using literal values)
+    records.data.insert(65535, vec![1, 2, 3]);
+    records.data.insert(65536, vec![4, 5, 6]);
+
+    let json = serde_json::to_string(&records).expect("serialize");
+    let deserialized: PaymentCustomRecords = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(records, deserialized);
+}
+
+// ============================================================================
+// Corner case tests for NodeId
+// ============================================================================
+
+#[test]
+fn test_node_id_from_random_peer_ids() {
+    // Test multiple random peer IDs
+    for _ in 0..10 {
+        let peer_id = PeerId::random();
+        let node_id = NodeId::from_bytes(peer_id.clone().into_bytes());
+
+        // Serialize and deserialize
+        let json = serde_json::to_string(&node_id).expect("serialize");
+        let deserialized: NodeId = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(node_id, deserialized);
+    }
+}
+
+// ============================================================================
+// Corner case tests for PaymentCustomRecords
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_payment_custom_records_empty() {
+    let records = PaymentCustomRecords::default();
+    assert!(records.data.is_empty());
+
+    let json = serde_json::to_string(&records).expect("serialize");
+    let deserialized: PaymentCustomRecords = serde_json::from_str(&json).expect("deserialize");
+    assert!(deserialized.data.is_empty());
+}
+
+// ============================================================================
+// Corner case tests for PaymentStatus
+// ============================================================================
+
+use crate::fiber::payment::{PaymentStatus, SessionRoute, SessionRouteNode};
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_payment_status_is_final() {
+    // Non-final statuses
+    assert!(!PaymentStatus::Created.is_final());
+    assert!(!PaymentStatus::Inflight.is_final());
+
+    // Final statuses
+    assert!(PaymentStatus::Success.is_final());
+    assert!(PaymentStatus::Failed.is_final());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_payment_status_serialization() {
+    let statuses = [
+        PaymentStatus::Created,
+        PaymentStatus::Inflight,
+        PaymentStatus::Success,
+        PaymentStatus::Failed,
+    ];
+
+    for status in statuses {
+        let json = serde_json::to_string(&status).expect("serialize");
+        let deserialized: PaymentStatus = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(status, deserialized);
+    }
+}
+
+// ============================================================================
+// Corner case tests for SessionRoute
+// ============================================================================
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_session_route_default() {
+    let route = SessionRoute::default();
+    assert!(route.nodes.is_empty());
+    assert_eq!(route.receiver_amount(), 0);
+    assert_eq!(route.fee(), 0);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_session_route_single_hop() {
+    let pubkey = gen_rand_fiber_public_key();
+    let outpoint = gen_rand_channel_outpoint();
+
+    let route = SessionRoute {
+        nodes: vec![SessionRouteNode {
+            pubkey,
+            amount: 10000,
+            channel_outpoint: outpoint,
+        }],
+    };
+
+    assert_eq!(route.nodes.len(), 1);
+    assert_eq!(route.receiver_amount(), 10000);
+    assert_eq!(route.fee(), 0); // Single hop, no fee
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_session_route_multi_hop_with_fee() {
+    let pubkey1 = gen_rand_fiber_public_key();
+    let pubkey2 = gen_rand_fiber_public_key();
+    let pubkey3 = gen_rand_fiber_public_key();
+    let outpoint1 = gen_rand_channel_outpoint();
+    let outpoint2 = gen_rand_channel_outpoint();
+    let outpoint3 = gen_rand_channel_outpoint();
+
+    let route = SessionRoute {
+        nodes: vec![
+            SessionRouteNode {
+                pubkey: pubkey1,
+                amount: 10100, // Sender sends more to cover fees
+                channel_outpoint: outpoint1,
+            },
+            SessionRouteNode {
+                pubkey: pubkey2,
+                amount: 10050, // After first hop fee
+                channel_outpoint: outpoint2,
+            },
+            SessionRouteNode {
+                pubkey: pubkey3,
+                amount: 10000, // Final receiver amount
+                channel_outpoint: outpoint3,
+            },
+        ],
+    };
+
+    assert_eq!(route.nodes.len(), 3);
+    assert_eq!(route.receiver_amount(), 10000);
+    assert_eq!(route.fee(), 100); // 10100 - 10000 = 100
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_session_route_channel_outpoints() {
+    let pubkey1 = gen_rand_fiber_public_key();
+    let pubkey2 = gen_rand_fiber_public_key();
+    let outpoint1 = gen_rand_channel_outpoint();
+    let outpoint2 = gen_rand_channel_outpoint();
+
+    let route = SessionRoute {
+        nodes: vec![
+            SessionRouteNode {
+                pubkey: pubkey1,
+                amount: 10000,
+                channel_outpoint: outpoint1.clone(),
+            },
+            SessionRouteNode {
+                pubkey: pubkey2,
+                amount: 9000,
+                channel_outpoint: outpoint2.clone(),
+            },
+        ],
+    };
+
+    let outpoints: Vec<_> = route.channel_outpoints().collect();
+    assert_eq!(outpoints.len(), 2);
+    assert_eq!(outpoints[0].0, pubkey1);
+    assert_eq!(outpoints[0].2, 10000);
+    assert_eq!(outpoints[1].0, pubkey2);
+    assert_eq!(outpoints[1].2, 9000);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_session_route_new_from_payment_hops() {
+    let source = gen_rand_fiber_public_key();
+    let target = gen_rand_fiber_public_key();
+    let middle = gen_rand_fiber_public_key();
+    let funding_tx_hash = gen_rand_sha256_hash();
+
+    let payment_hops = vec![
+        PaymentHopData {
+            amount: 10050,
+            expiry: 1000,
+            payment_preimage: None,
+            hash_algorithm: HashAlgorithm::CkbHash,
+            funding_tx_hash,
+            next_hop: Some(middle),
+            custom_records: None,
+        },
+        PaymentHopData {
+            amount: 10000,
+            expiry: 500,
+            payment_preimage: None,
+            hash_algorithm: HashAlgorithm::CkbHash,
+            funding_tx_hash: gen_rand_sha256_hash(),
+            next_hop: None, // Target is implied
+            custom_records: None,
+        },
+    ];
+
+    let route = SessionRoute::new(source, target, &payment_hops);
+
+    // Route should have 2 nodes (source->middle, middle->target)
+    assert_eq!(route.nodes.len(), 2);
+    assert_eq!(route.nodes[0].pubkey, source);
+    assert_eq!(route.nodes[0].amount, 10050);
+    assert_eq!(route.nodes[1].pubkey, middle);
+    assert_eq!(route.nodes[1].amount, 10000);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_session_route_serialization() {
+    let pubkey = gen_rand_fiber_public_key();
+    let outpoint = gen_rand_channel_outpoint();
+
+    let route = SessionRoute {
+        nodes: vec![SessionRouteNode {
+            pubkey,
+            amount: 10000,
+            channel_outpoint: outpoint,
+        }],
+    };
+
+    let json = serde_json::to_string(&route).expect("serialize");
+    let deserialized: SessionRoute = serde_json::from_str(&json).expect("deserialize");
+
+    assert_eq!(route.nodes.len(), deserialized.nodes.len());
+    assert_eq!(route.nodes[0].amount, deserialized.nodes[0].amount);
+}
+
+// ============================================================================
+// Corner case tests for CurrentPaymentHopData
+// ============================================================================
+
+use crate::fiber::types::CurrentPaymentHopData;
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_current_payment_hop_data_from_payment_hop_data() {
+    let payment_hop = PaymentHopData {
+        amount: 10000,
+        expiry: 500,
+        payment_preimage: Some(gen_rand_sha256_hash()),
+        hash_algorithm: HashAlgorithm::Sha256,
+        funding_tx_hash: gen_rand_sha256_hash(),
+        next_hop: Some(gen_rand_fiber_public_key()),
+        custom_records: None,
+    };
+
+    let current_hop: CurrentPaymentHopData = payment_hop.clone().into();
+
+    assert_eq!(current_hop.amount, payment_hop.amount);
+    assert_eq!(current_hop.expiry, payment_hop.expiry);
+    assert_eq!(current_hop.payment_preimage, payment_hop.payment_preimage);
+    assert_eq!(current_hop.hash_algorithm, payment_hop.hash_algorithm);
+    assert_eq!(current_hop.funding_tx_hash, payment_hop.funding_tx_hash);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_current_payment_hop_data_serialization() {
+    let hop = CurrentPaymentHopData {
+        amount: 50000,
+        expiry: 1000,
+        payment_preimage: None,
+        hash_algorithm: HashAlgorithm::CkbHash,
+        funding_tx_hash: gen_rand_sha256_hash(),
+        custom_records: None,
+    };
+
+    let json = serde_json::to_string(&hop).expect("serialize");
+    let deserialized: CurrentPaymentHopData = serde_json::from_str(&json).expect("deserialize");
+
+    assert_eq!(hop.amount, deserialized.amount);
+    assert_eq!(hop.expiry, deserialized.expiry);
+    assert_eq!(hop.hash_algorithm, deserialized.hash_algorithm);
+}
