@@ -331,13 +331,13 @@ pub struct Pubkey(pub PublicKey);
 
 impl From<Pubkey> for Point {
     fn from(val: Pubkey) -> Self {
-        val.0.into()
+        PublicKey::from(val).into()
     }
 }
 
 impl From<&Pubkey> for Point {
     fn from(val: &Pubkey) -> Self {
-        val.0.into()
+        (*val).into()
     }
 }
 
@@ -540,7 +540,7 @@ impl From<SchnorrSignature> for molecule_gossip::SchnorrSignature {
         molecule_gossip::SchnorrSignature::new_builder()
             .set(
                 signature
-                    .to_byte_array()
+                    .serialize()
                     .into_iter()
                     .map(Into::into)
                     .collect::<Vec<Byte>>()
