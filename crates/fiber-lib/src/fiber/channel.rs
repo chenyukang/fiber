@@ -5993,8 +5993,8 @@ impl ChannelActorState {
             ) {
                 (Some(local_shutdown_info), Some(remote_shutdown_info)) => (
                     (
-                        local_shutdown_info.close_script.clone(),
-                        remote_shutdown_info.close_script.clone(),
+                local_shutdown_info.close_script.clone(),
+                remote_shutdown_info.close_script.clone(),
                     ),
                     remote_shutdown_info.signature,
                 ),
@@ -6005,24 +6005,24 @@ impl ChannelActorState {
                 self.local_shutdown_info.as_mut()
             {
                 match local_shutdown_info.signature {
-                    Some(signature) => signature,
-                    None => {
-                        let signature = sign_ctx.sign(&compute_tx_message(&shutdown_tx))?;
-                        local_shutdown_info.signature = Some(signature);
+                Some(signature) => signature,
+                None => {
+                    let signature = sign_ctx.sign(&compute_tx_message(&shutdown_tx))?;
+                    local_shutdown_info.signature = Some(signature);
 
-                        self.network()
-                            .send_message(NetworkActorMessage::new_command(
-                                NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
-                                    self.get_remote_peer_id(),
-                                    FiberMessage::closing_signed(ClosingSigned {
-                                        partial_signature: signature,
-                                        channel_id: self.get_id(),
-                                    }),
-                                )),
-                            ))
-                            .expect(ASSUME_NETWORK_ACTOR_ALIVE);
-                        signature
-                    }
+                    self.network()
+                        .send_message(NetworkActorMessage::new_command(
+                            NetworkActorCommand::SendFiberMessage(FiberMessageWithPeerId::new(
+                                self.get_remote_peer_id(),
+                                FiberMessage::closing_signed(ClosingSigned {
+                                    partial_signature: signature,
+                                    channel_id: self.get_id(),
+                                }),
+                            )),
+                        ))
+                        .expect(ASSUME_NETWORK_ACTOR_ALIVE);
+                    signature
+                }
                 }
             } else {
                 return Ok(());

@@ -25,4 +25,10 @@ ouroboros = "0.18.5"
 [features]
 default = []
 
+[dev-dependencies]
+secp256k1_028 = { package = "secp256k1", version = "0.28.0", features = ["serde"] }
+secp256k1_030 = { package = "secp256k1", version = "0.30.0", features = ["serde"] }
+musig2_0011 = { package = "musig2", version = "0.0.11", features = ["secp256k1", "serde"] }
+musig2_024 = { package = "musig2", version = "0.2.4", features = ["secp256k1", "serde"] }
+
 [workspace]

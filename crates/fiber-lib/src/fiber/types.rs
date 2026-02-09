@@ -313,6 +313,7 @@ impl Privkey {
         let secp256k1_instance = secp256k1_instance();
         let secret_key = self.0;
         let keypair = secp256k1::Keypair::from_secret_key(secp256k1_instance, &secret_key);
+        let message = secp256k1::Message::from_digest(message);
         let sig = secp256k1_instance.sign_schnorr(&message, &keypair);
         trace!(
             "Schnorr signing message {:?} with private key {:?} (pub key {:?}), Signature: {:?}",
@@ -3967,7 +3968,7 @@ impl PaymentOnionPacket {
 
 impl PeeledPaymentOnionPacket {
     /// - `hops_info`: the first is the instruction for the origin node itself.
-    ///   Remaining elements are for each node to receive the packet.
+    ///                Remaining elements are for each node to receive the packet.
     pub fn create<C: Signing>(
         session_key: Privkey,
         mut hops_infos: Vec<PaymentHopData>,
