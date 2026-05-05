@@ -26,6 +26,7 @@ use jsonrpsee::ws_client::{HeaderMap, HeaderValue};
 use ractor::{port::OutputPortSubscriberTrait as _, Actor, ActorRef, OutputPort};
 #[cfg(debug_assertions)]
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,7 +48,7 @@ fn cli_confirm(plan: MigrationPlan) -> bool {
         );
     }
     eprint!("Continue? [y/N] ");
-    std::io::Write::flush(&mut std::io::stderr()).unwrap();
+    std::io::stderr().flush().unwrap();
 
     let mut input = String::new();
     std::io::stdin().read_line(&mut input).unwrap();

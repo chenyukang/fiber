@@ -26,7 +26,9 @@ use crate::{
 use ckb_types::packed::OutPoint;
 use ckb_types::prelude::Entity;
 use fiber_store::db_migrate::DbMigrate;
-use fiber_store::migration::{MigrateConfirmFn, MigrateProgressFn};
+use fiber_store::migration::{
+    MigrateConfirmFn, MigrateProgressFn, INIT_DB_VERSION, MIGRATION_VERSION_KEY,
+};
 use fiber_types::schema::*;
 #[cfg(not(target_arch = "wasm32"))]
 use fiber_types::CchOrder;
@@ -274,14 +276,37 @@ pub fn check_validate<P: AsRef<Path>>(path: P) -> Result<(), String> {
         let ordering = migrate.check(&store.inner);
         match ordering {
             std::cmp::Ordering::Greater => {
-                errors.push(
-                    "Database version is newer than the binary. Please upgrade fiber.".to_string(),
-                );
+                let db_version = store
+                    .inner
+                    .get(MIGRATION_VERSION_KEY)
+                    .map(|v| String::from_utf8(v).unwrap_or_default())
+                    .unwrap_or_default();
+                errors.push(format!(
+                    "Database version ({}) is newer than the binary. \
+                     Please upgrade fiber to a newer version.",
+                    db_version
+                ));
             }
             std::cmp::Ordering::Less => {
-                errors.push(
-                    "Database version is older than the binary. Migration needed.".to_string(),
+                let db_version = store
+                    .inner
+                    .get(MIGRATION_VERSION_KEY)
+                    .map(|v| String::from_utf8(v).unwrap_or_default())
+                    .unwrap_or_default();
+                let mut msg = format!(
+                    "Database version ({}) is older than the binary. Migration needed.",
+                    db_version
                 );
+                // If the DB is older than the initial migration epoch, the user
+                // must run the legacy fnn-migrate tool first.
+                if db_version.as_str() < INIT_DB_VERSION {
+                    msg.push_str(&format!(
+                        " DB version {} predates the unified migration epoch ({}). \
+                         Run fnn-migrate v0.8.x to upgrade before starting this binary.",
+                        db_version, INIT_DB_VERSION
+                    ));
+                }
+                errors.push(msg);
             }
             std::cmp::Ordering::Equal => {}
         }
