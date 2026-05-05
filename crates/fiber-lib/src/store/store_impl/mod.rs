@@ -129,8 +129,15 @@ where
         .unwrap_or_else(|e| panic!("deserialization of {} failed: {}", field_name, e))
 }
 
-/// Open a store at `path`, running auto-migration if needed.
-pub fn open_store<P: AsRef<Path>>(
+/// Open a store at `path`, running auto-migration with auto-confirm.
+/// Use this when no user interaction is needed (e.g. tests, simple setups).
+pub fn open_store<P: AsRef<Path>>(path: P) -> Result<Store, String> {
+    open_store_with_migration(path, Box::new(|_| true), Box::new(|_| {}))
+}
+
+/// Open a store at `path`, running auto-migration with custom confirm/progress callbacks.
+/// Use this when user interaction is required (e.g. CLI, WASM).
+pub fn open_store_with_migration<P: AsRef<Path>>(
     path: P,
     confirm_fn: MigrateConfirmFn,
     progress_fn: MigrateProgressFn,

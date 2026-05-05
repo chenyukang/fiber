@@ -70,10 +70,10 @@ git mv migrate migrate_archive
 Create `migrate_archive/README.md`:
 
 ```markdown
-# Archived Migrations (v0.7.x and earlier)
+# Archived Migrations (v0.8.x and earlier)
 
 This directory contains the **archived** standalone migration tool (`fnn-migrate`)
-that was used for database migrations up to v0.7.x.
+that was used for database migrations up to v0.8.x.
 
 **This code is NOT compiled by CI and is kept for reference only.**
 
@@ -86,9 +86,9 @@ all backends (RocksDB, SQLite, IndexedDB).
 ## Upgrading from old databases
 
 If you have a database older than version `20260302100001`, you must first
-upgrade using the v0.7.x `fnn-migrate` binary:
+upgrade using the v0.8.x `fnn-migrate` binary:
 
-1. Download the v0.7.x release binary from GitHub releases
+1. Download the v0.8.x release binary from GitHub releases
 2. Run: `fnn-migrate -d <data-dir>`
 3. Then upgrade to the new fiber version
 
@@ -209,7 +209,7 @@ impl std::fmt::Display for MigrateError {
                 write!(
                     f,
                     "Database version {} is too old. Minimum supported version is {}. \
-                     Please use fnn-migrate v0.7.x to upgrade first.",
+                     Please use fnn-migrate v0.8.x to upgrade first.",
                     db_version, min_version
                 )
             }

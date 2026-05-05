@@ -24,7 +24,7 @@ use fnn::{
         invoice::InvoiceRpcServerImpl, payment::PaymentRpcServerImpl, peer::PeerRpcServerImpl,
     },
     start_network,
-    store::open_store,
+    store::open_store_with_migration,
     tasks::{new_tokio_cancellation_token, new_tokio_task_tracker},
 };
 use jsonrpsee::wasm_client::WasmClientBuilder;
@@ -140,7 +140,7 @@ pub async fn fiber(
         })?
         .store_path();
 
-    let store = open_store(store_path, Box::new(wasm_confirm), Box::new(wasm_progress))
+    let store = open_store_with_migration(store_path, Box::new(wasm_confirm), Box::new(wasm_progress))
         .map_err(|err| exit_to_js(ExitMessage(err.to_string())))?;
     debug!("Store initialized");
     let tracker = new_tokio_task_tracker();

@@ -11,7 +11,7 @@ use fnn::ckb::{contracts::try_init_contracts_context, CkbChainActor};
 use fnn::event_handler::forward_event_to_client;
 use fnn::fiber::{graph::NetworkGraph, network::init_chain_hash, network::NetworkActorMessage};
 use fnn::rpc::server::start_rpc;
-use fnn::store::open_store;
+use fnn::store::open_store_with_migration;
 use fnn::store::{MigrationPlan, MigrationProgress};
 use fnn::tasks::{
     cancel_tasks_and_wait_for_completion, new_tokio_cancellation_token, new_tokio_task_tracker,
@@ -123,7 +123,7 @@ pub async fn main() -> Result<(), ExitMessage> {
 
     // Derive store_path: prefer fiber config, fall back to base_dir/fiber/store
     let store_path = parsed_fiber_config.store_path();
-    let raw_store = open_store(store_path, Box::new(cli_confirm), Box::new(cli_progress))
+    let raw_store = open_store_with_migration(store_path, Box::new(cli_confirm), Box::new(cli_progress))
         .map_err(|err| ExitMessage(err.to_string()))?;
 
     if config.cch.is_some() || config.rpc.is_some() {

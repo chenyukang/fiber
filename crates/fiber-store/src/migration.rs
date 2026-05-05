@@ -56,8 +56,8 @@ impl std::fmt::Display for MigrateError {
             } => {
                 write!(
                     f,
-                    "Database version {} is too old. Minimum supported version is {}. \
-                     Please use fnn-migrate v0.7.x to upgrade first.",
+                     "Database version {} is too old. Minimum supported version is {}. \
+                     Please use fnn-migrate v0.8.x to upgrade first.",
                     db_version, min_version
                 )
             }
