@@ -378,8 +378,7 @@ impl NetworkNodeConfigBuilder {
             .map(char::from)
             .collect();
         let rand_db_dir = Path::new(base_dir.to_str()).join(rand_name);
-        let store =
-            open_store(rand_db_dir).expect("create store");
+        let store = open_store(rand_db_dir).expect("create store");
         let fiber_config = get_fiber_config(base_dir.as_ref(), node_name.as_deref());
         let ckb_config = if self.rpc_config.is_some() {
             let ckb_dir = Path::new(base_dir.to_str()).join("ckb");

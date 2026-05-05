@@ -357,8 +357,7 @@ fn test_get_latest_startup_broadcast_message_cursor_skips_local_messages_conserv
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn test_store_watchtower() {
     let path = TempDir::new("test-watchtower-store");
-    let store =
-        open_store(path).expect("created store failed");
+    let store = open_store(path).expect("created store failed");
 
     let node_id = NodeId::from_bytes(PeerId::random().into_bytes());
     let channel_id = gen_rand_sha256_hash();
@@ -437,8 +436,7 @@ fn test_store_watchtower() {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn test_store_watchtower_preimage() {
     let path = TempDir::new("test-watchtower-store");
-    let store =
-        open_store(path).expect("created store failed");
+    let store = open_store(path).expect("created store failed");
 
     let node_id_a = NodeId::from_bytes(PeerId::random().into_bytes());
     let preimage_a = gen_rand_sha256_hash();
@@ -502,8 +500,7 @@ fn test_store_watchtower_preimage() {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn test_store_watchtower_with_wrong_node_id() {
     let path = TempDir::new("test-watchtower-store");
-    let store =
-        open_store(path).expect("created store failed");
+    let store = open_store(path).expect("created store failed");
 
     let node_id = NodeId::from_bytes(PeerId::random().into_bytes());
     let wrong_node_id = NodeId::from_bytes(PeerId::random().into_bytes());
@@ -695,8 +692,7 @@ fn test_channel_actor_state_store() {
 
     let path = TempDir::new("channel_actore_store");
 
-    let store =
-        open_store(path).expect("create store failed");
+    let store = open_store(path).expect("create store failed");
     assert!(store.get_channel_actor_state(&state.id).is_none());
     store.insert_channel_actor_state(state.clone());
 
@@ -1123,8 +1119,7 @@ fn test_store_sample_channel_actor_state() {
     assert!(!samples.is_empty());
 
     let path = TempDir::new("sample_channel_actor_state_store");
-    let store =
-        open_store(path).expect("create store failed");
+    let store = open_store(path).expect("create store failed");
 
     // Insert all samples
     for sample in &samples {
@@ -1192,8 +1187,7 @@ fn test_store_channel_open_record() {
     assert!(!samples.is_empty());
 
     let path = TempDir::new("channel_open_record_store");
-    let store =
-        open_store(path).expect("create store failed");
+    let store = open_store(path).expect("create store failed");
 
     // Initially no records
     assert!(store.get_channel_open_records().is_empty());

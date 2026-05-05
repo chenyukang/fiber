@@ -140,8 +140,9 @@ pub async fn fiber(
         })?
         .store_path();
 
-    let store = open_store_with_migration(store_path, Box::new(wasm_confirm), Box::new(wasm_progress))
-        .map_err(|err| exit_to_js(ExitMessage(err.to_string())))?;
+    let store =
+        open_store_with_migration(store_path, Box::new(wasm_confirm), Box::new(wasm_progress))
+            .map_err(|err| exit_to_js(ExitMessage(err.to_string())))?;
     debug!("Store initialized");
     let tracker = new_tokio_task_tracker();
     let token = new_tokio_cancellation_token();
