@@ -26,18 +26,18 @@ impl Store {
 impl StorageBackend for Store {
     type Batch = Batch;
 
-    fn get<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
+    fn get_bytes(&self, key: &[u8]) -> Option<Vec<u8>> {
         self.db
-            .get(key.as_ref())
+            .get(key)
             .map(|v| v.map(|vi| vi.to_vec()))
             .expect("get should be OK")
     }
 
-    fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&self, key: K, value: V) {
+    fn put_bytes(&self, key: &[u8], value: &[u8]) {
         self.db.put(key, value).expect("put should be ok");
     }
 
-    fn delete<K: AsRef<[u8]>>(&self, key: K) {
+    fn delete_bytes(&self, key: &[u8]) {
         self.db.delete(key).expect("Unexpected error from delete");
     }
 

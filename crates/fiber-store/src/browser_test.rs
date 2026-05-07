@@ -80,19 +80,19 @@ impl Store {
 impl StorageBackend for Store {
     type Batch = Batch;
 
-    fn get<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
+    fn get_bytes(&self, key: &[u8]) -> Option<Vec<u8>> {
         let guard = self.data.borrow();
-        guard.get(key.as_ref()).cloned()
+        guard.get(key).cloned()
     }
 
-    fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&self, key: K, value: V) {
+    fn put_bytes(&self, key: &[u8], value: &[u8]) {
         let mut guard = self.data.borrow_mut();
-        guard.insert(key.as_ref().to_vec(), value.as_ref().to_vec());
+        guard.insert(key.to_vec(), value.to_vec());
     }
 
-    fn delete<K: AsRef<[u8]>>(&self, key: K) {
+    fn delete_bytes(&self, key: &[u8]) {
         let mut guard = self.data.borrow_mut();
-        guard.remove(key.as_ref());
+        guard.remove(key);
     }
 
     fn batch(&self) -> Self::Batch {

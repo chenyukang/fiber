@@ -83,16 +83,16 @@ impl Store {
 impl StorageBackend for Store {
     type Batch = <fiber_store::Store as StorageBackend>::Batch;
 
-    fn get<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
-        self.inner.get(key)
+    fn get_bytes(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.inner.get_bytes(key)
     }
 
-    fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&self, key: K, value: V) {
-        self.inner.put(key, value)
+    fn put_bytes(&self, key: &[u8], value: &[u8]) {
+        self.inner.put_bytes(key, value)
     }
 
-    fn delete<K: AsRef<[u8]>>(&self, key: K) {
-        self.inner.delete(key)
+    fn delete_bytes(&self, key: &[u8]) {
+        self.inner.delete_bytes(key)
     }
 
     fn batch(&self) -> Self::Batch {

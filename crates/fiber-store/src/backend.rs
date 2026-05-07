@@ -23,14 +23,14 @@ pub trait StorageBackend: Send + Sync {
     /// The batch type for this backend.
     type Batch: BatchWriter;
 
-    /// Get a value by key.
-    fn get<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>>;
+    /// Get a value by key bytes.
+    fn get_bytes(&self, key: &[u8]) -> Option<Vec<u8>>;
 
-    /// Put a key-value pair.
-    fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&self, key: K, value: V);
+    /// Put a key-value pair using byte slices.
+    fn put_bytes(&self, key: &[u8], value: &[u8]);
 
-    /// Delete a key.
-    fn delete<K: AsRef<[u8]>>(&self, key: K);
+    /// Delete a key by bytes.
+    fn delete_bytes(&self, key: &[u8]);
 
     /// Create a new batch writer.
     fn batch(&self) -> Self::Batch;
@@ -49,6 +49,30 @@ pub trait StorageBackend: Send + Sync {
         limit: usize,
     ) -> Vec<KVPair>;
 
+    /// Get a value by any key type that can be viewed as bytes.
+    fn get<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>>
+    where
+        Self: Sized,
+    {
+        self.get_bytes(key.as_ref())
+    }
+
+    /// Put a key-value pair using any byte-like key/value types.
+    fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&self, key: K, value: V)
+    where
+        Self: Sized,
+    {
+        self.put_bytes(key.as_ref(), value.as_ref())
+    }
+
+    /// Delete a key using any byte-like key type.
+    fn delete<K: AsRef<[u8]>>(&self, key: K)
+    where
+        Self: Sized,
+    {
+        self.delete_bytes(key.as_ref())
+    }
+
     /// Return a lazy iterator over all key-value pairs whose keys start with
     /// `prefix`.
     ///
@@ -59,7 +83,10 @@ pub trait StorageBackend: Send + Sync {
     ///
     /// The default implementation batches calls to [`Self::collect_iterator`]
     /// so that only a bounded number of entries are held in memory at any time.
-    fn prefix_iterator(&self, prefix: impl Into<Vec<u8>>) -> PrefixIterator<'_, Self> {
+    fn prefix_iterator(&self, prefix: impl Into<Vec<u8>>) -> PrefixIterator<'_, Self>
+    where
+        Self: Sized,
+    {
         PrefixIterator::new(self, prefix.into())
     }
 
@@ -69,7 +96,28 @@ pub trait StorageBackend: Send + Sync {
         &self,
         prefix: impl Into<Vec<u8>>,
         start_key: impl Into<Vec<u8>>,
-    ) -> PrefixIterator<'_, Self> {
+    ) -> PrefixIterator<'_, Self>
+    where
+        Self: Sized,
+    {
         PrefixIterator::new_from(self, prefix.into(), start_key.into())
     }
+}
+
+/// Return a lazy prefix iterator for both concrete backends and backend trait objects.
+pub fn prefix_iterator<S: StorageBackend + ?Sized>(
+    store: &S,
+    prefix: impl Into<Vec<u8>>,
+) -> PrefixIterator<'_, S> {
+    PrefixIterator::new(store, prefix.into())
+}
+
+/// Return a lazy prefix iterator that starts after `start_key` for both concrete
+/// backends and backend trait objects.
+pub fn prefix_iterator_from<S: StorageBackend + ?Sized>(
+    store: &S,
+    prefix: impl Into<Vec<u8>>,
+    start_key: impl Into<Vec<u8>>,
+) -> PrefixIterator<'_, S> {
+    PrefixIterator::new_from(store, prefix.into(), start_key.into())
 }

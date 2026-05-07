@@ -1,5 +1,6 @@
-use crate::migration::{MigrateConfirmFn, MigrateError, MigrateProgressFn, Migration, Migrations};
-use crate::Store;
+use crate::migration::{
+    MigrateConfirmFn, MigrateError, MigrateProgressFn, Migration, MigrationStore, Migrations,
+};
 use std::sync::Arc;
 
 /// Migration coordinator.
@@ -26,7 +27,7 @@ impl DbMigrate {
     /// Run the full migration flow: check version, confirm with user, execute.
     pub fn auto_migrate(
         &self,
-        store: &Store,
+        store: &MigrationStore<'_>,
         confirm_fn: MigrateConfirmFn,
         progress_fn: MigrateProgressFn,
     ) -> Result<(), MigrateError> {
@@ -34,7 +35,7 @@ impl DbMigrate {
     }
 
     /// Check database version ordering (for external queries).
-    pub fn check(&self, store: &Store) -> std::cmp::Ordering {
+    pub fn check(&self, store: &MigrationStore<'_>) -> std::cmp::Ordering {
         self.migrations.check(store)
     }
 }

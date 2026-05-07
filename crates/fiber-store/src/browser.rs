@@ -81,11 +81,11 @@ impl Store {
 impl StorageBackend for Store {
     type Batch = Batch;
 
-    fn get<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
+    fn get_bytes(&self, key: &[u8]) -> Option<Vec<u8>> {
         return match self
             .chan
             .dispatch_database_command(DbCommandRequestWithTakeWhile::Read {
-                keys: vec![key.as_ref().to_vec()],
+                keys: vec![key.to_vec()],
             })
             .unwrap()
         {
@@ -94,13 +94,13 @@ impl StorageBackend for Store {
         };
     }
 
-    fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&self, key: K, value: V) {
+    fn put_bytes(&self, key: &[u8], value: &[u8]) {
         match self
             .chan
             .dispatch_database_command(DbCommandRequestWithTakeWhile::Put {
                 kvs: vec![KV {
-                    key: key.as_ref().to_vec(),
-                    value: value.as_ref().to_vec(),
+                    key: key.to_vec(),
+                    value: value.to_vec(),
                 }],
             })
             .unwrap()
@@ -110,11 +110,11 @@ impl StorageBackend for Store {
         };
     }
 
-    fn delete<K: AsRef<[u8]>>(&self, key: K) {
+    fn delete_bytes(&self, key: &[u8]) {
         match self
             .chan
             .dispatch_database_command(DbCommandRequestWithTakeWhile::Delete {
-                keys: vec![key.as_ref().to_vec()],
+                keys: vec![key.to_vec()],
             })
             .unwrap()
         {

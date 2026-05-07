@@ -4,11 +4,13 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::backend::StorageBackend;
-use crate::Store;
 
 pub const MIGRATION_VERSION_KEY: &[u8] = b"db-version";
 pub const INIT_DB_VERSION: &str = "20260302100001";
 include!(concat!(env!("OUT_DIR"), "/latest_db_version.rs"));
+
+/// Object-safe storage view used by migrations.
+pub type MigrationStore<'a> = dyn StorageBackend<Batch = crate::Batch> + 'a;
 
 // --- Callback types for platform-specific UI ---
 
@@ -102,7 +104,7 @@ pub trait Migration: Send + Sync {
     fn version(&self) -> &str;
 
     /// Execute migration using the store backend.
-    fn migrate(&self, store: &Store) -> Result<(), String>;
+    fn migrate(&self, store: &MigrationStore<'_>) -> Result<(), String>;
 
     /// Whether this migration is a breaking change requiring user action.
     fn is_break_change(&self) -> bool {
@@ -123,14 +125,14 @@ impl Migrations {
             .insert(migration.version().to_string(), migration);
     }
 
-    pub fn get_db_version(&self, store: &Store) -> Option<String> {
+    pub fn get_db_version(&self, store: &MigrationStore<'_>) -> Option<String> {
         store
-            .get(MIGRATION_VERSION_KEY)
+            .get_bytes(MIGRATION_VERSION_KEY)
             .map(|v| String::from_utf8(v).expect("version bytes to utf8"))
     }
 
     /// Check database version against binary version.
-    pub fn check(&self, store: &Store) -> Ordering {
+    pub fn check(&self, store: &MigrationStore<'_>) -> Ordering {
         let db_version = match self.get_db_version(store) {
             Some(v) => v,
             None => return Ordering::Less,
@@ -143,9 +145,9 @@ impl Migrations {
     }
 
     /// Initialize a new database with LATEST_DB_VERSION.
-    pub fn init_db_version(&self, store: &Store) {
+    pub fn init_db_version(&self, store: &MigrationStore<'_>) {
         info!("Init database version {}", LATEST_DB_VERSION);
-        store.put(MIGRATION_VERSION_KEY, LATEST_DB_VERSION);
+        store.put_bytes(MIGRATION_VERSION_KEY, LATEST_DB_VERSION.as_bytes());
     }
 
     /// Collect pending migrations (version > current).
@@ -179,7 +181,7 @@ impl Migrations {
     /// Run the full auto-migration flow.
     pub fn auto_migrate(
         &self,
-        store: &Store,
+        store: &MigrationStore<'_>,
         confirm_fn: MigrateConfirmFn,
         progress_fn: MigrateProgressFn,
     ) -> Result<(), MigrateError> {
@@ -269,7 +271,7 @@ impl Migrations {
                 })?;
 
             // Update db-version after each successful migration
-            store.put(MIGRATION_VERSION_KEY, m.version());
+            store.put_bytes(MIGRATION_VERSION_KEY, m.version().as_bytes());
         }
 
         info!("Migration complete: {} -> {}", db_version, latest_version);

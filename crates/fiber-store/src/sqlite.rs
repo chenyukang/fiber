@@ -54,31 +54,29 @@ impl Store {
 impl StorageBackend for Store {
     type Batch = Batch;
 
-    fn get<K: AsRef<[u8]>>(&self, key: K) -> Option<Vec<u8>> {
+    fn get_bytes(&self, key: &[u8]) -> Option<Vec<u8>> {
         let conn = self.conn.lock().expect("lock poisoned");
-        match conn.query_row(
-            "SELECT value FROM kv_store WHERE key = ?1",
-            [key.as_ref()],
-            |row| row.get(0),
-        ) {
+        match conn.query_row("SELECT value FROM kv_store WHERE key = ?1", [key], |row| {
+            row.get(0)
+        }) {
             Ok(value) => Some(value),
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(e) => panic!("get failed: {e}"),
         }
     }
 
-    fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&self, key: K, value: V) {
+    fn put_bytes(&self, key: &[u8], value: &[u8]) {
         let conn = self.conn.lock().expect("lock poisoned");
         conn.execute(
             "INSERT OR REPLACE INTO kv_store (key, value) VALUES (?1, ?2)",
-            rusqlite::params![key.as_ref(), value.as_ref()],
+            rusqlite::params![key, value],
         )
         .expect("put should be ok");
     }
 
-    fn delete<K: AsRef<[u8]>>(&self, key: K) {
+    fn delete_bytes(&self, key: &[u8]) {
         let conn = self.conn.lock().expect("lock poisoned");
-        conn.execute("DELETE FROM kv_store WHERE key = ?1", [key.as_ref()])
+        conn.execute("DELETE FROM kv_store WHERE key = ?1", [key])
             .expect("delete should be ok");
     }
 

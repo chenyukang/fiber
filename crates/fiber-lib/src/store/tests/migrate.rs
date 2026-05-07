@@ -1,7 +1,8 @@
 use fiber_store::backend::StorageBackend;
 use fiber_store::db_migrate::DbMigrate;
 use fiber_store::migration::{
-    MigrateError, Migration, Migrations, INIT_DB_VERSION, LATEST_DB_VERSION, MIGRATION_VERSION_KEY,
+    MigrateError, Migration, MigrationStore, Migrations, INIT_DB_VERSION, LATEST_DB_VERSION,
+    MIGRATION_VERSION_KEY,
 };
 use std::cmp::Ordering;
 use std::sync::{Arc, RwLock};
@@ -79,7 +80,7 @@ impl DummyMigration {
 }
 
 impl Migration for DummyMigration {
-    fn migrate(&self, _store: &fiber_store::Store) -> Result<(), String> {
+    fn migrate(&self, _store: &MigrationStore<'_>) -> Result<(), String> {
         eprintln!("DummyMigration::migrate {} ... ", self.version);
         let mut count = self.run_count.write().unwrap();
         *count += 1;
@@ -104,7 +105,7 @@ impl BreakChangeMigration {
 }
 
 impl Migration for BreakChangeMigration {
-    fn migrate(&self, _store: &fiber_store::Store) -> Result<(), String> {
+    fn migrate(&self, _store: &MigrationStore<'_>) -> Result<(), String> {
         eprintln!("BreakChangeMigration::migrate {} ... ", self.version);
         Ok(())
     }
