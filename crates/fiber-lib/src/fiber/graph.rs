@@ -2177,6 +2177,22 @@ where
                         ))
                     },
                 )?;
+                let incoming_tlc_expiry =
+                    expiry
+                        .checked_add(hint.tlc_expiry_delta)
+                        .ok_or_else(|| {
+                            PathFindError::Overflow(format!(
+                                "hop hint tlc_expiry_delta overflow: final_tlc_expiry_delta {} + hop_hint_tlc_expiry_delta {}",
+                                expiry, hint.tlc_expiry_delta
+                            ))
+                        })?;
+                if incoming_tlc_expiry > tlc_expiry_limit {
+                    debug!(
+                        "skip hop hint because incoming tlc expiry {} exceeds limit {}: {:?}",
+                        incoming_tlc_expiry, tlc_expiry_limit, hint
+                    );
+                    continue;
+                }
                 // hop hint is only used for private channels, we assume there is no tlc_min_value limit
                 let tlc_min_val = 0;
                 self.eval_and_update(
