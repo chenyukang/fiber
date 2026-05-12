@@ -2,7 +2,7 @@ use std::{collections::HashSet, sync::Arc};
 
 use ckb_types::{
     core::{tx_pool::TxStatus, TransactionView},
-    packed::Bytes,
+    packed::{Bytes, Script},
     prelude::{Builder, Entity},
 };
 use molecule::prelude::Byte;
@@ -251,6 +251,73 @@ async fn test_saving_invalid_channel_announcement() {
     let new_announcement = context
         .get_store()
         .get_latest_channel_announcement(channel_context.channel_outpoint());
+    assert_eq!(new_announcement, None);
+}
+
+#[tokio::test]
+// Not supported on wasm: requires filesystem access
+async fn test_rejects_udt_channel_announcement_without_udt_funding_cell() {
+    let context = GossipTestingContext::new().await;
+    let channel_context = ChannelTestContext::gen().await;
+    let mut channel_announcement = channel_context.channel_announcement.clone();
+    channel_announcement.udt_type_script = Some(Script::default());
+    let message = channel_announcement.message_to_sign();
+    channel_announcement.ckb_signature = Some(channel_context.funding_tx_sk.sign_schnorr(message));
+    channel_announcement.node1_signature = Some(channel_context.node1_sk.sign(message));
+    channel_announcement.node2_signature = Some(channel_context.node2_sk.sign(message));
+
+    context.save_message(BroadcastMessage::ChannelAnnouncement(channel_announcement));
+    let status = context.submit_tx(channel_context.funding_tx.clone()).await;
+    assert!(matches!(status, TxStatus::Committed(..)));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let new_announcement = context
+        .get_store()
+        .get_latest_channel_announcement(channel_context.channel_outpoint());
+    assert_eq!(new_announcement, None);
+}
+
+#[tokio::test]
+// Not supported on wasm: requires filesystem access
+async fn test_rejects_channel_announcement_when_outpoint_output_mismatches() {
+    let context = GossipTestingContext::new().await;
+    let channel_context = ChannelTestContext::gen().await;
+    let tx = channel_context.funding_tx.clone();
+    let output = tx.output(0).expect("get output").clone();
+    let invalid_lock = output
+        .lock()
+        .as_builder()
+        .args(
+            Bytes::new_builder()
+                .set(b"wrong lock args".iter().map(|b| Byte::new(*b)).collect())
+                .build(),
+        )
+        .build();
+    let invalid_output = output.as_builder().lock(invalid_lock).build();
+    let invalid_tx = tx
+        .as_advanced_builder()
+        .output(invalid_output)
+        .output_data(Bytes::default())
+        .build();
+    let forged_outpoint = invalid_tx
+        .output_pts_iter()
+        .nth(1)
+        .expect("get forged outpoint");
+    let mut channel_announcement = channel_context.channel_announcement.clone();
+    channel_announcement.channel_outpoint = forged_outpoint.clone();
+    let message = channel_announcement.message_to_sign();
+    channel_announcement.ckb_signature = Some(channel_context.funding_tx_sk.sign_schnorr(message));
+    channel_announcement.node1_signature = Some(channel_context.node1_sk.sign(message));
+    channel_announcement.node2_signature = Some(channel_context.node2_sk.sign(message));
+
+    context.save_message(BroadcastMessage::ChannelAnnouncement(channel_announcement));
+    let status = context.submit_tx(invalid_tx).await;
+    assert!(matches!(status, TxStatus::Committed(..)));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let new_announcement = context
+        .get_store()
+        .get_latest_channel_announcement(&forged_outpoint);
     assert_eq!(new_announcement, None);
 }
 

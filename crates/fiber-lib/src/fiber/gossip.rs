@@ -2386,15 +2386,20 @@ async fn get_channel_on_chain_info(
     client: &impl CkbChainClient,
 ) -> Result<ChannelOnchainInfo, VerifyBroadcastMessageError> {
     let (tx, block_hash) = get_channel_tx(outpoint, chain, client).await?;
-    let first_output = match tx.outputs().get(0) {
+    let output_index: u32 = outpoint.index().unpack();
+    let output = match tx.outputs().get(output_index as usize) {
         None => {
             return Err(VerifyBroadcastMessageError::InvalidParameter(format!(
-                "On-chain transaction found but no output: {:?}",
-                &outpoint
+                "On-chain transaction found but no output for channel outpoint: {:?}",
+                outpoint
             )));
         }
         Some(output) => output.clone().into(),
     };
+    let output_data = tx
+        .outputs_data()
+        .get(output_index as usize)
+        .unwrap_or_default();
 
     let timestamp: u64 = match client.get_block_timestamp(block_hash).await {
         Ok(Some(timestamp)) => timestamp,
@@ -2417,8 +2422,80 @@ async fn get_channel_on_chain_info(
 
     Ok(ChannelOnchainInfo {
         timestamp,
-        first_output,
+        output,
+        output_data,
     })
+}
+
+fn verify_channel_announcement_on_chain_anchor(
+    channel_announcement: &ChannelAnnouncement,
+    on_chain_info: &ChannelOnchainInfo,
+) -> Result<(), VerifyBroadcastMessageError> {
+    let pubkey = channel_announcement.ckb_key.serialize();
+    let pubkey_hash = &blake2b_256(pubkey.as_slice())[0..20];
+    let output = &on_chain_info.output;
+
+    if output.lock.args.as_bytes() != pubkey_hash {
+        return Err(VerifyBroadcastMessageError::InvalidParameter(format!(
+                    "On-chain transaction found but pubkey hash mismatched: on chain hash {:?}, pub key ({:?}) hash {:?}",
+                    &output.lock.args.as_bytes(),
+                    hex::encode(pubkey),
+                    &pubkey_hash
+                )));
+    }
+
+    let output_type_script = output.type_.clone().map(Into::into);
+    match &channel_announcement.udt_type_script {
+        Some(udt_type_script) => {
+            if output_type_script.as_ref() != Some(udt_type_script) {
+                return Err(VerifyBroadcastMessageError::InvalidParameter(format!(
+                    "On-chain UDT type script mismatched: on chain {:?}, announced {:?}",
+                    output_type_script, udt_type_script
+                )));
+            }
+
+            let output_data = on_chain_info.output_data.raw_data();
+            if output_data.len() < 16 {
+                return Err(VerifyBroadcastMessageError::InvalidParameter(format!(
+                    "On-chain UDT funding cell data too short: expected at least 16 bytes, got {}",
+                    output_data.len()
+                )));
+            }
+
+            let mut amount_bytes = [0u8; 16];
+            amount_bytes.copy_from_slice(&output_data[..16]);
+            let udt_amount = u128::from_le_bytes(amount_bytes);
+            if channel_announcement.capacity != udt_amount {
+                return Err(VerifyBroadcastMessageError::InvalidParameter(format!(
+                    "On-chain UDT amount mismatched: on chain {:?}, announced {:?}",
+                    udt_amount, channel_announcement.capacity
+                )));
+            }
+        }
+        None => {
+            if output_type_script.is_some() {
+                return Err(VerifyBroadcastMessageError::InvalidParameter(format!(
+                    "On-chain transaction found but announced CKB channel has type script: {:?}",
+                    output_type_script
+                )));
+            }
+            if !on_chain_info.output_data.raw_data().is_empty() {
+                return Err(VerifyBroadcastMessageError::InvalidParameter(
+                    "On-chain CKB funding cell has unexpected output data".to_string(),
+                ));
+            }
+
+            let capacity: u128 = u64::from(output.capacity).into();
+            if channel_announcement.capacity > capacity {
+                return Err(VerifyBroadcastMessageError::InvalidParameter(format!(
+                            "On-chain transaction found but capacity mismatched: on chain capacity {:?} smaller than announced channel capacity {:?}",
+                            &output.capacity, &channel_announcement.capacity
+                        )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 // Verify the channel announcement message. If any error occurs, return the error.
@@ -2485,32 +2562,7 @@ async fn verify_channel_announcement<S: GossipMessageStore>(
         )));
     }
 
-    let pubkey = channel_announcement.ckb_key.serialize();
-    let pubkey_hash = &blake2b_256(pubkey.as_slice())[0..20];
-
-    let output = &on_chain_info.first_output;
-    if output.lock.args.as_bytes() != pubkey_hash {
-        return Err(VerifyBroadcastMessageError::InvalidParameter(format!(
-                    "On-chain transaction found but pubkey hash mismatched: on chain hash {:?}, pub key ({:?}) hash {:?}",
-                    &output.lock.args.as_bytes(),
-                    hex::encode(pubkey),
-                    &pubkey_hash
-                )));
-    }
-    let capacity: u128 = u64::from(output.capacity).into();
-    match channel_announcement.udt_type_script {
-        Some(_) => {
-            // TODO: verify the capacity of the UDT
-        }
-        None => {
-            if channel_announcement.capacity > capacity {
-                return Err(VerifyBroadcastMessageError::InvalidParameter(format!(
-                            "On-chain transaction found but capacity mismatched: on chain capacity {:?} smaller than annoucned channel capacity {:?}",
-                            &output.capacity, &channel_announcement.capacity
-                        )));
-            }
-        }
-    }
+    verify_channel_announcement_on_chain_anchor(channel_announcement, on_chain_info)?;
 
     if let Err(err) =
         SECP256K1.verify_schnorr(ckb_signature, &message, &channel_announcement.ckb_key)
