@@ -464,6 +464,18 @@ impl SendPaymentDataExt for SendPaymentData {
             return Err("invoice does not support hop hints".to_string());
         }
 
+        let uses_trampoline_hops = command
+            .trampoline_hops
+            .as_ref()
+            .is_some_and(|hops| !hops.is_empty());
+        if uses_trampoline_hops
+            && invoice
+                .as_ref()
+                .is_some_and(|inv| !inv.allow_trampoline_routing())
+        {
+            return Err("invoice does not support trampoline routing".to_string());
+        }
+
         let allow_mpp = invoice.as_ref().is_some_and(|inv| inv.allow_mpp());
         let payment_secret = invoice
             .as_ref()

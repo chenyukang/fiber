@@ -1521,6 +1521,7 @@ where
         let mut final_payment_preimage = peeled_onion_packet.current.payment_preimage;
         let mut final_custom_records = peeled_onion_packet.current.custom_records.clone();
         let mut mpp_record = peeled_packet_mpp_custom_records(peeled_onion_packet);
+        let is_trampoline_final = last_hop_inner_onion.is_some();
 
         if let Some(TrampolineHopPayload::Final {
             final_amount,
@@ -1550,6 +1551,12 @@ where
         }
 
         if let Some(ref invoice) = invoice {
+            if is_trampoline_final && !invoice.allow_trampoline_routing() {
+                return Err(ProcessingChannelError::InvalidParameter(
+                    "invoice does not support trampoline routing".to_string(),
+                ));
+            }
+
             let invoice_status = self.get_invoice_status(invoice);
             if !matches!(invoice_status, CkbInvoiceStatus::Open) {
                 return Err(ProcessingChannelError::FinalInvoiceInvalid(invoice_status));

@@ -936,6 +936,31 @@ fn test_send_payment_rejects_hop_hints_when_invoice_disallows() {
     );
 }
 
+#[test]
+fn test_send_payment_rejects_trampoline_hops_when_invoice_disallows() {
+    let payee_pubkey = gen_rand_fiber_public_key();
+    let preimage = gen_rand_sha256_hash();
+    let invoice = InvoiceBuilder::new(Currency::Fibd)
+        .amount(Some(1000))
+        .payment_preimage(preimage)
+        .payee_pub_key(payee_pubkey.into())
+        .allow_trampoline_routing(false)
+        .build()
+        .expect("build invoice");
+
+    let err = SendPaymentData::new(SendPaymentCommand {
+        invoice: Some(invoice.to_string()),
+        trampoline_hops: Some(vec![gen_rand_fiber_public_key()]),
+        ..Default::default()
+    })
+    .unwrap_err();
+
+    assert!(
+        err.contains("invoice does not support trampoline routing"),
+        "unexpected error: {err}"
+    );
+}
+
 #[tokio::test]
 async fn test_send_payment_with_too_large_hop_hint_fee_rate() {
     init_tracing();
