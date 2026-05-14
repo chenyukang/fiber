@@ -3083,14 +3083,10 @@ where
                 state.get_public_key(),
             ));
         }
+        let invalid_onion_payload =
+            || TlcErr::new_node_fail(TlcErrorCode::InvalidOnionPayload, state.get_public_key());
+        let prev_tlc = previous_tlc.ok_or_else(&invalid_onion_payload)?;
         let trampoline_packet = TrampolineOnionPacket::new(trampoline_bytes.to_vec());
-        let prev_channel_state = self
-            .store
-            .get_channel_actor_state(&previous_tlc.expect("got previous tlc").prev_channel_id)
-            .ok_or_else(|| {
-                TlcErr::new_node_fail(TlcErrorCode::TemporaryNodeFailure, state.get_public_key())
-            })?;
-        let udt_type_script = prev_channel_state.funding_udt_type_script.clone();
         let peeled_trampoline = trampoline_packet
             .peel(&state.private_key, Some(payment_hash.as_ref()), SECP256K1)
             .map_err(|_| {
@@ -3128,19 +3124,55 @@ where
                     ));
                 }
 
-                let (Some(remaining_trampoline_onion), Some(prev_tlc)) =
-                    (peeled_trampoline.next.map(|p| p.into_bytes()), previous_tlc)
+                let Some(remaining_trampoline_onion) =
+                    peeled_trampoline.next.map(|p| p.into_bytes())
                 else {
+                    return Err(invalid_onion_payload());
+                };
+
+                let prev_channel_state = self
+                    .store
+                    .get_channel_actor_state(&prev_tlc.prev_channel_id)
+                    .ok_or_else(|| {
+                        TlcErr::new_node_fail(
+                            TlcErrorCode::TemporaryNodeFailure,
+                            state.get_public_key(),
+                        )
+                    })?;
+                let udt_type_script = prev_channel_state.funding_udt_type_script.clone();
+                let incoming_tlc = prev_channel_state
+                    .tlc_state
+                    .get(&TLCId::Received(prev_tlc.prev_tlc_id))
+                    .ok_or_else(&invalid_onion_payload)?;
+                let incoming_remaining = incoming_tlc
+                    .expiry
+                    .checked_sub(now_timestamp_as_millis_u64())
+                    .ok_or_else(&invalid_onion_payload)?;
+                let max_forward_tlc_expiry_limit = incoming_remaining
+                    .checked_sub(prev_channel_state.local_tlc_info.tlc_expiry_delta)
+                    .ok_or_else(&invalid_onion_payload)?;
+                let effective_tlc_expiry_limit = tlc_expiry_limit.min(max_forward_tlc_expiry_limit);
+                if effective_tlc_expiry_limit < tlc_expiry_delta
+                    || effective_tlc_expiry_limit < MIN_TLC_EXPIRY_DELTA
+                {
+                    error!(
+                        "Trampoline forwarding expiry exceeds incoming TLC: delta {}, limit {}, effective {}, incoming remaining {}, safety delta {}",
+                        tlc_expiry_delta,
+                        tlc_expiry_limit,
+                        effective_tlc_expiry_limit,
+                        incoming_remaining,
+                        prev_channel_state.local_tlc_info.tlc_expiry_delta
+                    );
                     return Err(TlcErr::new_node_fail(
                         TlcErrorCode::InvalidOnionPayload,
                         state.get_public_key(),
                     ));
-                };
+                }
 
                 let payment_data =
                     SendPaymentDataBuilder::new(next_node_id, amount_to_forward, payment_hash)
                         .final_tlc_expiry_delta(tlc_expiry_delta)
-                        .tlc_expiry_limit(tlc_expiry_limit)
+                        .tlc_expiry_limit(effective_tlc_expiry_limit)
                         .max_fee_amount(Some(build_max_fee_amount))
                         .max_parts(max_parts)
                         .udt_type_script(udt_type_script)

@@ -15,7 +15,8 @@ use crate::{
 };
 use fiber_types::Hash256;
 use fiber_types::{
-    CurrentPaymentHopData, HashAlgorithm, PeeledPaymentOnionPacket, PrevTlcInfo, TlcErrorCode,
+    AppliedFlags, CommitmentNumbers, CurrentPaymentHopData, HashAlgorithm, InboundTlcStatus,
+    PeeledPaymentOnionPacket, PrevTlcInfo, TLCId, TlcErrorCode, TlcInfo, TlcStatus,
 };
 use ractor::RpcReplyPort;
 use rand::Rng;
@@ -1557,6 +1558,114 @@ async fn test_trampoline_forwarding_respects_tlc_expiry_limit_from_payload() {
     node_a.wait_until_failed(payment_hash).await;
     let payment_res = node_a.get_payment_result(payment_hash).await;
     assert!(payment_res.failed_error.is_some());
+}
+
+#[tokio::test]
+async fn test_trampoline_forward_rejects_inner_expiry_limit_beyond_incoming_tlc() {
+    init_tracing();
+
+    let (nodes, channels) = create_n_nodes_network_with_visibility(
+        &[((0, 1), (MIN_RESERVED_CKB + 100000, HUGE_CKB_AMOUNT), true)],
+        2,
+    )
+    .await;
+    let node = &nodes[0];
+    let payment_hash = gen_rand_sha256_hash();
+    let prev_tlc_id = 1;
+    let incoming_amount = 2_000;
+    let amount_to_forward = 1_000;
+    let build_max_fee_amount = incoming_amount - amount_to_forward;
+    let final_delta = DEFAULT_FINAL_TLC_EXPIRY_DELTA;
+    let sender_controlled_limit = final_delta + DEFAULT_TLC_EXPIRY_DELTA * 10;
+    let incoming_expiry =
+        crate::now_timestamp_as_millis_u64() + final_delta + DEFAULT_TLC_EXPIRY_DELTA / 2;
+
+    let mut prev_channel_state = node.get_channel_actor_state(channels[0]);
+    prev_channel_state.tlc_state.received_tlcs.add_tlc(TlcInfo {
+        status: TlcStatus::Inbound(InboundTlcStatus::Committed),
+        tlc_id: TLCId::Received(prev_tlc_id),
+        amount: incoming_amount,
+        payment_hash,
+        total_amount: None,
+        payment_secret: None,
+        attempt_id: None,
+        expiry: incoming_expiry,
+        hash_algorithm: HashAlgorithm::Sha256,
+        onion_packet: None,
+        shared_secret: [0u8; 32],
+        is_trampoline_hop: false,
+        created_at: CommitmentNumbers::new(),
+        removed_reason: None,
+        forwarding_tlc: None,
+        removed_confirmed_at: None,
+        applied_flags: AppliedFlags::ADD,
+    });
+    node.store.insert_channel_actor_state(prev_channel_state);
+
+    let next_node = gen_rand_fiber_public_key();
+    let hop_data = TrampolineHopPayload::Forward {
+        next_node_id: next_node,
+        amount_to_forward,
+        build_max_fee_amount,
+        tlc_expiry_delta: final_delta,
+        tlc_expiry_limit: sender_controlled_limit,
+        max_parts: None,
+        hash_algorithm: HashAlgorithm::Sha256,
+    };
+    let final_payload = TrampolineHopPayload::Final {
+        final_amount: amount_to_forward,
+        final_tlc_expiry_delta: final_delta,
+        payment_preimage: None,
+        custom_records: None,
+    };
+
+    let mut rng = rand::thread_rng();
+    let mut key = [0u8; 32];
+    rng.fill(&mut key);
+    let trampoline_packet = TrampolineOnionPacket::create(
+        key.into(),
+        vec![node.pubkey, next_node],
+        vec![hop_data, final_payload],
+        Some(payment_hash.as_ref().to_vec()),
+        SECP256K1,
+    )
+    .expect("build trampoline");
+
+    let mut current_hop = CurrentPaymentHopData {
+        amount: incoming_amount,
+        expiry: incoming_expiry,
+        payment_preimage: None,
+        hash_algorithm: HashAlgorithm::Sha256,
+        funding_tx_hash: Default::default(),
+        custom_records: None,
+    };
+    current_hop.set_trampoline_onion(trampoline_packet.into_bytes());
+
+    let command = SendOnionPacketCommand {
+        peeled_onion_packet: PeeledPaymentOnionPacket {
+            current: current_hop,
+            next: None,
+            shared_secret: [0u8; 32],
+        },
+        previous_tlc: Some(PrevTlcInfo::new(
+            channels[0],
+            prev_tlc_id,
+            build_max_fee_amount,
+        )),
+        payment_hash,
+        attempt_id: Some(1),
+    };
+
+    let (tx, rx) = oneshot::channel();
+    node.network_actor
+        .send_message(NetworkActorMessage::Command(
+            NetworkActorCommand::SendPaymentOnionPacket(command, RpcReplyPort::from(tx)),
+        ))
+        .expect("send message");
+
+    let res = rx.await.expect("receive reply");
+    let err = res.expect_err("trampoline forward must respect incoming TLC expiry");
+    assert_eq!(err.error_code(), TlcErrorCode::InvalidOnionPayload);
 }
 
 #[tokio::test]
