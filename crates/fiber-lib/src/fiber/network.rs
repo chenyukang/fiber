@@ -1213,7 +1213,10 @@ where
                 }
             }
             FiberMessage::ChannelNormalOperation(msg) => {
-                state.check_feature_compatibility(&peer_pubkey)?;
+                // Channel normal messages may carry in-flight TLC resolutions for an already
+                // established channel. Route them to the channel actor even if node features were
+                // updated after the channel was opened, so message-specific failure handling can
+                // settle upstream state instead of leaving payments stuck.
                 let channel_id = msg.get_channel_id();
                 let mut found = state
                     .peer_channel_index
