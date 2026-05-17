@@ -50,6 +50,40 @@ const MAX_TRAMPOLINE_HOPS_LIMIT: u16 = 5;
 const DEFAULT_MAX_FEE_RATE: u64 = 5;
 const MAX_FEE_RATE_DENOMINATOR: u128 = 1000;
 
+fn check_trampoline_outgoing_tlc_expiry(
+    session: &mut PaymentSession,
+    hops: &[PaymentHopData],
+) -> Result<(), Error> {
+    let Some(max_expiry) = session
+        .request
+        .trampoline_context
+        .as_ref()
+        .and_then(|context| context.max_outgoing_tlc_expiry)
+    else {
+        return Ok(());
+    };
+
+    let Some(first_hop) = hops.first() else {
+        session.last_error_code = Some(TlcErrorCode::IncorrectTlcExpiry);
+        return Err(Error::SendPaymentError(
+            "Trampoline forwarding requires at least one outgoing hop".to_string(),
+        ));
+    };
+
+    if first_hop.expiry > max_expiry {
+        session.last_error_code = Some(TlcErrorCode::IncorrectTlcExpiry);
+        error!(
+            "trampoline outgoing tlc expiry {} exceeds upstream budget {}",
+            first_hop.expiry, max_expiry
+        );
+        return Err(Error::SendPaymentError(
+            "Trampoline outgoing TLC expiry exceeds upstream expiry budget".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SendPaymentDataBuilder {
     target_pubkey: Option<Pubkey>,
@@ -1155,6 +1189,7 @@ where
                     Error::BuildPaymentRouteError(format!("Failed to build route, {}", e))
                 })?;
 
+            check_trampoline_outgoing_tlc_expiry(session, &hops)?;
             attempt.update_route(hops);
         }
 
@@ -1253,6 +1288,8 @@ where
                         self.apply_trampoline_forwarding_fee(session, source, &hops, &mut max_fee)
                             .await?;
                     }
+
+                    check_trampoline_outgoing_tlc_expiry(session, &hops)?;
 
                     let new_attempt_id = if session.is_dry_run() {
                         0
@@ -1394,6 +1431,8 @@ where
         session: &mut PaymentSession,
         attempt: &mut Attempt,
     ) -> Result<(), Error> {
+        check_trampoline_outgoing_tlc_expiry(session, &attempt.route_hops)?;
+
         let session_key = Privkey::from_slice(KeyPair::generate_random_key().as_ref());
         assert_ne!(attempt.route_hops[0].funding_tx_hash, Hash256::default());
 
