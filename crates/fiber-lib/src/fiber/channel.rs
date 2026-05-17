@@ -1524,7 +1524,7 @@ where
 
         if let Some(TrampolineHopPayload::Final {
             final_amount,
-            final_tlc_expiry_delta: _,
+            final_tlc_expiry_delta,
             payment_preimage,
             custom_records,
         }) = last_hop_inner_onion
@@ -1535,6 +1535,13 @@ where
                     payment_hash, forward_amount, final_amount, add_tlc.amount
                 );
                 return Err(ProcessingChannelError::FinalIncorrectHTLCAmount);
+            }
+
+            let required_final_expiry = now_timestamp_as_millis_u64()
+                .checked_add(final_tlc_expiry_delta.max(MIN_TLC_EXPIRY_DELTA))
+                .ok_or(ProcessingChannelError::IncorrectFinalTlcExpiry)?;
+            if add_tlc.expiry < peeled_payment_expiry || add_tlc.expiry < required_final_expiry {
+                return Err(ProcessingChannelError::IncorrectFinalTlcExpiry);
             }
 
             final_payment_preimage = payment_preimage;
