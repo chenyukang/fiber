@@ -8,6 +8,7 @@ use crate::fiber::channel::{
     MIN_COMMITMENT_DELAY_EPOCHS, SYS_MAX_TLC_NUMBER_IN_FLIGHT,
 };
 use crate::fiber::config::{MAX_PAYMENT_TLC_EXPIRY_LIMIT, MIN_TLC_EXPIRY_DELTA};
+use crate::utils::arithmetic::checked_mul_u128;
 use ckb_types::core::{EpochNumberWithFraction, TransactionBuilder};
 use ckb_types::packed::{Bytes, CellDep, Script};
 use ckb_types::prelude::{Builder, PackVec};
@@ -122,7 +123,18 @@ fn checked_fee_from_rate(
     tx_size: u64,
     tx_kind: &str,
 ) -> Result<u64, ProcessingChannelError> {
-    let fee = u128::from(fee_rate.as_u64()) * u128::from(tx_size) / FEE_RATE_WEIGHT_SCALE;
+    let fee_numerator = checked_mul_u128(
+        u128::from(fee_rate.as_u64()),
+        u128::from(tx_size),
+        &format!("{} fee calculation", tx_kind),
+    )?;
+    let fee = fee_numerator
+        .checked_div(FEE_RATE_WEIGHT_SCALE)
+        .ok_or_else(|| {
+            ProcessingChannelError::InvalidParameter(
+                "Fee rate weight scale must not be 0".to_string(),
+            )
+        })?;
     u64::try_from(fee).map_err(|_| {
         ProcessingChannelError::InvalidParameter(format!(
             "{} fee rate {} overflows {} fee calculation for transaction size {}",
