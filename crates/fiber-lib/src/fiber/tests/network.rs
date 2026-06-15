@@ -8,7 +8,7 @@ use crate::{
         tests::test_utils::{
             set_next_block_timestamp, MockChainActorMiddleware, MockChainActorState,
         },
-        CkbChainMessage, CkbTxTracingResult,
+        CkbChainMessage, CkbTxTracingResult, GetShutdownTxResponse,
     },
     fiber::{
         config::DEFAULT_AUTO_ACCEPT_CHANNEL_CKB_FUNDING_AMOUNT,
@@ -38,11 +38,12 @@ use crate::{
 use anyhow::anyhow;
 use ckb_hash::blake2b_256;
 use ckb_types::{
-    core::{tx_pool::TxStatus, EpochNumberWithFraction, TransactionView},
+    core::{tx_pool::TxStatus, EpochNumberWithFraction, TransactionBuilder, TransactionView},
     packed::{CellOutput, OutPoint, ScriptBuilder},
     prelude::{Builder, Entity, Pack},
+    H256,
 };
-use fiber_types::{ChannelFlags, ShutdownInfo};
+use fiber_types::{ChannelFlags, ChannelState, ShutdownInfo};
 use musig2::{PartialSignature, SecNonce};
 use ractor::{call, ActorProcessingErr, ActorRef};
 use std::{borrow::Cow, str::FromStr, time::Duration};
@@ -87,6 +88,44 @@ async fn list_connected_peers(node: &NetworkNode) -> Vec<crate::fiber::network::
     })
     .expect("node alive")
     .expect("list peers")
+}
+
+#[tokio::test]
+async fn test_remote_force_shutdown_ignores_short_output_lock_args() {
+    init_tracing();
+
+    let (node_a, _node_b, channel_id, _) =
+        NetworkNode::new_2_nodes_with_established_channel(HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT, true)
+            .await;
+
+    let short_lock = ScriptBuilder::default().args(vec![0_u8; 19].pack()).build();
+    let shutdown_tx = TransactionBuilder::default()
+        .output(CellOutput::new_builder().lock(short_lock).build())
+        .output_data(ckb_types::packed::Bytes::default())
+        .build();
+
+    node_a
+        .network_actor
+        .send_message(NetworkActorMessage::Command(
+            NetworkActorCommand::RemoteForceShutdownChannel(
+                channel_id,
+                Some(GetShutdownTxResponse {
+                    transaction: Some(shutdown_tx),
+                    tx_status: TxStatus::Committed(0, H256::default(), 0),
+                }),
+            ),
+        ))
+        .expect("node_a alive");
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let _ = list_connected_peers(&node_a).await;
+
+    let state = node_a.get_channel_actor_state(channel_id);
+    assert!(
+        matches!(state.state, ChannelState::ChannelReady),
+        "short output lock args should be ignored without force-closing channel, got {:?}",
+        state.state
+    );
 }
 
 fn create_fake_channel_announcement_message(

@@ -3175,7 +3175,15 @@ where
                     // Check if channel is force closed by counter party
                     let lock_args =
                         &blake2b_256(state.get_commitment_lock_script_xonly(true))[0..20];
-                    if &output.lock().args().raw_data()[0..20] == lock_args {
+                    let output_lock_args = output.lock().args().raw_data();
+                    if output_lock_args.len() < lock_args.len() {
+                        warn!(
+                            "skip remote force shutdown check for channel {channel_id:?}: output lock args too short: {:?}",
+                            output_lock_args
+                        );
+                        return;
+                    }
+                    if &output_lock_args[0..lock_args.len()] == lock_args {
                         let channel_id = state.get_id();
                         let pubkey = state.get_remote_pubkey();
                         let tx_hash = tx.hash();
