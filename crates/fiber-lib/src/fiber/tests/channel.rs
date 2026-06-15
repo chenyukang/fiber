@@ -3544,6 +3544,22 @@ async fn test_restart_restores_shutting_down_channel_actor_for_reestablish() {
         update_result.is_ok(),
         "restored shutting-down channel actor should accept control commands"
     );
+
+    node_b.start().await;
+    node_a.connect_to(&mut node_b).await;
+    wait_until(|| !node_a.get_channel_actor_state(channel_id).reestablishing).await;
+
+    let state = node_a.get_channel_actor_state(channel_id);
+    assert_eq!(
+        state.connectivity_state,
+        ChannelConnectivityState::Online,
+        "reestablished shutting-down channel should be restored as online"
+    );
+    assert!(
+        matches!(state.state, ChannelState::ShuttingDown(_)),
+        "shutting-down channel should stay in shutdown state after reestablish, got {:?}",
+        state.state
+    );
 }
 
 #[cfg(feature = "watchtower")]

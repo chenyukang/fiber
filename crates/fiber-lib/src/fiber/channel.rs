@@ -8645,6 +8645,13 @@ impl ChannelActorState {
                         .expect(ASSUME_NETWORK_ACTOR_ALIVE);
                 }
                 self.step_shutting_down(flags).await?;
+                self.clear_waiting_peer_response();
+                self.pending_reestablish_channel_ready = false;
+                self.reestablishing = false;
+                self.connectivity_state = ChannelConnectivityState::Online;
+                self.notify_channel_connectivity(ChannelConnectivityState::Online);
+                self.on_owned_channel_updated(myself, false);
+                debug_event!(network, "Reestablished channel in ShuttingDown");
             }
             ChannelState::Closed(_) => {
                 myself.stop(Some("ChannelClosed".to_string()));
