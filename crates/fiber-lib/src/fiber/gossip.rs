@@ -3122,7 +3122,6 @@ fn reserve_or_delay_outbound_message(
             "delayed outbound gossip queue is full for peer"
         )));
     }
-
     if delayed_outbound_messages.exceeds_peer_byte_capacity(
         pubkey,
         bytes,
@@ -3856,6 +3855,7 @@ where
             }
             GossipActorMessage::PeerDisconnected(pubkey, _session) => {
                 state.peer_states.remove(&pubkey);
+                state.policy.remove_outbound_peer(&pubkey);
                 state.drop_delayed_outbound_messages_for_peer(
                     &pubkey,
                     now_timestamp_as_millis_u64(),

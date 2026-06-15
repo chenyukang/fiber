@@ -345,6 +345,35 @@ fn test_gossip_policy_state_reserves_outbound_delay_from_current_tokens() {
 }
 
 #[test]
+fn test_gossip_policy_estimate_does_not_grow_peer_outbound_state() {
+    let mut state = GossipPolicyState::new(GossipPolicyConfig {
+        ban: GossipBanConfig::default(),
+        outbound_global: ByteRateLimitConfig {
+            rate_bytes_per_sec: 1_000,
+            burst_bytes: 1_000,
+        },
+        outbound_peer: ByteRateLimitConfig {
+            rate_bytes_per_sec: 50,
+            burst_bytes: 50,
+        },
+        outbound_delay_queue_capacity: 16,
+        inbound_channel_update: ChannelUpdateRateLimitConfig {
+            interval_ms: 60_000,
+            burst: 10,
+        },
+    });
+    let peer = gen_rand_fiber_public_key();
+
+    assert_eq!(state.estimate_outbound_message_delay(&peer, 20, 0), 0);
+    assert!(state.peer_outbound.is_empty());
+
+    assert_eq!(state.reserve_outbound_message(&peer, 20, 0), 0);
+    assert_eq!(state.peer_outbound.len(), 1);
+    state.remove_outbound_peer(&peer);
+    assert!(state.peer_outbound.is_empty());
+}
+
+#[test]
 fn test_channel_update_limiter_isolated_per_peer_for_same_channel_side() {
     let outpoint = gen_rand_channel_outpoint();
     let peer1 = gen_rand_fiber_public_key();

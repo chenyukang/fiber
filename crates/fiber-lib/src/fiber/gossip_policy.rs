@@ -672,8 +672,15 @@ impl GossipPolicyState {
         bytes: u64,
         now_ms: u64,
     ) -> u64 {
-        let mut cloned = self.clone();
-        cloned.reserve_outbound_message(peer, bytes, now_ms)
+        let mut global_bucket = self.global_outbound.clone();
+        let global_delay_ms = global_bucket.reserve(bytes, now_ms);
+        let mut peer_bucket = self
+            .peer_outbound
+            .get(peer)
+            .cloned()
+            .unwrap_or_else(|| ByteTokenBucket::new(self.peer_outbound_config.clone()));
+        let peer_delay_ms = peer_bucket.reserve(bytes, now_ms);
+        global_delay_ms.max(peer_delay_ms)
     }
 
     pub(crate) fn reserve_outbound_message(
@@ -701,6 +708,10 @@ impl GossipPolicyState {
             .entry(*peer)
             .or_insert_with(|| ByteTokenBucket::new(self.peer_outbound_config.clone()))
             .refund(bytes, now_ms);
+    }
+
+    pub(crate) fn remove_outbound_peer(&mut self, peer: &Pubkey) {
+        self.peer_outbound.remove(peer);
     }
 
     pub(crate) fn should_bypass_oversized_outbound_message(
