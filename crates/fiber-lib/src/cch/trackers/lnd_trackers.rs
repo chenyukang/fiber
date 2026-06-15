@@ -396,7 +396,7 @@ impl PaymentTracker {
     async fn on_payment(&self, payment: lnrpc::Payment) -> Result<()> {
         let payment_hash = payment.payment_hash.clone();
         let status = payment.status();
-        let has_payment_preimage = !is_payment_preimage_empty(&payment.payment_preimage);
+        let has_payment_preimage = has_lnd_payment_preimage(&payment);
         tracing::debug!(
             "payment changed payment_hash={} status={:?} has_payment_preimage={}",
             payment_hash,
@@ -484,14 +484,21 @@ impl InvoiceTracker {
     }
 }
 
-/// LND represents missing payment preimage using all zeros hash.
-fn is_payment_preimage_empty(payment_preimage: &str) -> bool {
-    // check payment_preimage is all zeros
-    payment_preimage.is_empty() || payment_preimage.chars().all(|c| c == '0')
+pub fn has_lnd_payment_preimage(payment: &lnrpc::Payment) -> bool {
+    !is_payment_preimage_empty(&payment.payment_preimage, payment.status())
+}
+
+fn is_payment_preimage_empty(
+    payment_preimage: &str,
+    status: lnrpc::payment::PaymentStatus,
+) -> bool {
+    payment_preimage.is_empty()
+        || (status != lnrpc::payment::PaymentStatus::Succeeded
+            && payment_preimage.chars().all(|c| c == '0'))
 }
 
 pub fn map_lnd_payment_changed_event(payment: lnrpc::Payment) -> Result<CchTrackingEvent> {
-    let payment_preimage = if !is_payment_preimage_empty(&payment.payment_preimage) {
+    let payment_preimage = if has_lnd_payment_preimage(&payment) {
         Some(Hash256::from_str(&payment.payment_preimage)?)
     } else {
         None

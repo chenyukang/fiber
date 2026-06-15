@@ -3,6 +3,6 @@ pub use event::{CchTrackingEvent, RedactedCchTrackingEvent};
 
 mod lnd_trackers;
 pub use lnd_trackers::{
-    map_lnd_payment_changed_event, LndConnectionInfo, LndTrackerActor, LndTrackerArgs,
-    LndTrackerMessage,
+    has_lnd_payment_preimage, map_lnd_payment_changed_event, LndConnectionInfo, LndTrackerActor,
+    LndTrackerArgs, LndTrackerMessage,
 };

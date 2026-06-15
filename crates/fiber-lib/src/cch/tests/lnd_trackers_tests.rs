@@ -1,7 +1,12 @@
 use std::sync::Arc;
 
-use crate::cch::trackers::{LndConnectionInfo, LndTrackerActor, LndTrackerArgs, LndTrackerMessage};
+use crate::cch::trackers::{
+    map_lnd_payment_changed_event, CchTrackingEvent, LndConnectionInfo, LndTrackerActor,
+    LndTrackerArgs, LndTrackerMessage,
+};
+use fiber_types::payment::PaymentStatus as FiberPaymentStatus;
 use fiber_types::Hash256;
+use lnd_grpc_tonic_client::lnrpc;
 use ractor::{concurrency::Duration as RactorDuration, Actor, ActorRef, OutputPort};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -30,6 +35,65 @@ fn test_payment_hash(value: u8) -> Hash256 {
     let mut bytes = [0u8; 32];
     bytes[0] = value;
     Hash256::from(bytes)
+}
+
+fn test_lnd_payment(
+    payment_hash: Hash256,
+    payment_preimage: String,
+    status: lnrpc::payment::PaymentStatus,
+) -> lnrpc::Payment {
+    lnrpc::Payment {
+        payment_hash: hex::encode(payment_hash.as_ref()),
+        payment_preimage,
+        status: status as i32,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_lnd_payment_mapper_accepts_successful_zero_preimage() {
+    let payment_hash = test_payment_hash(42);
+    let payment = test_lnd_payment(
+        payment_hash,
+        "0".repeat(64),
+        lnrpc::payment::PaymentStatus::Succeeded,
+    );
+
+    let event = map_lnd_payment_changed_event(payment).expect("valid payment event");
+    let CchTrackingEvent::PaymentChanged {
+        payment_hash: event_hash,
+        status,
+        payment_preimage,
+        ..
+    } = event
+    else {
+        panic!("expected payment changed event");
+    };
+    assert_eq!(event_hash, payment_hash);
+    assert_eq!(status, FiberPaymentStatus::Success);
+    assert_eq!(payment_preimage, Some(Hash256::from([0u8; 32])));
+}
+
+#[test]
+fn test_lnd_payment_mapper_keeps_zero_placeholder_empty_before_success() {
+    let payment_hash = test_payment_hash(43);
+    let payment = test_lnd_payment(
+        payment_hash,
+        "0".repeat(64),
+        lnrpc::payment::PaymentStatus::InFlight,
+    );
+
+    let event = map_lnd_payment_changed_event(payment).expect("valid payment event");
+    let CchTrackingEvent::PaymentChanged {
+        status,
+        payment_preimage,
+        ..
+    } = event
+    else {
+        panic!("expected payment changed event");
+    };
+    assert_eq!(status, FiberPaymentStatus::Inflight);
+    assert_eq!(payment_preimage, None);
 }
 
 // Helper function to create a test `LndTrackerActor` (without spawning trackers)

@@ -11,7 +11,10 @@ use crate::cch::{
         ActionExecutor,
     },
     actor::CchState,
-    trackers::{map_lnd_payment_changed_event, CchTrackingEvent, LndConnectionInfo},
+    trackers::{
+        has_lnd_payment_preimage, map_lnd_payment_changed_event, CchTrackingEvent,
+        LndConnectionInfo,
+    },
     CchFiberAgentRef, CchMessage, CchOrderStore, OutgoingFeeLimit,
 };
 use crate::fiber::config::MAX_PAYMENT_TLC_EXPIRY_LIMIT;
@@ -139,8 +142,7 @@ impl ActionExecutor for SendLightningOutgoingPaymentExecutor {
         let payment_result_opt = stream.next().await;
         match &payment_result_opt {
             Some(Ok(payment)) => {
-                let has_payment_preimage = !payment.payment_preimage.is_empty()
-                    && !payment.payment_preimage.chars().all(|c| c == '0');
+                let has_payment_preimage = has_lnd_payment_preimage(payment);
                 tracing::debug!(
                     "SendLightningOutgoingPaymentExecutor response payment_hash={} status={:?} has_payment_preimage={}",
                     payment.payment_hash,
