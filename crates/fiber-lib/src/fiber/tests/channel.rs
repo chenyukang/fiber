@@ -3375,6 +3375,81 @@ async fn test_check_active_channel_event_does_not_remove_expired_received_tlc() 
 }
 
 #[tokio::test]
+async fn test_maintain_channel_tlcs_keeps_forwarding_waiting_received_tlc() {
+    init_tracing();
+
+    let (node_a, node_b, channel_id) =
+        create_nodes_with_established_channel(HUGE_CKB_AMOUNT, HUGE_CKB_AMOUNT, false).await;
+
+    let payment_hash = gen_rand_sha256_hash();
+    let expiry = now_timestamp_as_millis_u64() + DEFAULT_TLC_EXPIRY_DELTA;
+    let add_tlc_result = call!(node_a.network_actor, |rpc_reply| {
+        NetworkActorMessage::Command(NetworkActorCommand::ControlFiberChannel(
+            ChannelCommandWithId {
+                channel_id,
+                command: ChannelCommand::AddTlc(
+                    create_mock_pending_add_tlc_command(
+                        &node_a,
+                        &node_b,
+                        1000,
+                        HashAlgorithm::CkbHash,
+                        payment_hash,
+                        expiry,
+                    ),
+                    rpc_reply,
+                ),
+            },
+        ))
+    })
+    .expect("node_a alive")
+    .expect("successfully added tlc");
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let received_tlc_id = TLCId::Received(add_tlc_result.tlc_id);
+    let mut node_b_channel_state = node_b.get_channel_actor_state(channel_id);
+    let received_tlc = node_b_channel_state
+        .tlc_state
+        .get_mut(&received_tlc_id)
+        .expect("received tlc exists");
+    received_tlc.expiry = now_timestamp_as_millis_u64().saturating_sub(1);
+    node_b_channel_state
+        .waiting_forward_tlc_tasks
+        .insert(received_tlc_id, [42; 32]);
+    node_b
+        .update_channel_actor_state(
+            node_b_channel_state,
+            Some(ReloadParams {
+                notify_changes: false,
+            }),
+        )
+        .await;
+
+    notify_maintain_channel_tlcs(&node_b, channel_id);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let node_a_channel_state = node_a.get_channel_actor_state(channel_id);
+    let tlc = node_a_channel_state
+        .tlc_state
+        .get(&TLCId::Offered(add_tlc_result.tlc_id))
+        .expect("offered tlc exists");
+    assert_eq!(
+        tlc.status,
+        TlcStatus::Outbound(OutboundTlcStatus::Committed)
+    );
+
+    let node_b_channel_state = node_b.get_channel_actor_state(channel_id);
+    let tlc = node_b_channel_state
+        .tlc_state
+        .get(&received_tlc_id)
+        .expect("received tlc exists");
+    assert!(tlc.removed_reason.is_none());
+    assert!(node_b_channel_state
+        .waiting_forward_tlc_tasks
+        .contains_key(&received_tlc_id));
+}
+
+#[tokio::test]
 async fn test_check_channels_does_not_fallback_when_channel_actor_missing() {
     init_tracing();
 

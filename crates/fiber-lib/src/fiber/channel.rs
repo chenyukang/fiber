@@ -2607,17 +2607,19 @@ where
         state: &mut ChannelActorState,
         result: ForwardTlcResult,
     ) {
+        let received_tlc_id = TLCId::Received(result.tlc_id);
         let Some(shared_secret) = state
             .waiting_forward_tlc_tasks
-            .remove(&TLCId::Received(result.tlc_id))
+            .get(&received_tlc_id)
+            .copied()
         else {
             return;
         };
 
         match result.add_tlc_result {
-            Ok((channel_id, tlc_id)) => {
-                if let Some(tlc) = state.tlc_state.get_mut(&TLCId::Received(result.tlc_id)) {
-                    tlc.forwarding_tlc = Some((channel_id, tlc_id));
+            Ok((channel_id, forwarded_tlc_id)) => {
+                if let Some(tlc) = state.tlc_state.get_mut(&received_tlc_id) {
+                    tlc.forwarding_tlc = Some((channel_id, forwarded_tlc_id));
                 } else {
                     // This case should be unreachable because we have fixed the race condition where
                     // intermediate nodes could settle the TLC locally.
@@ -2627,12 +2629,14 @@ where
                     );
                     debug_assert!(false, "TLC removed while waiting for forwarding result");
                 }
+                state.waiting_forward_tlc_tasks.remove(&received_tlc_id);
             }
             Err((ProcessingChannelError::WaitingTlcAck, _)) => {
-                // peer already buffered the tlc, we already removed the forward tlc record
-                // and just ignore the error here
+                // The downstream channel buffered the add and will retry later. Keep the waiting
+                // marker so local TLC maintenance does not treat this as a final-hop TLC.
             }
             Err((_, tlc_err)) => {
+                state.waiting_forward_tlc_tasks.remove(&received_tlc_id);
                 let error = ProcessingChannelError::TlcForwardingError(tlc_err)
                     .with_shared_secret(shared_secret);
                 self.process_add_tlc_error(
@@ -2987,7 +2991,11 @@ where
         let expired_tlcs: Vec<_> = state
             .tlc_state
             .get_committed_received_tlcs()
-            .filter(|tlc| tlc.forwarding_tlc.is_none() && tlc.expiry < expect_expiry)
+            .filter(|tlc| {
+                tlc.forwarding_tlc.is_none()
+                    && !state.is_waiting_forward_result_for_received_tlc(tlc.tlc_id)
+                    && tlc.expiry < expect_expiry
+            })
             .collect();
         for tlc in expired_tlcs {
             info!(
