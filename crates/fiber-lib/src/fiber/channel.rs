@@ -3440,12 +3440,9 @@ where
                     self.notify_network_actor_shutdown_me(state);
                 } else if state.reestablishing
                     && !state.is_closed()
-                    && state
-                        .reestablish_started_at
-                        .map_or(false, |started| {
-                            now_timestamp_as_millis_u64().saturating_sub(started)
-                                > REESTABLISH_TIMEOUT
-                        })
+                    && state.reestablish_started_at.map_or(false, |started| {
+                        now_timestamp_as_millis_u64().saturating_sub(started) > REESTABLISH_TIMEOUT
+                    })
                 {
                     error!(
                         "Channel {} from peer {:?} has been reestablishing too long, shutting down it forcefully",

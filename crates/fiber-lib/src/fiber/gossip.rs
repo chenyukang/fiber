@@ -3823,13 +3823,34 @@ where
             }
             GossipActorMessage::TryBroadcastMessages(messages) => {
                 trace!("Trying to broadcast message: {:?}", &messages);
-                state
-                    .store
-                    .actor
-                    .send_message(ExtendedGossipMessageStoreMessage::SaveAndBroadcastMessages(
-                        messages,
-                    ))
-                    .expect("store actor alive");
+                let validated_messages: Vec<BroadcastMessageWithTimestamp> = messages
+                    .into_iter()
+                    .filter(|msg| match msg {
+                        BroadcastMessageWithTimestamp::ChannelUpdate(channel_update) => {
+                            match verify_channel_update(channel_update, state.store.get_store())
+                            {
+                                Ok(_) => true,
+                                Err(e) => {
+                                    debug!(
+                                        "Rejected unverified ChannelUpdate from TryBroadcastMessages: {:?}",
+                                        e
+                                    );
+                                    false
+                                }
+                            }
+                        }
+                        _ => true,
+                    })
+                    .collect();
+                if !validated_messages.is_empty() {
+                    state
+                        .store
+                        .actor
+                        .send_message(ExtendedGossipMessageStoreMessage::SaveAndBroadcastMessages(
+                            validated_messages,
+                        ))
+                        .expect("store actor alive");
+                }
             }
             GossipActorMessage::UpdatePeerFilter(pubkey, cursor) => {
                 self.update_peer_filter(state, &pubkey, &cursor, myself)
