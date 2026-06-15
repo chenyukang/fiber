@@ -3846,11 +3846,9 @@ where
                     state
                         .store
                         .actor
-                        .send_message(
-                            ExtendedGossipMessageStoreMessage::SaveAndBroadcastMessages(
-                                validated_messages,
-                            ),
-                        )
+                        .send_message(ExtendedGossipMessageStoreMessage::SaveAndBroadcastMessages(
+                            validated_messages,
+                        ))
                         .expect("store actor alive");
                 }
             }
