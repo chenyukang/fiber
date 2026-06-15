@@ -1615,6 +1615,7 @@ pub struct ExtendedGossipMessageStoreState<S, C> {
     store: S,
     gossip_actor: ActorRef<GossipActorMessage>,
     channel_update_limiter: ChannelUpdateLimiter,
+    channel_announcement_limiter: ChannelUpdateLimiter,
     latest_remote_broadcast_timestamp: Arc<AtomicU64>,
     chain_actor: ActorRef<CkbChainMessage>,
     chain_client: C,
@@ -1641,6 +1642,7 @@ impl<S: GossipMessageStore, C: CkbChainClient> ExtendedGossipMessageStoreState<S
             store,
             gossip_actor,
             channel_update_limiter: inbound_channel_update.build_limiter(),
+            channel_announcement_limiter: inbound_channel_update.build_limiter(),
             latest_remote_broadcast_timestamp,
             chain_actor,
             chain_client,
@@ -2288,22 +2290,36 @@ impl<S: GossipMessageStore, C: CkbChainClient> ExtendedGossipMessageStoreState<S
             return true;
         }
 
-        let BroadcastMessage::ChannelUpdate(channel_update) = message else {
-            return true;
+        let (limiter, key, message_kind) = match message {
+            BroadcastMessage::ChannelAnnouncement(channel_announcement) => (
+                &mut self.channel_announcement_limiter,
+                ChannelUpdateLimiterKey::new(
+                    *peer,
+                    channel_announcement.channel_outpoint.clone(),
+                    false,
+                ),
+                "channel announcement",
+            ),
+            BroadcastMessage::ChannelUpdate(channel_update) => (
+                &mut self.channel_update_limiter,
+                ChannelUpdateLimiterKey::new(
+                    *peer,
+                    channel_update.channel_outpoint.clone(),
+                    channel_update.is_update_of_node_1(),
+                ),
+                "channel update",
+            ),
+            BroadcastMessage::NodeAnnouncement(_) => return true,
         };
 
-        let key = ChannelUpdateLimiterKey::new(
-            *peer,
-            channel_update.channel_outpoint.clone(),
-            channel_update.is_update_of_node_1(),
-        );
-        let allowed = self.channel_update_limiter.try_acquire(&key, now_ms);
+        let allowed = limiter.try_acquire(&key, now_ms);
         if !allowed {
             debug!(
                 peer = format!("{peer:?}"),
-                outpoint = ?channel_update.channel_outpoint,
-                is_node1 = channel_update.is_update_of_node_1(),
-                "Dropping remote channel update due to gossip rate limiter"
+                outpoint = ?key.channel_outpoint,
+                is_node1 = key.is_node1,
+                message_kind,
+                "Dropping remote gossip message due to rate limiter"
             );
         }
         allowed
@@ -4238,7 +4254,42 @@ impl ServiceProtocol for GossipProtocolHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{fiber::types::ChannelUpdateChannelFlags, ChannelTestContext};
+    use std::sync::Arc;
+
+    use crate::{
+        ckb::tests::test_utils::{MockChainActor, MockChainState, MockCkbChainClient},
+        create_invalid_ecdsa_signature,
+        fiber::types::ChannelUpdateChannelFlags,
+        store::open_store,
+        test_utils::TempDir,
+        ChannelTestContext,
+    };
+
+    struct NoopGossipActor;
+
+    #[async_trait::async_trait]
+    impl Actor for NoopGossipActor {
+        type Msg = GossipActorMessage;
+        type State = ();
+        type Arguments = ();
+
+        async fn pre_start(
+            &self,
+            _myself: ActorRef<Self::Msg>,
+            _args: Self::Arguments,
+        ) -> Result<Self::State, ActorProcessingErr> {
+            Ok(())
+        }
+
+        async fn handle(
+            &self,
+            _myself: ActorRef<Self::Msg>,
+            _message: Self::Msg,
+            _state: &mut Self::State,
+        ) -> Result<(), ActorProcessingErr> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_broadcast_result_len_validation_enforces_request_and_protocol_limit() {
@@ -4276,6 +4327,44 @@ mod tests {
             },
             2,
         ));
+    }
+
+    #[tokio::test]
+    async fn test_channel_announcement_limiter_blocks_repeated_outpoint_variants() {
+        let dir = TempDir::new("test-channel-announcement-limiter");
+        let store = open_store(dir).expect("created store failed");
+        let shared_state = Arc::new(std::sync::RwLock::new(MockChainState::new()));
+        let chain_actor = Actor::spawn(None, MockChainActor::new(), (None, shared_state.clone()))
+            .await
+            .expect("start mock chain actor")
+            .0;
+        let gossip_actor = Actor::spawn(None, NoopGossipActor, ())
+            .await
+            .expect("start no-op gossip actor")
+            .0;
+        let mut state = ExtendedGossipMessageStoreState::new(
+            false,
+            ChannelUpdateRateLimitConfig {
+                interval_ms: 60_000,
+                burst: 1,
+            },
+            store,
+            gossip_actor,
+            Arc::new(AtomicU64::new(0)),
+            chain_actor,
+            MockCkbChainClient::new(shared_state),
+        );
+        let peer = crate::gen_rand_fiber_public_key();
+        let channel_context = ChannelTestContext::gen().await;
+        let first =
+            BroadcastMessage::ChannelAnnouncement(channel_context.channel_announcement.clone());
+        let mut second_announcement = channel_context.channel_announcement.clone();
+        second_announcement.node1_signature = Some(create_invalid_ecdsa_signature());
+        let second = BroadcastMessage::ChannelAnnouncement(second_announcement);
+
+        assert!(state.allow_inbound_remote_broadcast_message(&peer, &first, 0));
+        assert!(!state.allow_inbound_remote_broadcast_message(&peer, &second, 0));
+        assert!(state.allow_inbound_remote_broadcast_message(&peer, &second, 60_000));
     }
 
     #[tokio::test]
