@@ -8,7 +8,6 @@ use fnn::ckb::contracts::TypeIDResolver;
 #[cfg(debug_assertions)]
 use fnn::ckb::contracts::{get_cell_deps, Contract};
 use fnn::ckb::{contracts::try_init_contracts_context, CkbChainActor};
-use fnn::event_handler::forward_event_to_client;
 use fnn::fiber::{graph::NetworkGraph, network::init_chain_hash, network::NetworkActorMessage};
 use fnn::rpc::server::start_rpc;
 use fnn::store::open_store_with_migration;
@@ -21,8 +20,6 @@ use fnn::watchtower::{
 };
 use fnn::ExitMessage;
 use fnn::{start_network, CchActor, Config, NetworkServiceEvent};
-use jsonrpsee::http_client::HttpClientBuilder;
-use jsonrpsee::ws_client::{HeaderMap, HeaderValue};
 use ractor::{port::OutputPortSubscriberTrait as _, Actor, ActorRef, OutputPort};
 #[cfg(debug_assertions)]
 use std::collections::HashMap;
@@ -230,42 +227,19 @@ async fn run_node(
             )
             .await;
 
-            if fiber_config.standalone_watchtower_rpc_url.is_none()
-                && fiber_config.disable_built_in_watchtower.unwrap_or_default()
-            {
+            if fiber_config.standalone_watchtower_rpc_url.is_some() {
                 return ExitMessage::err(
-                    "fiber config requires standalone watchtower rpc url or built-in watchtower to be enabled"
+                    "standalone watchtower RPC is disabled because the current watchtower protocol would export channel settlement private keys; remove fiber.standalone_watchtower_rpc_url and use the built-in watchtower until non-custodial standalone watchtower support is available"
                         .to_string(),
                 );
             }
 
-            let watchtower_client = if let Some(url) =
-                fiber_config.standalone_watchtower_rpc_url.clone()
-            {
-                let mut client_builder = HttpClientBuilder::default();
-
-                if let Some(token) = fiber_config.standalone_watchtower_token.as_ref() {
-                    let mut headers = HeaderMap::new();
-                    headers.insert(
-                        "Authorization",
-                        HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|err| {
-                            ExitMessage(format!("failed to create watchtower rpc client: {err:?}"))
-                        })?,
-                    );
-                    client_builder = client_builder.set_headers(headers);
-                } else {
-                    tracing::debug!(
-                        "create watchtower rpc client without standalone_watchtower_token"
-                    );
-                }
-
-                let watchtower_client = client_builder.build(url).map_err(|err| {
-                    ExitMessage(format!("failed to create watchtower rpc client: {}", err))
-                })?;
-                Some(watchtower_client)
-            } else {
-                None
-            };
+            if fiber_config.disable_built_in_watchtower.unwrap_or_default() {
+                return ExitMessage::err(
+                    "fiber config requires the built-in watchtower to be enabled; standalone watchtower RPC is disabled because it would export channel settlement private keys"
+                        .to_string(),
+                );
+            }
 
             let watchtower_actor = if fiber_config.disable_built_in_watchtower.unwrap_or_default() {
                 None
@@ -335,17 +309,6 @@ async fn run_node(
                                                     error!("Failed to get cell deps for commitment tx: {}", err);
                                                 }
                                             }
-                                        }
-                                    }
-                                    if let Some(watchtower_client) = watchtower_client.as_ref() {
-                                        if let Err(err) =
-                                            forward_event_to_client(event.clone(), watchtower_client)
-                                                .await
-                                        {
-                                            error!(
-                                                "Failed to forward event to standalone watchtower: {}",
-                                                err
-                                            );
                                         }
                                     }
                                     if let Some(watchtower_actor) = watchtower_actor.as_ref() {

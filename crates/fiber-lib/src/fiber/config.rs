@@ -333,21 +333,21 @@ pub struct FiberConfig {
     )]
     pub watchtower_check_interval_seconds: Option<u64>,
 
-    /// The url of the standalone watchtower rpc server. [default: None]
+    /// The url of the standalone watchtower rpc server. Disabled until non-custodial standalone watchtower support is available. [default: None]
     #[arg(
         name = "FIBER_STANDALONE_WATCHTOWER_RPC_URL",
         long = "fiber-standalone-watchtower-rpc-url",
         env,
-        help = "The url of the standalone watchtower rpc server. [default: None]"
+        help = "Disabled until non-custodial standalone watchtower support is available. [default: None]"
     )]
     pub standalone_watchtower_rpc_url: Option<String>,
 
-    /// The RPC token of the standalone watchtower. [default: None]
+    /// The RPC token of the standalone watchtower. Ignored while standalone watchtower RPC is disabled. [default: None]
     #[arg(
         name = "FIBER_STANDALONE_WATCHTOWER_TOKEN",
         long = "fiber-standalone-watchtower-token",
         env,
-        help = "The RPC token of the standalone watchtower. [default: None]"
+        help = "Ignored while standalone watchtower RPC is disabled. [default: None]"
     )]
     pub standalone_watchtower_token: Option<String>,
 
