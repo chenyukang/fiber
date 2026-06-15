@@ -5,6 +5,8 @@ on:
     tags: [ '*' ]
 env:
   CARGO_TERM_COLOR: always
+  OPENSSL_VERSION: 1.1.1s
+  OPENSSL_SHA256: c5ac01e760ee6ff0dab61d6b2bbd30146724d063eb322180c6f18a6f74e4b6aa
 permissions:
   contents: write
   packages: write
@@ -87,28 +89,30 @@ jobs:
       name: Build linux portable
       run: |
         export PWD_DIR=$(pwd)
-        curl -LO https://www.openssl.org/source/openssl-1.1.1s.tar.gz
-        tar -xzf openssl-1.1.1s.tar.gz
-        cd openssl-1.1.1s
+        curl -fsSLO "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+        echo "${OPENSSL_SHA256}  openssl-${OPENSSL_VERSION}.tar.gz" | sha256sum -c -
+        tar -xzf "openssl-${OPENSSL_VERSION}.tar.gz"
+        cd "openssl-${OPENSSL_VERSION}"
         ./Configure linux-x86_64 shared
         make
         cd ..
-        export OPENSSL_LIB_DIR=${PWD_DIR}/openssl-1.1.1s
-        export OPENSSL_INCLUDE_DIR=${PWD_DIR}/openssl-1.1.1s/include
+        export OPENSSL_LIB_DIR=${PWD_DIR}/openssl-${OPENSSL_VERSION}
+        export OPENSSL_INCLUDE_DIR=${PWD_DIR}/openssl-${OPENSSL_VERSION}/include
         export OPENSSL_STATIC=1
         cargo build --release --locked --features portable
     - if: matrix.os == 'ubuntu-22.04-arm'
       name: Build aarch64 linux portable
       run: |
         export PWD_DIR=$(pwd)
-        curl -LO https://www.openssl.org/source/openssl-1.1.1s.tar.gz
-        tar -xzf openssl-1.1.1s.tar.gz
-        cd openssl-1.1.1s
+        curl -fsSLO "https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
+        echo "${OPENSSL_SHA256}  openssl-${OPENSSL_VERSION}.tar.gz" | sha256sum -c -
+        tar -xzf "openssl-${OPENSSL_VERSION}.tar.gz"
+        cd "openssl-${OPENSSL_VERSION}"
         ./Configure linux-aarch64 shared
         make
         cd ..
-        export OPENSSL_LIB_DIR=${PWD_DIR}/openssl-1.1.1s
-        export OPENSSL_INCLUDE_DIR=${PWD_DIR}/openssl-1.1.1s/include
+        export OPENSSL_LIB_DIR=${PWD_DIR}/openssl-${OPENSSL_VERSION}
+        export OPENSSL_INCLUDE_DIR=${PWD_DIR}/openssl-${OPENSSL_VERSION}/include
         export OPENSSL_STATIC=1
         cargo build --release --locked --features portable
     - if: matrix.os == 'ubuntu-24.04'
