@@ -5426,8 +5426,9 @@ where
             }
         }
 
-        // Also fail any inbound pending channels from this peer that are still waiting for
-        // local acceptance (not yet in self.channels, no channel actor).
+        // Also remove any inbound pending channels from this peer that are still waiting for
+        // local acceptance (not yet in self.channels, no channel actor). These records were
+        // created from remote OpenChannel messages and should not become durable failed history.
         let failed_channels: Vec<Hash256> = self
             .to_be_accepted_channels
             .map

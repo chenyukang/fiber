@@ -1,6 +1,6 @@
 use crate::fiber::channel::{
-    DEFAULT_COMMITMENT_FEE_RATE, DEFAULT_FEE_RATE, MAX_TLC_NUMBER_IN_FLIGHT,
-    MIN_COMMITMENT_DELAY_EPOCHS,
+    ChannelOpenRecordStore, DEFAULT_COMMITMENT_FEE_RATE, DEFAULT_FEE_RATE,
+    MAX_TLC_NUMBER_IN_FLIGHT, MIN_COMMITMENT_DELAY_EPOCHS,
 };
 use crate::fiber::network::get_chain_hash;
 use crate::{
@@ -21,7 +21,7 @@ use crate::{
         payment::{SendPaymentCommand, SendPaymentDataExt},
         types::{
             broadcast_message_to_gossip, BroadcastMessageWithTimestamp,
-            BroadcastMessagesFilterResult, FiberMessage, GossipMessage, OpenChannel,
+            BroadcastMessagesFilterResult, FiberMessage, GossipMessage, Hash256, OpenChannel,
         },
         BroadcastMessage, ChannelAnnouncement, ChannelUpdateChannelFlags, Cursor, FeatureVector,
         NetworkActorCommand, NetworkActorEvent, NetworkActorMessage, NodeAnnouncement, Privkey,
@@ -2286,7 +2286,61 @@ async fn test_to_be_accepted_channels_number_limit() {
     .await;
 }
 
-async fn open_channel_from_peer(peer: &NetworkNode, target_pubkey: Pubkey, funding_amount: u128) {
+#[tokio::test]
+async fn test_inbound_pending_open_record_removed_on_peer_disconnect() {
+    init_tracing();
+
+    let funding_amount = 9_900_000_000u128;
+    let mut node = NetworkNode::new_with_config(
+        NetworkNodeConfigBuilder::new()
+            .fiber_config_updater(move |config| {
+                config.open_channel_auto_accept_min_ckb_funding_amount =
+                    Some(funding_amount as u64 + 1);
+            })
+            .build(),
+    )
+    .await;
+    let mut peer = NetworkNode::new().await;
+    node.connect_to(&mut peer).await;
+
+    let channel_id = open_channel_from_peer(&peer, node.pubkey, funding_amount).await;
+    node.expect_event(|event| match event {
+        NetworkServiceEvent::ChannelPendingToBeAccepted(pubkey, event_channel_id) => {
+            assert_eq!(pubkey, &peer.pubkey);
+            assert_eq!(event_channel_id, &channel_id);
+            true
+        }
+        _ => false,
+    })
+    .await;
+    assert!(node.store.get_channel_open_record(&channel_id).is_some());
+
+    let disconnect_result = call!(peer.network_actor, |rpc_reply| {
+        NetworkActorMessage::Command(NetworkActorCommand::DisconnectPeer(
+            node.pubkey,
+            PeerDisconnectReason::Requested,
+            Some(rpc_reply),
+        ))
+    })
+    .expect("peer alive");
+    assert!(
+        disconnect_result.is_ok(),
+        "manual disconnect should succeed: {:?}",
+        disconnect_result
+    );
+
+    node.expect_event(|event| {
+        matches!(event, NetworkServiceEvent::PeerDisConnected(pubkey, _) if pubkey == &peer.pubkey)
+    })
+    .await;
+    assert!(node.store.get_channel_open_record(&channel_id).is_none());
+}
+
+async fn open_channel_from_peer(
+    peer: &NetworkNode,
+    target_pubkey: Pubkey,
+    funding_amount: u128,
+) -> Hash256 {
     let message = |rpc_reply| {
         NetworkActorMessage::Command(NetworkActorCommand::OpenChannel(
             OpenChannelCommand {
@@ -2311,7 +2365,8 @@ async fn open_channel_from_peer(peer: &NetworkNode, target_pubkey: Pubkey, fundi
 
     call!(peer.network_actor, message)
         .expect("peer alive")
-        .expect("open channel");
+        .expect("open channel")
+        .channel_id
 }
 
 async fn expect_channel_created(node: &mut NetworkNode, pubkey: Pubkey) {
