@@ -33,11 +33,11 @@ pub const DEFAULT_AUTO_ACCEPT_CHANNEL_CKB_FUNDING_AMOUNT: u64 =
 /// Default minimum ckb funding amount for auto accepting an open channel request.
 pub const DEFAULT_OPEN_CHANNEL_AUTO_ACCEPT_MIN_CKB_FUNDING_AMOUNT: u64 = 100 * CKB_SHANNONS;
 
-// The default commitment delay is 1 epochs.
-pub const DEFAULT_COMMITMENT_DELAY_EPOCHS: u64 = 1;
+// The default commitment delay is 6 epochs, i.e. 24 hours on mainnet.
+pub const DEFAULT_COMMITMENT_DELAY_EPOCHS: u64 = 6;
 
-/// The expiry delta to forward a tlc, in milliseconds, default to 4 hours.
-pub const DEFAULT_TLC_EXPIRY_DELTA: u64 = 4 * 60 * 60 * 1000;
+/// The expiry delta to forward a tlc, in milliseconds, default to 1 day.
+pub const DEFAULT_TLC_EXPIRY_DELTA: u64 = 24 * 60 * 60 * 1000;
 
 /// The final hop expiry delta for a tlc, in milliseconds, default to 24 hours.
 pub const DEFAULT_FINAL_TLC_EXPIRY_DELTA: u64 = 24 * 60 * 60 * 1000; // 24 hours
@@ -50,10 +50,14 @@ pub const MILLI_SECONDS_PER_EPOCH: u64 = 4 * 60 * 60 * 1000;
 // we need to make sure 2/3 commitment_delay_epoch is greater than MIN_TLC_EXPIRY_DELTA
 pub const MILLI_SECONDS_PER_EPOCH: u64 = 2 * 1000;
 
-/// The minimal expiry delta to forward a tlc, in milliseconds, 160 minutes.
-/// expect it >= 2/3 commitment_delay_epoch, default DEFAULT_COMMITMENT_DELAY_EPOCHS is 1 epoch
-pub const MIN_TLC_EXPIRY_DELTA: u64 =
-    DEFAULT_COMMITMENT_DELAY_EPOCHS * MILLI_SECONDS_PER_EPOCH * 2 / 3;
+/// The minimal expiry delta to forward a tlc, in milliseconds. 16 hours.
+/// Expect it >= 2/3 commitment_delay_epoch; default commitment delay is 6 epochs,
+/// so 2/3 * 6 = 4 epochs, 4 * 4 hours = 16 hours.
+#[cfg(not(debug_assertions))]
+pub const MIN_TLC_EXPIRY_DELTA: u64 = 4 * MILLI_SECONDS_PER_EPOCH;
+#[cfg(debug_assertions)]
+// 5 seconds for testing environment.
+pub const MIN_TLC_EXPIRY_DELTA: u64 = 5 * 1000;
 
 /// The maximum expiry delta for a payment, in milliseconds. 2 weeks
 pub const MAX_PAYMENT_TLC_EXPIRY_LIMIT: u64 = 14 * 24 * 60 * 60 * 1000; // 2 weeks

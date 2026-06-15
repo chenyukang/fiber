@@ -8016,6 +8016,18 @@ async fn test_open_channel_with_invalid_commitment_delay() {
     .await;
 }
 
+#[test]
+fn test_default_commitment_delay_uses_safe_window() {
+    assert_eq!(DEFAULT_COMMITMENT_DELAY_EPOCHS, 6);
+
+    let default_commitment_delay_floor =
+        DEFAULT_COMMITMENT_DELAY_EPOCHS * MILLI_SECONDS_PER_EPOCH * 2 / 3;
+    assert!(
+        DEFAULT_TLC_EXPIRY_DELTA >= default_commitment_delay_floor,
+        "default TLC expiry delta must cover at least 2/3 of the default commitment delay"
+    );
+}
+
 #[tokio::test]
 async fn test_open_channel_tlc_expiry_is_smaller_than_commitment_delay() {
     let [node_a, node_b] = NetworkNode::new_n_interconnected_nodes().await;
