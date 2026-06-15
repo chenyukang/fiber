@@ -514,13 +514,21 @@ impl Pubkey {
         Ok(Pubkey(bytes))
     }
 
-    pub fn tweak<I: Into<[u8; 32]>>(&self, scalar: I) -> Self {
+    pub fn try_tweak<I: Into<[u8; 32]>>(&self, scalar: I) -> anyhow::Result<Self> {
         let scalar = scalar.into();
         let scalar = Scalar::from_slice(&scalar)
-            .expect(format!("Value {:?} must be within secp256k1 scalar range. If you generated this value from hash function, then your hash function is busted.", &scalar).as_str());
+            .map_err(|err| anyhow!("Invalid secp256k1 scalar tweak: {err}"))?;
         // Convert to Point, perform operation, then serialize back
         let result = Point::from(self) + scalar.base_point_mul();
-        let point = result.not_inf().expect("valid public key");
-        PublicKey::from(point).into()
+        let point = result
+            .not_inf()
+            .map_err(|_| anyhow!("Tweaked public key is point at infinity"))?;
+        Ok(PublicKey::from(point).into())
+    }
+
+    pub fn tweak<I: Into<[u8; 32]>>(&self, scalar: I) -> Self {
+        let scalar = scalar.into();
+        self.try_tweak(scalar)
+            .expect(format!("Value {:?} must be within secp256k1 scalar range. If you generated this value from hash function, then your hash function is busted.", &scalar).as_str())
     }
 }

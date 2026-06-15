@@ -4,10 +4,11 @@ use crate::ckb::tests::test_utils::{
 use crate::ckb::{CkbChainMessage, FundingContext, FundingTx};
 use crate::fiber::channel::{
     funding_timeout_check_delay, merge_external_funding_witnesses, AddTlcResponse,
-    ChannelActorState, ChannelActorStateStore, ChannelOpenRecordStore, ProcessingChannelResult,
-    ReloadParams, ReplayOrderHint, UpdateCommand, DEFAULT_COMMITMENT_FEE_RATE, DEFAULT_FEE_RATE,
-    DEFAULT_MAX_TLC_VALUE_IN_FLIGHT, MAX_COMMITMENT_DELAY_EPOCHS, MAX_TLC_NUMBER_IN_FLIGHT,
-    MIN_COMMITMENT_DELAY_EPOCHS, XUDT_COMPATIBLE_WITNESS,
+    ChannelActorState, ChannelActorStateStore, ChannelOpenRecordStore, ProcessingChannelError,
+    ProcessingChannelResult, ReloadParams, ReplayOrderHint, UpdateCommand,
+    DEFAULT_COMMITMENT_FEE_RATE, DEFAULT_FEE_RATE, DEFAULT_MAX_TLC_VALUE_IN_FLIGHT,
+    MAX_COMMITMENT_DELAY_EPOCHS, MAX_TLC_NUMBER_IN_FLIGHT, MIN_COMMITMENT_DELAY_EPOCHS,
+    XUDT_COMPATIBLE_WITNESS,
 };
 use crate::fiber::config::{
     DEFAULT_COMMITMENT_DELAY_EPOCHS, DEFAULT_FINAL_TLC_EXPIRY_DELTA, DEFAULT_TLC_EXPIRY_DELTA,
@@ -54,13 +55,13 @@ use ckb_types::{
     prelude::{AsTransactionBuilder, Builder, Entity, IntoTransactionView, Pack, Unpack},
 };
 use fiber_types::{
-    derive_private_key, derive_tlc_pubkey, is_tlc_key_derivation_safe, AddTlcCommand, AppliedFlags,
-    AwaitingChannelReadyFlags, AwaitingTxSignaturesFlags, ChannelConstraints, ChannelOpeningStatus,
-    ChannelState, CollaboratingFundingTxFlags, HashAlgorithm, InMemorySigner, InboundTlcStatus,
-    NegotiatingFundingFlags, OutboundTlcStatus, PaymentHopData, PaymentStatus, Privkey, RemoveTlc,
-    RemoveTlcFulfill, RemoveTlcReason, RetryableTlcOperation, RevokeAndAck, ShuttingDownFlags,
-    SigningCommitmentFlags, TLCId, TlcErrPacket, TlcErrorCode, TlcInfo, TlcStatus,
-    NO_SHARED_SECRET,
+    derive_private_key, derive_tlc_pubkey, is_tlc_key_derivation_safe, try_derive_tlc_pubkey,
+    AddTlcCommand, AppliedFlags, AwaitingChannelReadyFlags, AwaitingTxSignaturesFlags,
+    ChannelConstraints, ChannelOpeningStatus, ChannelState, CollaboratingFundingTxFlags,
+    HashAlgorithm, InMemorySigner, InboundTlcStatus, NegotiatingFundingFlags, OutboundTlcStatus,
+    PaymentHopData, PaymentStatus, Privkey, RemoveTlc, RemoveTlcFulfill, RemoveTlcReason,
+    RetryableTlcOperation, RevokeAndAck, ShuttingDownFlags, SigningCommitmentFlags, TLCId,
+    TlcErrPacket, TlcErrorCode, TlcInfo, TlcStatus, NO_SHARED_SECRET,
 };
 use fiber_types::{CloseFlags, FeatureVector};
 use molecule::bytes::BytesMut;
@@ -302,6 +303,13 @@ fn test_is_tlc_key_derivation_safe_rejects_malicious_keys() {
 }
 
 #[test]
+fn test_try_derive_tlc_pubkey_rejects_malicious_keys() {
+    let (tlc_basepoint, commitment_point) = malicious_tlc_basepoint_and_commitment_point();
+
+    assert!(try_derive_tlc_pubkey(&tlc_basepoint, &commitment_point).is_err());
+}
+
+#[test]
 fn test_is_tlc_key_derivation_safe_accepts_honest_keys() {
     let signer = InMemorySigner::generate_from_seed(b"honest-seed");
     let tlc_basepoint = signer.tlc_base_key.pubkey();
@@ -311,6 +319,40 @@ fn test_is_tlc_key_derivation_safe_accepts_honest_keys() {
         is_tlc_key_derivation_safe(&tlc_basepoint, &commitment_point),
         "honest TLC basepoint and commitment point should be accepted"
     );
+}
+
+#[test]
+fn test_remote_initial_tlc_key_derivation_rejects_malicious_keys() {
+    let (tlc_basepoint, malicious_commitment_point) =
+        malicious_tlc_basepoint_and_commitment_point();
+    let signer = InMemorySigner::generate_from_seed(b"safe-commitment-for-initial-check");
+    let valid_commitment_point = signer.get_commitment_point(1);
+    try_derive_tlc_pubkey(&tlc_basepoint, &valid_commitment_point)
+        .expect("test valid commitment point should derive");
+
+    let first_err = ChannelActorState::check_remote_initial_tlc_key_derivations(
+        &tlc_basepoint,
+        &malicious_commitment_point,
+        &valid_commitment_point,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        first_err,
+        ProcessingChannelError::InvalidParameter(message)
+            if message.contains("first_per_commitment_point")
+    ));
+
+    let second_err = ChannelActorState::check_remote_initial_tlc_key_derivations(
+        &tlc_basepoint,
+        &valid_commitment_point,
+        &malicious_commitment_point,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        second_err,
+        ProcessingChannelError::InvalidParameter(message)
+            if message.contains("second_per_commitment_point")
+    ));
 }
 
 #[test]
@@ -415,7 +457,7 @@ async fn test_revoke_and_ack_rejects_malicious_next_per_commitment_point() {
             break;
         };
         if let NetworkServiceEvent::DebugEvent(DebugEvent::Common(msg)) = &event {
-            if msg.contains("next_per_commitment_point in RevokeAndAck derive to invalid key") {
+            if msg.contains("invalid remote TLC key derivation for next_per_commitment_point") {
                 saw_rejection = true;
                 break;
             }
