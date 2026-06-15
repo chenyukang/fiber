@@ -189,7 +189,7 @@ pub struct TlcNotification {
 #[derive(Debug, AsRefStr)]
 pub enum ChannelCommand {
     TxCollaborationCommand(TxCollaborationCommand),
-    FundingTxSigned(Transaction),
+    FundingTxSigned(Transaction, RpcReplyPort<Result<(), String>>),
     CommitmentSigned(Option<RpcReplyPort<Result<(), String>>>),
     AddTlc(AddTlcCommand, RpcReplyPort<Result<AddTlcResponse, TlcErr>>),
     RemoveTlc(RemoveTlcCommand, RpcReplyPort<ProcessingChannelResult>),
@@ -213,7 +213,7 @@ impl Display for ChannelCommand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ChannelCommand::TxCollaborationCommand(_) => write!(f, "TxCollaborationCommand"),
-            ChannelCommand::FundingTxSigned(_) => write!(f, "FundingTxSigned"),
+            ChannelCommand::FundingTxSigned(_, _) => write!(f, "FundingTxSigned"),
             ChannelCommand::CommitmentSigned(_) => write!(f, "CommitmentSigned"),
             ChannelCommand::AddTlc(_, _) => write!(f, "AddTlc"),
             ChannelCommand::RemoveTlc(_, _) => write!(f, "RemoveTlc"),
@@ -2758,24 +2758,32 @@ where
             ChannelCommand::TxCollaborationCommand(tx_collaboration_command) => {
                 self.handle_tx_collaboration_command(state, tx_collaboration_command)
             }
-            ChannelCommand::FundingTxSigned(tx) => {
-                match state.state {
+            ChannelCommand::FundingTxSigned(tx, reply) => {
+                let result = match state.state {
                     ChannelState::AwaitingTxSignatures(flags) => {
                         let flags = flags | AwaitingTxSignaturesFlags::OUR_TX_SIGNATURES_SENT;
                         state.funding_tx = Some(tx);
                         state.update_state(ChannelState::AwaitingTxSignatures(flags));
+                        Ok(())
                     }
                     ChannelState::AwaitingChannelReady(_)
                         if state.ephemeral_config.external_funding.enabled
                             && state.ephemeral_config.external_funding.signed_submitted =>
                     {
                         state.funding_tx = Some(tx);
+                        Ok(())
                     }
                     _ => {
-                        error!("Invalid state. Expect channel state to be AwaitingTxSignatures, but got {:?}", state.state);
+                        let err = ProcessingChannelError::InvalidState(format!(
+                            "Invalid state. Expect channel state to be AwaitingTxSignatures, but got {:?}",
+                            state.state
+                        ));
+                        error!("{err}");
+                        Err(err)
                     }
-                }
-                Ok(())
+                };
+                let _ = reply.send(result.as_ref().map(|_| ()).map_err(|err| err.to_string()));
+                result
             }
             ChannelCommand::CommitmentSigned(rpc_reply) => {
                 let result = self.handle_commitment_signed_command(myself, state).await;
@@ -3483,7 +3491,7 @@ where
                     info!("Abort funding on timeout for channel {}", state.get_id());
                     myself
                         .send_message(ChannelActorMessage::Event(ChannelEvent::Stop(
-                            StopReason::AbortFunding,
+                            StopReason::AbortFundingOnTimeout,
                         )))
                         .expect("myself alive");
                 } else {
@@ -4636,6 +4644,7 @@ pub struct ClosedChannel {}
 pub enum StopReason {
     Abandon,
     AbortFunding,
+    AbortFundingOnTimeout,
     AbortFundingWithDetail(String),
     FundingFailed,
     Closed,
@@ -4647,16 +4656,14 @@ impl StopReason {
         matches!(
             self,
             StopReason::AbortFunding
+                | StopReason::AbortFundingOnTimeout
                 | StopReason::AbortFundingWithDetail(_)
                 | StopReason::FundingFailed
         )
     }
 
     pub(crate) fn is_timeout_abort(&self) -> bool {
-        matches!(
-            self,
-            StopReason::AbortFunding | StopReason::AbortFundingWithDetail(_)
-        )
+        matches!(self, StopReason::AbortFundingOnTimeout)
     }
 
     pub(crate) fn funding_abort_detail(&self) -> Option<&str> {

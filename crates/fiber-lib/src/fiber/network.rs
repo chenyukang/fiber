@@ -1727,6 +1727,9 @@ where
                         let failure_detail = match &reason {
                             StopReason::Abandon => "Channel was abandoned".to_string(),
                             StopReason::AbortFunding => "Funding transaction aborted".to_string(),
+                            StopReason::AbortFundingOnTimeout => {
+                                "Funding transaction timed out".to_string()
+                            }
                             StopReason::AbortFundingWithDetail(detail) => detail.clone(),
                             StopReason::FundingFailed => "Funding transaction failed".to_string(),
                             StopReason::PeerDisConnected => {
@@ -3837,6 +3840,13 @@ where
 
         let funding_tx_for_retry = funding_tx.clone();
         let partial_witnesses_for_retry = partial_witnesses.clone();
+        let Some(channel_actor) = state.channels.get(&channel_id).cloned() else {
+            warn!(
+                "Skip signing stale funding tx {:?}: channel {:?} is no longer live",
+                tx_hash, channel_id
+            );
+            return Ok(());
+        };
 
         let funding_tx = match partial_witnesses {
             Some(partial_witnesses) => funding_tx
@@ -3935,22 +3945,34 @@ where
             )),
         };
 
+        match call_t!(
+            channel_actor,
+            |reply| ChannelActorMessage::Command(ChannelCommand::FundingTxSigned(
+                funding_tx.data(),
+                reply,
+            )),
+            DEFAULT_CHAIN_ACTOR_TIMEOUT
+        ) {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                warn!(
+                    "Discarding signed funding tx {:?} for channel {:?}: {}",
+                    tx_hash, channel_id, err
+                );
+                return Ok(());
+            }
+            Err(err) => {
+                warn!(
+                    "Discarding signed funding tx {:?} for channel {:?}: {}",
+                    tx_hash, channel_id, err
+                );
+                return Ok(());
+            }
+        }
+
         state
             .trace_tx(tx_hash, InFlightCkbTxKind::Funding(channel_id))
             .await?;
-
-        if let Err(err) = state
-            .send_command_to_channel(
-                channel_id,
-                ChannelCommand::FundingTxSigned(funding_tx.data()),
-            )
-            .await
-        {
-            error!(
-                "Failed to update signed funding tx {:?}: {}",
-                channel_id, err
-            );
-        }
 
         myself
             .send_message(NetworkActorMessage::new_command(
