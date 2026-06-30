@@ -1,4 +1,3 @@
-#[cfg(feature = "watchtower")]
 use ckb_types::packed::Script;
 
 use crate::store::store_trait::{FiberStore, PrefixIterOptions};
@@ -34,13 +33,15 @@ use fiber_types::schema::*;
 use fiber_types::CchOrder;
 use fiber_types::{
     Attempt, AttemptStatus, BroadcastMessage, BroadcastMessageID, ChannelOpenRecord, ChannelState,
-    Cursor, Direction, Hash256, PaymentCustomRecords, PaymentSession, PaymentStatus,
-    PersistentNetworkActorState, Pubkey, TimedResult, CURSOR_SIZE,
+    Cursor, Direction, EntityHex, Hash256, HashAlgorithm, HopHint, PaymentCustomRecords,
+    PaymentSession, PaymentStatus, PersistentNetworkActorState, PrevTlcInfo, Pubkey, RouterHop,
+    SendPaymentData, TimedResult, TlcErrorCode, TrampolineContext, CURSOR_SIZE,
 };
 #[cfg(feature = "watchtower")]
 use fiber_types::{ChannelData, NodeId, Privkey, RevocationData, SettlementData};
 
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use std::collections::{HashMap, HashSet};
 use tracing::info;
 #[cfg(not(any(target_arch = "wasm32", test)))]
@@ -154,6 +155,142 @@ where
         .unwrap_or_else(|e| panic!("deserialization of {} failed: {}", field_name, e))
 }
 
+// Bincode does not delimit nested structs, so the pre-hash_algorithm
+// TrampolineContext layout has to be decoded from the top-level session.
+#[derive(Deserialize)]
+struct LegacyTrampolineContext {
+    remaining_trampoline_onion: Vec<u8>,
+    previous_tlcs: Vec<PrevTlcInfo>,
+}
+
+#[serde_as]
+#[derive(Deserialize)]
+struct LegacySendPaymentData {
+    target_pubkey: Pubkey,
+    amount: u128,
+    payment_hash: Hash256,
+    invoice: Option<String>,
+    final_tlc_expiry_delta: u64,
+    tlc_expiry_limit: u64,
+    timeout: Option<u64>,
+    max_fee_amount: Option<u128>,
+    max_parts: Option<u64>,
+    keysend: bool,
+    #[serde_as(as = "Option<EntityHex>")]
+    udt_type_script: Option<Script>,
+    preimage: Option<Hash256>,
+    custom_records: Option<PaymentCustomRecords>,
+    allow_self_payment: bool,
+    hop_hints: Vec<HopHint>,
+    router: Vec<RouterHop>,
+    allow_mpp: bool,
+    dry_run: bool,
+    trampoline_hops: Option<Vec<Pubkey>>,
+    trampoline_context: Option<LegacyTrampolineContext>,
+}
+
+#[derive(Deserialize)]
+struct LegacyPaymentSession {
+    request: LegacySendPaymentData,
+    last_error: Option<String>,
+    last_error_code: Option<TlcErrorCode>,
+    try_limit: u32,
+    status: PaymentStatus,
+    created_at: u64,
+    last_updated_at: u64,
+}
+
+impl From<LegacyPaymentSession> for PaymentSession {
+    fn from(old: LegacyPaymentSession) -> Self {
+        let LegacyPaymentSession {
+            request,
+            last_error,
+            last_error_code,
+            try_limit,
+            status,
+            created_at,
+            last_updated_at,
+        } = old;
+        let LegacySendPaymentData {
+            target_pubkey,
+            amount,
+            payment_hash,
+            invoice,
+            final_tlc_expiry_delta,
+            tlc_expiry_limit,
+            timeout,
+            max_fee_amount,
+            max_parts,
+            keysend,
+            udt_type_script,
+            preimage,
+            custom_records,
+            allow_self_payment,
+            hop_hints,
+            router,
+            allow_mpp,
+            dry_run,
+            trampoline_hops,
+            trampoline_context,
+        } = request;
+
+        PaymentSession {
+            request: SendPaymentData {
+                target_pubkey,
+                amount,
+                payment_hash,
+                invoice,
+                final_tlc_expiry_delta,
+                tlc_expiry_limit,
+                timeout,
+                max_fee_amount,
+                max_parts,
+                keysend,
+                udt_type_script,
+                preimage,
+                custom_records,
+                allow_self_payment,
+                hop_hints,
+                router,
+                allow_mpp,
+                dry_run,
+                trampoline_hops,
+                trampoline_context: trampoline_context.map(|context| TrampolineContext {
+                    remaining_trampoline_onion: context.remaining_trampoline_onion,
+                    previous_tlcs: context.previous_tlcs,
+                    hash_algorithm: HashAlgorithm::CkbHash,
+                    max_outgoing_tlc_expiry: None,
+                }),
+            },
+            last_error,
+            last_error_code,
+            try_limit,
+            status,
+            created_at,
+            last_updated_at,
+            cached_attempts: vec![],
+        }
+    }
+}
+
+fn deserialize_payment_session_compat(slice: &[u8]) -> Result<PaymentSession, String> {
+    bincode::deserialize::<PaymentSession>(slice).or_else(|current_error| {
+        bincode::deserialize::<LegacyPaymentSession>(slice)
+            .map(Into::into)
+            .map_err(|legacy_error| {
+                format!(
+                    "current format failed: {}; legacy trampoline context format failed: {}",
+                    current_error, legacy_error
+                )
+            })
+    })
+}
+
+fn deserialize_payment_session_from(slice: &[u8]) -> PaymentSession {
+    deserialize_payment_session_compat(slice)
+        .unwrap_or_else(|e| panic!("deserialization of PaymentSession failed: {}", e))
+}
+
 /// Open a store at `path`, running auto-migration with auto-confirm.
 /// Use this when no user interaction is needed (e.g. tests, simple setups).
 pub fn open_store<P: AsRef<Path>>(path: P) -> Result<Store, String> {
@@ -256,11 +393,12 @@ pub fn check_validate<P: AsRef<Path>>(path: P) -> Result<(), String> {
             }
             BROADCAST_MESSAGE_TIMESTAMP_PREFIX => {}
             PAYMENT_SESSION_PREFIX => {
-                check_deserialization::<PaymentSession>(
-                    &value,
-                    "PAYMENT_SESSION_PREFIX",
-                    &mut errors,
-                );
+                if let Err(e) = deserialize_payment_session_compat(&value) {
+                    errors.insert(format!(
+                        "Failed to deserialize PAYMENT_SESSION_PREFIX: {:?}",
+                        e
+                    ));
+                }
             }
             PAYMENT_HISTORY_TIMED_RESULT_PREFIX => {
                 check_deserialization::<TimedResult>(
@@ -1086,7 +1224,7 @@ impl NetworkGraphStateStore for Store {
     fn get_payment_session(&self, payment_hash: Hash256) -> Option<PaymentSession> {
         let prefix = [&[PAYMENT_SESSION_PREFIX], payment_hash.as_ref()].concat();
         self.get(prefix)
-            .map(|v| deserialize_from(v.as_ref(), "PaymentSession"))
+            .map(|v| deserialize_payment_session_from(v.as_ref()))
             .map(|session: PaymentSession| session.init_attempts(self))
     }
 
@@ -1095,7 +1233,7 @@ impl NetworkGraphStateStore for Store {
         self.collect_by_prefix(&prefix)
             .into_iter()
             .map(|kv| {
-                let session: PaymentSession = deserialize_from(kv.value.as_ref(), "PaymentSession");
+                let session = deserialize_payment_session_from(kv.value.as_ref());
                 session.init_attempts(self)
             })
             .collect()
@@ -1106,7 +1244,7 @@ impl NetworkGraphStateStore for Store {
         self.collect_by_prefix(&prefix)
             .into_iter()
             .filter_map(|kv| {
-                let session: PaymentSession = deserialize_from(kv.value.as_ref(), "PaymentSession");
+                let session = deserialize_payment_session_from(kv.value.as_ref());
                 if session.status == status {
                     Some(session.init_attempts(self))
                 } else {
@@ -1130,7 +1268,7 @@ impl NetworkGraphStateStore for Store {
         };
 
         iter.filter_map(|(_key, value)| {
-            let session: PaymentSession = deserialize_from(&value, "PaymentSession");
+            let session = deserialize_payment_session_from(&value);
             match status {
                 Some(ref s) if session.status != *s => None,
                 _ => Some(session.init_attempts(self)),

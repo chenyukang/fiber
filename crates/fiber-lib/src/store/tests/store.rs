@@ -26,6 +26,7 @@ use crate::store::open_store;
 use crate::store::sample::StoreSample;
 use crate::store::store_impl::deserialize_from;
 use crate::store::store_impl::serialize_to_vec;
+use crate::store::store_impl::{check_validate, KeyValue, StoreKeyValue};
 use crate::tests::test_utils::*;
 use crate::time::SystemTime;
 #[cfg(not(target_arch = "wasm32"))]
@@ -37,8 +38,12 @@ use ckb_types::prelude::*;
 use ckb_types::H256;
 #[cfg(not(target_arch = "wasm32"))]
 use core::cmp::Ordering;
+use fiber_store::backend::StorageBackend;
 use fiber_types::protocol::AnnouncedNodeName;
-use fiber_types::{AttemptStatus, CloseFlags, HashAlgorithm, PaymentHopData};
+use fiber_types::{
+    AttemptStatus, CloseFlags, EntityHex, HashAlgorithm, HopHint, PaymentHopData, PrevTlcInfo,
+    RouterHop, TlcErrorCode,
+};
 #[cfg(not(target_arch = "wasm32"))]
 use fiber_types::{SettlementTlc, TLCId};
 use musig2::secp::MaybeScalar;
@@ -46,6 +51,8 @@ use musig2::secp::MaybeScalar;
 use musig2::CompactSignature;
 use musig2::SecNonce;
 use secp256k1::{Keypair, SECP256K1};
+use serde::Serialize;
+use serde_with::serde_as;
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use tentacle::secio::PeerId;
@@ -1064,6 +1071,117 @@ fn test_store_payment_sessions_with_status() {
     let res = store.get_payment_sessions_with_status(PaymentStatus::Failed);
     assert_eq!(res.len(), 0);
 }
+
+#[derive(Serialize)]
+struct LegacyTrampolineContext {
+    remaining_trampoline_onion: Vec<u8>,
+    previous_tlcs: Vec<PrevTlcInfo>,
+}
+
+#[serde_as]
+#[derive(Serialize)]
+struct LegacySendPaymentData {
+    target_pubkey: Pubkey,
+    amount: u128,
+    payment_hash: Hash256,
+    invoice: Option<String>,
+    final_tlc_expiry_delta: u64,
+    tlc_expiry_limit: u64,
+    timeout: Option<u64>,
+    max_fee_amount: Option<u128>,
+    max_parts: Option<u64>,
+    keysend: bool,
+    #[serde_as(as = "Option<EntityHex>")]
+    udt_type_script: Option<Script>,
+    preimage: Option<Hash256>,
+    custom_records: Option<PaymentCustomRecords>,
+    allow_self_payment: bool,
+    hop_hints: Vec<HopHint>,
+    router: Vec<RouterHop>,
+    allow_mpp: bool,
+    dry_run: bool,
+    trampoline_hops: Option<Vec<Pubkey>>,
+    trampoline_context: Option<LegacyTrampolineContext>,
+}
+
+#[derive(Serialize)]
+struct LegacyPaymentSession {
+    request: LegacySendPaymentData,
+    last_error: Option<String>,
+    last_error_code: Option<TlcErrorCode>,
+    try_limit: u32,
+    status: PaymentStatus,
+    created_at: u64,
+    last_updated_at: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn test_store_deserializes_legacy_trampoline_payment_session() {
+    let (store, dir) = generate_store();
+    let payment_hash = gen_rand_sha256_hash();
+    let payment_data = SendPaymentDataBuilder::new(gen_rand_fiber_public_key(), 100, payment_hash)
+        .final_tlc_expiry_delta(DEFAULT_TLC_EXPIRY_DELTA)
+        .tlc_expiry_limit(MAX_PAYMENT_TLC_EXPIRY_LIMIT)
+        .timeout(Some(10))
+        .max_fee_amount(Some(1000))
+        .build()
+        .expect("valid payment_data");
+    let payment_session = PaymentSession::new_session(&store, payment_data, 10);
+    let payment_session_key = KeyValue::PaymentSession(payment_hash, payment_session).key();
+    let legacy_session = LegacyPaymentSession {
+        request: LegacySendPaymentData {
+            target_pubkey: gen_rand_fiber_public_key(),
+            amount: 100,
+            payment_hash,
+            invoice: None,
+            final_tlc_expiry_delta: DEFAULT_TLC_EXPIRY_DELTA,
+            tlc_expiry_limit: MAX_PAYMENT_TLC_EXPIRY_LIMIT,
+            timeout: Some(10),
+            max_fee_amount: Some(1000),
+            max_parts: None,
+            keysend: false,
+            udt_type_script: None,
+            preimage: None,
+            custom_records: None,
+            allow_self_payment: false,
+            hop_hints: vec![],
+            router: vec![],
+            allow_mpp: false,
+            dry_run: false,
+            trampoline_hops: None,
+            trampoline_context: Some(LegacyTrampolineContext {
+                remaining_trampoline_onion: vec![1, 2, 3],
+                previous_tlcs: vec![],
+            }),
+        },
+        last_error: None,
+        last_error_code: None,
+        try_limit: 10,
+        status: PaymentStatus::Created,
+        created_at: 11,
+        last_updated_at: 12,
+    };
+    store.put(
+        payment_session_key,
+        bincode::serialize(&legacy_session).expect("serialize legacy payment session"),
+    );
+
+    check_validate(dir.as_ref()).expect("legacy payment session should validate");
+    let restored = store
+        .get_payment_session(payment_hash)
+        .expect("legacy payment session should deserialize");
+    let context = restored
+        .request
+        .trampoline_context
+        .expect("trampoline context should be preserved");
+    assert_eq!(context.remaining_trampoline_onion, vec![1, 2, 3]);
+    assert_eq!(context.previous_tlcs.len(), 0);
+    assert_eq!(context.hash_algorithm, HashAlgorithm::CkbHash);
+    assert_eq!(context.max_outgoing_tlc_expiry, None);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
