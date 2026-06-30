@@ -1064,6 +1064,67 @@ fn test_store_payment_sessions_with_status() {
     let res = store.get_payment_sessions_with_status(PaymentStatus::Failed);
     assert_eq!(res.len(), 0);
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn test_store_attempt_channel_index_moves_after_reroute() {
+    let (store, _dir) = generate_store();
+    let payment_hash = gen_rand_sha256_hash();
+    let payment_data = SendPaymentDataBuilder::new(gen_rand_fiber_public_key(), 100, payment_hash)
+        .final_tlc_expiry_delta(DEFAULT_TLC_EXPIRY_DELTA)
+        .tlc_expiry_limit(MAX_PAYMENT_TLC_EXPIRY_LIMIT)
+        .timeout(Some(10))
+        .max_fee_amount(Some(1000))
+        .build()
+        .expect("valid payment_data");
+    let payment_session = PaymentSession::new_session(&store, payment_data, 10);
+    let source = gen_rand_fiber_public_key();
+    let target = gen_rand_fiber_public_key();
+
+    let old_funding_tx_hash = gen_rand_sha256_hash();
+    let old_channel_outpoint = OutPoint::new(old_funding_tx_hash.into(), 0);
+    let mut attempt = payment_session.new_attempt(
+        1,
+        source,
+        target,
+        vec![PaymentHopData {
+            amount: 100,
+            expiry: DEFAULT_TLC_EXPIRY_DELTA,
+            payment_preimage: None,
+            hash_algorithm: HashAlgorithm::default(),
+            funding_tx_hash: old_funding_tx_hash,
+            next_hop: None,
+            custom_records: None,
+        }],
+    );
+
+    store.insert_attempt(attempt.clone());
+    let pending_attempts = store.get_pending_attempts_by_channel_outpoint(&old_channel_outpoint);
+    assert_eq!(pending_attempts.len(), 1);
+    assert_eq!(pending_attempts[0].id, attempt.id);
+
+    let new_funding_tx_hash = gen_rand_sha256_hash();
+    let new_channel_outpoint = OutPoint::new(new_funding_tx_hash.into(), 0);
+    attempt.update_route(vec![PaymentHopData {
+        amount: 100,
+        expiry: DEFAULT_TLC_EXPIRY_DELTA,
+        payment_preimage: None,
+        hash_algorithm: HashAlgorithm::default(),
+        funding_tx_hash: new_funding_tx_hash,
+        next_hop: None,
+        custom_records: None,
+    }]);
+    store.insert_attempt(attempt.clone());
+
+    assert!(store
+        .get_pending_attempts_by_channel_outpoint(&old_channel_outpoint)
+        .is_empty());
+    let pending_attempts = store.get_pending_attempts_by_channel_outpoint(&new_channel_outpoint);
+    assert_eq!(pending_attempts.len(), 1);
+    assert_eq!(pending_attempts[0].id, attempt.id);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]

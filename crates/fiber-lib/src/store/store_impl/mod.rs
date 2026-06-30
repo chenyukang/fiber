@@ -1168,7 +1168,9 @@ impl NetworkGraphStateStore for Store {
         assert_ne!(attempt.id, 0, "Attempt ID should not be zero");
 
         let first_hop_outpoint = attempt.first_hop_channel_outpoint().cloned();
-        let is_new = self.get_attempt(attempt.payment_hash, attempt.id).is_none();
+        let previous_first_hop_outpoint = self
+            .get_attempt(attempt.payment_hash, attempt.id)
+            .and_then(|previous| previous.first_hop_channel_outpoint().cloned());
 
         let mut batch = self.batch();
 
@@ -1176,8 +1178,13 @@ impl NetworkGraphStateStore for Store {
         let kv = KeyValue::Attempt((attempt.payment_hash, attempt.id), attempt.clone());
         batch.put(kv.key(), kv.value());
 
-        // Add to channel index only for new attempts
-        if is_new {
+        if previous_first_hop_outpoint != first_hop_outpoint {
+            if let Some(outpoint) = previous_first_hop_outpoint {
+                let kv =
+                    KeyValue::AttemptChannelIndex((outpoint, attempt.payment_hash, attempt.id));
+                batch.delete(kv.key());
+            }
+
             if let Some(outpoint) = first_hop_outpoint {
                 let kv =
                     KeyValue::AttemptChannelIndex((outpoint, attempt.payment_hash, attempt.id));
@@ -1300,7 +1307,8 @@ impl NetworkGraphStateStore for Store {
                 if matches!(
                     attempt.status,
                     AttemptStatus::Created | AttemptStatus::Retrying
-                ) {
+                ) && attempt.first_hop_channel_outpoint_eq(channel_outpoint)
+                {
                     Some(attempt)
                 } else {
                     None
