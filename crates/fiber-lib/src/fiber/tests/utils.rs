@@ -1,6 +1,6 @@
-use std::str::FromStr;
+use std::{fs, str::FromStr};
 
-use tempfile::NamedTempFile;
+use tempfile::{tempdir, NamedTempFile};
 use tentacle::multiaddr::Multiaddr;
 
 use crate::utils::encrypt_decrypt_file::decrypt_from_file;
@@ -79,4 +79,22 @@ fn test_decrypt_with_wrong_password_should_fail() {
         result.is_err(),
         "Decryption should fail with wrong password"
     );
+}
+
+#[test]
+fn test_decrypt_missing_file_should_fail() {
+    let temp_dir = tempdir().unwrap();
+    let missing_path = temp_dir.path().join("missing-key");
+
+    let result = decrypt_from_file(&missing_path, b"password");
+    assert!(result.is_err(), "missing key file should return an error");
+}
+
+#[test]
+fn test_decrypt_short_file_should_fail() {
+    let temp_file = NamedTempFile::new().unwrap();
+    fs::write(temp_file.path(), [0_u8; 8]).unwrap();
+
+    let result = decrypt_from_file(temp_file.path(), b"password");
+    assert!(result.is_err(), "short key file should return an error");
 }

@@ -9,6 +9,7 @@ use std::path::Path;
 const VERSION: u8 = 0;
 const NONCE_LEN: usize = 12;
 const SALT_LEN: usize = 16;
+const HEADER_LEN: usize = 1 + SALT_LEN + NONCE_LEN;
 
 fn derive_key_from_password(password: &[u8], salt: &[u8]) -> Key<Aes256Gcm> {
     let mut key = [0u8; 32];
@@ -45,7 +46,23 @@ pub fn decrypt_from_file<P: AsRef<Path> + Debug>(
     file: P,
     password: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let file_bytes = fs::read(file).unwrap();
+    let file_bytes =
+        fs::read(&file).map_err(|err| format!("failed to read file {:?}: {}", file, err))?;
+    if file_bytes.len() < HEADER_LEN {
+        return Err(format!(
+            "invalid encrypted file {:?}: expected at least {} bytes, got {}",
+            file,
+            HEADER_LEN,
+            file_bytes.len()
+        ));
+    }
+    if file_bytes[0] != VERSION {
+        return Err(format!(
+            "unsupported encrypted file version: {}",
+            file_bytes[0]
+        ));
+    }
+
     let salt = &file_bytes[1..SALT_LEN + 1];
     let nonce = &file_bytes[SALT_LEN + 1..SALT_LEN + NONCE_LEN + 1];
     let ciphertext = &file_bytes[SALT_LEN + NONCE_LEN + 1..];
