@@ -3915,25 +3915,18 @@ where
         let funding_tx = signed_funding_tx.take().expect("take tx");
         let witnesses = funding_tx.witnesses();
 
-        if has_partial_witnesses {
+        let funding_outpoint = if has_partial_witnesses {
             let outpoint = funding_tx
                 .output_pts_iter()
                 .next()
                 .expect("funding tx output exists");
 
-            myself
-                .send_message(NetworkActorMessage::new_event(
-                    NetworkActorEvent::FundingTransactionPending(
-                        funding_tx.data(),
-                        outpoint,
-                        channel_id,
-                    ),
-                ))
-                .expect("network actor alive");
             debug!("Fully signed funding tx {:?}", &funding_tx);
+            Some(outpoint)
         } else {
             debug!("Partially signed funding tx {:?}", &funding_tx);
-        }
+            None
+        };
 
         let msg = FiberMessageWithTarget {
             target,
@@ -3968,6 +3961,18 @@ where
                 );
                 return Ok(());
             }
+        }
+
+        if let Some(outpoint) = funding_outpoint {
+            myself
+                .send_message(NetworkActorMessage::new_event(
+                    NetworkActorEvent::FundingTransactionPending(
+                        funding_tx.data(),
+                        outpoint,
+                        channel_id,
+                    ),
+                ))
+                .expect("network actor alive");
         }
 
         state
