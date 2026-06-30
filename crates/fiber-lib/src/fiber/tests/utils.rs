@@ -40,12 +40,22 @@ fn test_is_addr_reachable_with_public_ip() {
 }
 
 #[test]
-fn test_is_addr_reachable_with_dns4_address() {
+fn test_is_addr_reachable_rejects_dns4_address() {
     let dns4_addr =
         Multiaddr::from_str("/dns4/example.com/tcp/8228").expect("valid dns4 multiaddr");
     assert!(
-        is_addr_reachable(&dns4_addr),
-        "dns4 address should be considered reachable"
+        !is_addr_reachable(&dns4_addr),
+        "dns4 address should not bypass private-address filtering"
+    );
+}
+
+#[test]
+fn test_is_addr_reachable_rejects_dns6_address() {
+    let dns6_addr =
+        Multiaddr::from_str("/dns6/example.com/tcp/8228").expect("valid dns6 multiaddr");
+    assert!(
+        !is_addr_reachable(&dns6_addr),
+        "dns6 address should not bypass private-address filtering"
     );
 }
 

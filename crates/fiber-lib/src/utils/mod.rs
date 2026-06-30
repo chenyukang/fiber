@@ -12,18 +12,17 @@ use tentacle::utils::{is_reachable, multiaddr_to_socketaddr};
 /// For IP-based addresses (`Ip4`/`Ip6`), this delegates to tentacle's
 /// `multiaddr_to_socketaddr` + `is_reachable` check.
 ///
-/// For DNS-based addresses (`Dns4`/`Dns6`), we treat them as always reachable
-/// because a DNS name implies a publicly resolvable endpoint.
+/// DNS-based addresses (`Dns4`/`Dns6`) are not treated as publicly reachable by
+/// this syntactic filter. A DNS name can resolve to loopback, private, or
+/// link-local addresses, so accepting it here would bypass private-address
+/// filtering before the dialer resolves the name.
 ///
 /// For Tor onion addresses (`Onion3`), we treat them as always reachable
 /// because they are publicly accessible via the Tor network.
 pub(crate) fn is_addr_reachable(addr: &Multiaddr) -> bool {
-    let has_public_protocol = addr.iter().any(|proto| {
-        matches!(
-            proto,
-            Protocol::Dns4(_) | Protocol::Dns6(_) | Protocol::Onion3(_)
-        )
-    });
+    let has_public_protocol = addr
+        .iter()
+        .any(|proto| matches!(proto, Protocol::Onion3(_)));
 
     if has_public_protocol {
         return true;
