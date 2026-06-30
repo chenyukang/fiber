@@ -8370,6 +8370,66 @@ async fn test_tlc_removed_while_waiting_for_forwarding_result() {
     node_0.wait_until_success(payment_hash2).await;
 }
 
+fn payment_session_with_request(request: SendPaymentData, created_at: u64) -> PaymentSession {
+    PaymentSession {
+        request,
+        last_error: None,
+        last_error_code: None,
+        try_limit: 1,
+        status: PaymentStatus::Created,
+        created_at,
+        last_updated_at: created_at,
+        cached_attempts: Vec::new(),
+    }
+}
+
+fn base_payment_request() -> SendPaymentData {
+    SendPaymentDataBuilder::new(gen_rand_fiber_public_key(), 1000, [1u8; 32].into())
+        .max_fee_amount(Some(0))
+        .keysend(true)
+        .preimage(Some([3u8; 32].into()))
+        .build()
+        .expect("build payment request")
+}
+
+#[test]
+fn test_stale_payment_retry_error_rejects_expired_invoice() {
+    let (secret_key, public_key) = SECP256K1.generate_keypair(&mut rand::thread_rng());
+    let invoice = InvoiceBuilder::new(Currency::Fibd)
+        .amount(Some(1000))
+        .payment_hash([2u8; 32].into())
+        .payee_pub_key(public_key)
+        .expiry_time(Duration::from_secs(0))
+        .build_with_sign(|hash| SECP256K1.sign_ecdsa_recoverable(hash, &secret_key))
+        .expect("build invoice");
+    assert!(invoice.is_expired(), "invoice should expire immediately");
+
+    let request = SendPaymentDataBuilder::new(Pubkey::from(public_key), 1000, [2u8; 32].into())
+        .invoice(Some(invoice.to_string()))
+        .max_fee_amount(Some(0))
+        .build()
+        .expect("build payment request");
+    let session = payment_session_with_request(request, now_timestamp_as_millis_u64());
+
+    assert_eq!(
+        stale_payment_retry_error(&session, now_timestamp_as_millis_u64()),
+        Some("invoice is expired")
+    );
+}
+
+#[test]
+fn test_stale_payment_retry_error_rejects_elapsed_timeout() {
+    let mut request = base_payment_request();
+    request.timeout = Some(1);
+    let now = now_timestamp_as_millis_u64();
+    let session = payment_session_with_request(request, now.saturating_sub(1000));
+
+    assert_eq!(
+        stale_payment_retry_error(&session, now),
+        Some("payment timeout elapsed")
+    );
+}
+
 #[tokio::test]
 async fn test_send_payment_max_fee_rate_limit() {
     let payment_data = SendPaymentData::new(SendPaymentCommand {

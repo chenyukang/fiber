@@ -771,6 +771,29 @@ impl SendPaymentWithRouterCommand {
     }
 }
 
+pub(crate) fn stale_payment_retry_error(
+    session: &PaymentSession,
+    now_ms: u64,
+) -> Option<&'static str> {
+    if session
+        .request
+        .payment_invoice()
+        .is_some_and(|invoice| invoice.is_expired())
+    {
+        return Some("invoice is expired");
+    }
+
+    if let Some(timeout_secs) = session.request.timeout {
+        let timeout_ms = timeout_secs.saturating_mul(1000);
+        let elapsed_ms = now_ms.saturating_sub(session.created_at);
+        if elapsed_ms >= timeout_ms {
+            return Some("payment timeout elapsed");
+        }
+    }
+
+    None
+}
+
 /// The interval at which to check payment status for timeout detection
 const PAYMENT_STATUS_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -1585,6 +1608,18 @@ where
         }
     }
 
+    fn validate_payment_session_retry_freshness(
+        &self,
+        session: &mut PaymentSession,
+    ) -> Result<(), Error> {
+        if let Some(err) = stale_payment_retry_error(session, now_timestamp_as_millis_u64()) {
+            self.set_payment_fail_with_error(session, err, None);
+            return Err(Error::SendPaymentError(err.to_string()));
+        }
+
+        Ok(())
+    }
+
     async fn send_attempt(
         &self,
         myself: ActorRef<PaymentActorMessage>,
@@ -1623,6 +1658,8 @@ where
         if session.status.is_final() {
             return Ok(());
         }
+
+        self.validate_payment_session_retry_freshness(&mut session)?;
 
         self.retry_payment_attempt(myself.clone(), state, &mut session, attempt_id)
             .await?;
