@@ -3242,6 +3242,24 @@ where
             None => return Err(SettleInvoiceError::InvoiceNotFound),
         }
 
+        let has_live_hold_tlc = self
+            .store
+            .get_payment_hold_tlcs(payment_hash)
+            .into_iter()
+            .any(|hold_tlc| {
+                let Some(channel_state) = self.store.get_channel_actor_state(&hold_tlc.channel_id)
+                else {
+                    return false;
+                };
+
+                channel_state
+                    .get_received_tlc(TLCId::Received(hold_tlc.tlc_id))
+                    .is_some()
+            });
+        if !has_live_hold_tlc {
+            return Err(SettleInvoiceError::InvoiceHasNoPendingHoldTlc);
+        }
+
         self.store.insert_preimage(payment_hash, payment_preimage);
         // Notify watchtower about the preimage so it can settle TLCs on-chain if needed
         // (e.g., after force close).

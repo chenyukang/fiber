@@ -44,6 +44,8 @@ pub enum SettleInvoiceError {
     InvoiceAlreadyExpired,
     #[error("Invoice is already paid")]
     InvoiceAlreadyPaid,
+    #[error("Invoice has no pending hold TLC")]
+    InvoiceHasNoPendingHoldTlc,
     #[error("Internal error: {0}")]
     InternalError(String),
 }

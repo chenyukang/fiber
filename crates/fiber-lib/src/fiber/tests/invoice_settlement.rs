@@ -282,7 +282,7 @@ async fn test_settle_invoice_status_checks() {
         SettleInvoiceError::InvoiceAlreadyPaid.to_string()
     );
 
-    // 6. Test Success (Received)
+    // 6. Test stale Received invoice without any pending hold TLC
     let preimage_success = gen_rand_sha256_hash();
     let payment_hash_success = Hash256::from(ckb_hash::blake2b_256(preimage_success));
     let invoice_success = InvoiceBuilder::new(Currency::Fibb)
@@ -303,9 +303,13 @@ async fn test_settle_invoice_status_checks() {
     let res = node
         .settle_invoice(&payment_hash_success, preimage_success)
         .await;
-    assert!(res.is_ok());
+    assert_eq!(
+        res.unwrap_err(),
+        SettleInvoiceError::InvoiceHasNoPendingHoldTlc.to_string()
+    );
+    assert!(node.store.get_preimage(&payment_hash_success).is_none());
 
-    // 7. Test Success (Received but Expired) - Should succeed because it is already Received
+    // 7. Test stale Received but Expired invoice without any pending hold TLC
     let preimage_success_expired = gen_rand_sha256_hash();
     let payment_hash_success_expired =
         Hash256::from(ckb_hash::blake2b_256(preimage_success_expired));
@@ -334,7 +338,14 @@ async fn test_settle_invoice_status_checks() {
     let res = node
         .settle_invoice(&payment_hash_success_expired, preimage_success_expired)
         .await;
-    assert!(res.is_ok());
+    assert_eq!(
+        res.unwrap_err(),
+        SettleInvoiceError::InvoiceHasNoPendingHoldTlc.to_string()
+    );
+    assert!(node
+        .store
+        .get_preimage(&payment_hash_success_expired)
+        .is_none());
 }
 
 #[tokio::test]
