@@ -25,7 +25,7 @@ pub struct RpcConfig {
     #[arg(name = "RPC_CORS_ENABLED", long = "rpc-cors-enabled", env)]
     pub cors_enabled: bool,
 
-    /// Allowed origins for CORS. If empty when CORS is enabled, allows all origins (*)
+    /// Allowed origins for CORS. Must be non-empty when CORS is enabled.
     #[default(Vec::new())]
     #[arg(name = "RPC_CORS_ALLOWED_ORIGINS", long = "rpc-cors-allowed-origins", env, value_parser, num_args = 0.., value_delimiter = ',')]
     pub cors_allowed_origins: Vec<String>,

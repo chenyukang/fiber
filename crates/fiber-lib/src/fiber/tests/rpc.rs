@@ -1025,6 +1025,7 @@ async fn test_rpc_cors_headers() {
     // Create a node with RPC and CORS enabled
     let mut rpc_config = gen_rpc_config();
     rpc_config.cors_enabled = true; // Enable CORS for this test
+    rpc_config.cors_allowed_origins = vec!["http://example.com".to_string()];
 
     let node = NetworkNode::new_with_config(
         NetworkNodeConfigBuilder::new()
@@ -1048,6 +1049,7 @@ async fn test_rpc_cors_headers() {
     let req = Request::builder()
         .method("POST")
         .uri(format!("http://{}", rpc_addr))
+        .header("Origin", "http://example.com")
         .header("Content-Type", "application/json")
         .body(String::from(
             r#"{"jsonrpc":"2.0","method":"node_info","params":[],"id":1}"#,
@@ -1068,8 +1070,8 @@ async fn test_rpc_cors_headers() {
             .headers()
             .get("access-control-allow-origin")
             .unwrap(),
-        "*",
-        "Access-Control-Allow-Origin should be '*'"
+        "http://example.com",
+        "Access-Control-Allow-Origin should match the configured origin"
     );
 
     // Test 2: OPTIONS preflight request should be handled
@@ -1099,8 +1101,8 @@ async fn test_rpc_cors_headers() {
             .headers()
             .get("access-control-allow-origin")
             .unwrap(),
-        "*",
-        "Preflight Access-Control-Allow-Origin should be '*'"
+        "http://example.com",
+        "Preflight Access-Control-Allow-Origin should match the configured origin"
     );
     assert!(
         preflight_response
@@ -1114,6 +1116,22 @@ async fn test_rpc_cors_headers() {
             .contains_key("access-control-allow-headers"),
         "Preflight response should contain Access-Control-Allow-Headers header"
     );
+}
+
+#[tokio::test]
+#[should_panic(expected = "rpc.cors_allowed_origins must contain at least one trusted origin")]
+async fn test_rpc_cors_requires_allowed_origins() {
+    let mut rpc_config = gen_rpc_config();
+    rpc_config.cors_enabled = true;
+
+    let _node = NetworkNode::new_with_config(
+        NetworkNodeConfigBuilder::new()
+            .node_name(Some("node-cors-requires-origin-test".to_string()))
+            .base_dir_prefix("test-fnn-node-cors-requires-origin-")
+            .rpc_config(Some(rpc_config))
+            .build(),
+    )
+    .await;
 }
 
 #[tokio::test]

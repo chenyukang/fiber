@@ -208,24 +208,15 @@ pub mod server {
                     // Configure CORS to allow configured origins and handle preflight requests
                     // Note: CORS must be the outermost layer to handle OPTIONS preflight requests
                     // before authentication, as required by the CORS specification.
-                    let cors_layer = if cors_allowed_origins.is_empty() {
-                        // If no specific origins configured, allow all origins
-                        CorsLayer::new()
-                            .allow_origin(Any)
-                            .allow_methods(Any)
-                            .allow_headers(Any)
-                    } else {
-                        // Allow specific configured origins
-                        use tower_http::cors::AllowOrigin;
-                        let origins: Vec<_> = cors_allowed_origins
-                            .iter()
-                            .filter_map(|o| o.parse().ok())
-                            .collect();
-                        CorsLayer::new()
-                            .allow_origin(AllowOrigin::list(origins))
-                            .allow_methods(Any)
-                            .allow_headers(Any)
-                    };
+                    use tower_http::cors::AllowOrigin;
+                    let origins: Vec<_> = cors_allowed_origins
+                        .iter()
+                        .filter_map(|o| o.parse().ok())
+                        .collect();
+                    let cors_layer = CorsLayer::new()
+                        .allow_origin(AllowOrigin::list(origins))
+                        .allow_methods(Any)
+                        .allow_headers(Any);
                     tower::ServiceBuilder::new()
                         .layer(cors_layer)
                         .service(svc)
@@ -284,6 +275,9 @@ pub mod server {
         let listening_addr = config.listening_addr.as_deref().unwrap_or("[::1]:0");
         if config.biscuit_public_key.is_none() && is_public_addr(listening_addr)? {
             bail!("Cannot listen on a public address without a biscuit public key set in the config. Please set rpc.biscuit_public_key or listen on a private interface.");
+        }
+        if config.cors_enabled && config.cors_allowed_origins.is_empty() {
+            bail!("rpc.cors_allowed_origins must contain at least one trusted origin when rpc.cors_enabled is true");
         }
 
         let auth = match config.biscuit_public_key.as_ref() {
