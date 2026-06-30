@@ -8030,6 +8030,15 @@ impl ChannelActorState {
         true
     }
 
+    fn wait_for_peer_revoke_and_ack_before_ready(&mut self) {
+        debug_event!(
+            self.network(),
+            "Wait for peer RevokeAndAck before reestablish ready"
+        );
+        self.reestablishing = false;
+        self.pending_reestablish_channel_ready = true;
+    }
+
     fn resume_funding(&mut self, myself: &ActorRef<ChannelActorMessage>) {
         match self.state {
             ChannelState::AwaitingTxSignatures(mut flags) => {
@@ -8536,6 +8545,13 @@ impl ChannelActorState {
                         self.reestablishing = false;
                         self.pending_reestablish_channel_ready = true;
                         reestablish_complete = false;
+                    } else if my_waiting_ack {
+                        warn!(
+                            "No CommitDiff for channel {}, waiting for peer RevokeAndAck before completing reestablish",
+                            self.get_id()
+                        );
+                        self.wait_for_peer_revoke_and_ack_before_ready();
+                        reestablish_complete = false;
                     } else {
                         // commitments are the same, sync up the tlcs
                         self.set_waiting_ack(myself, false);
@@ -8587,12 +8603,12 @@ impl ChannelActorState {
                         } else {
                             // === Legacy fallback: no CommitDiff, use old develop-branch behavior ===
                             warn!(
-                                "No CommitDiff for channel {}, falling back to legacy reestablish path",
+                                "No CommitDiff for channel {}, resending cached RevokeAndAck and waiting for peer RevokeAndAck before completing reestablish",
                                 self.get_id()
                             );
                             self.send_revoke_and_ack_message(true)?;
-                            self.set_waiting_ack(myself, false);
-                            self.resend_tlcs_on_reestablish(true)?;
+                            self.wait_for_peer_revoke_and_ack_before_ready();
+                            reestablish_complete = false;
                         }
                     } else {
                         self.send_revoke_and_ack_message(true)?;
@@ -8609,10 +8625,11 @@ impl ChannelActorState {
                     } else {
                         // === Legacy fallback: no CommitDiff ===
                         warn!(
-                            "No CommitDiff for channel {}, falling back to legacy reestablish path",
+                            "No CommitDiff for channel {}, waiting for peer RevokeAndAck before completing reestablish",
                             self.get_id()
                         );
-                        self.resend_tlcs_on_reestablish(true)?;
+                        self.wait_for_peer_revoke_and_ack_before_ready();
+                        reestablish_complete = false;
                     }
                 } else {
                     // Wait for the peer to resend the missing revoke_and_ack before declaring the

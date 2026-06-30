@@ -8992,6 +8992,124 @@ async fn test_reestablish_does_not_complete_while_waiting_for_peer_revoke_and_ac
     );
 }
 
+#[tokio::test]
+async fn test_reestablish_missing_commit_diff_keeps_waiting_ack() {
+    init_tracing();
+    let (mut node_a, node_b, channel_id, _) =
+        NetworkNode::new_2_nodes_with_established_channel(100000000000, 100000000000, true).await;
+
+    let mut state = node_a.get_channel_actor_state(channel_id);
+    let local_commitment_number = state.get_local_commitment_number();
+    let remote_commitment_number = state.get_remote_commitment_number();
+    let next_per_commitment_point = state
+        .remote_commitment_points
+        .last()
+        .expect("remote commitment point exists")
+        .1;
+    state.tlc_state.set_waiting_ack(true);
+    state.reestablishing = true;
+    node_a.store.delete_pending_commit_diff(&channel_id);
+    node_a.update_channel_actor_state(state, None).await;
+
+    while tokio::time::timeout(Duration::from_millis(25), node_a.event_emitter.recv())
+        .await
+        .is_ok()
+    {}
+
+    node_b
+        .network_actor
+        .send_message(NetworkActorMessage::Command(
+            NetworkActorCommand::SendFiberMessage(FiberMessageWithTarget::new(
+                node_a.pubkey,
+                FiberMessage::reestablish_channel(ReestablishChannel {
+                    channel_id,
+                    local_commitment_number: remote_commitment_number,
+                    remote_commitment_number: local_commitment_number,
+                }),
+            )),
+        ))
+        .expect("send reestablish message");
+
+    node_a
+        .expect_to_process_event(|event| match event {
+            NetworkServiceEvent::DebugEvent(DebugEvent::Common(message))
+                if message == "Wait for peer RevokeAndAck before reestablish ready" =>
+            {
+                Some(())
+            }
+            _ => None,
+        })
+        .await;
+
+    let dummy_partial_sig =
+        musig2::PartialSignature::from_slice(&[1u8; 32]).expect("valid partial signature bytes");
+    let dummy_nonce = musig2::SecNonceBuilder::new([1u8; 32])
+        .build()
+        .public_nonce();
+    node_b
+        .network_actor
+        .send_message(NetworkActorMessage::Command(
+            NetworkActorCommand::SendFiberMessage(FiberMessageWithTarget::new(
+                node_a.pubkey,
+                FiberMessage::revoke_and_ack(RevokeAndAck {
+                    channel_id,
+                    revocation_partial_signature: dummy_partial_sig,
+                    next_per_commitment_point,
+                    next_revocation_nonce: dummy_nonce,
+                }),
+            )),
+        ))
+        .expect("send dummy RevokeAndAck");
+
+    node_a
+        .expect_to_process_event(|event| match event {
+            NetworkServiceEvent::DebugEvent(DebugEvent::Common(message))
+                if message.contains("Musig2 VerifyError")
+                    || message.contains("Musig2 SigningError")
+                    || message.contains("Musig2RoundFinalizeError")
+                    || message.contains("Invalid state: get_revoke_sign_context") =>
+            {
+                Some(())
+            }
+            NetworkServiceEvent::DebugEvent(DebugEvent::Common(message))
+                if message.contains("unexpected RevokeAndAck message") =>
+            {
+                panic!("waiting_ack was cleared before peer RevokeAndAck arrived: {message}")
+            }
+            _ => None,
+        })
+        .await;
+
+    let mut saw_channel_ready = false;
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let Ok(Some(event)) = tokio::time::timeout(remaining, node_a.event_emitter.recv()).await
+        else {
+            break;
+        };
+        if matches!(
+            event,
+            NetworkServiceEvent::ChannelReady(pubkey, ready_channel_id, _)
+                if pubkey == node_b.pubkey && ready_channel_id == channel_id
+        ) {
+            saw_channel_ready = true;
+            break;
+        }
+        if let NetworkServiceEvent::DebugEvent(DebugEvent::Common(message)) = event {
+            assert!(
+                !message.contains("unexpected RevokeAndAck message"),
+                "waiting_ack was cleared before peer RevokeAndAck arrived: {message}"
+            );
+        }
+    }
+
+    assert!(
+        !saw_channel_ready,
+        "channel should wait for a valid peer RevokeAndAck before completing reestablish"
+    );
+}
+
 /// Stress test with multiple payments and restarts.
 /// Tests repeated restart cycles with payments.
 #[tokio::test]
