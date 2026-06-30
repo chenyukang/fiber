@@ -11086,6 +11086,14 @@ mod udt_funding_cell_capacity_tests {
     }
 
     #[test]
+    fn test_peer_response_timeout_treats_clock_rollback_as_timeout() {
+        let mut state = minimal_udt_channel_state();
+        state.waiting_peer_response = Some(now_timestamp_as_millis_u64().saturating_add(60_000));
+
+        assert!(state.peer_does_not_reply_ack_in_time());
+    }
+
+    #[test]
     fn test_clean_up_failed_tlcs_prunes_commitment_points() {
         init_tracing();
 
