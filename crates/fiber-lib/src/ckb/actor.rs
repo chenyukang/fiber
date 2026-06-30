@@ -29,6 +29,7 @@ use super::{
 pub struct CkbChainActor {}
 
 const ACTOR_HANDLE_WARN_THRESHOLD_MS: u64 = 15_000;
+const FUNDING_TX_SHELL_BUILDER_TIMEOUT_MS: u64 = 300_000;
 
 #[derive(Clone, Debug)]
 pub struct CkbChainState {
@@ -149,13 +150,19 @@ impl Actor for CkbChainActor {
                     request.udt_type_script.clone(),
                     None,
                 );
-                let result = match state.config.funding_tx_shell_builder_as_deref() {
+                let shell_builder = state.config.funding_tx_shell_builder_as_deref();
+                let result = match shell_builder {
                     None => {
                         tx.fulfill(request, context, &mut state.live_cells_exclusion_map)
                             .await
                     }
                     Some(shell_script) => fund_via_shell(shell_script, tx, request, context).await,
                 };
+                if shell_builder.is_some() {
+                    if let Ok(funding_tx) = &result {
+                        state.live_cells_exclusion_map.add_funding_tx(funding_tx);
+                    }
+                }
                 match &result {
                     Ok(funding_tx) => debug!(
                         "[{}] Funding request succeeded: tx_hash={:?}",
@@ -410,19 +417,21 @@ async fn fund_via_shell(
     context: FundingContext,
 ) -> Result<FundingTx, FundingError> {
     use std::process::Stdio;
-    use tokio::{io::AsyncWriteExt, process::Command};
+    use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
     let (executable, arg) = if cfg!(target_os = "windows") {
         ("cmd", "/C")
     } else {
         ("sh", "-c")
     };
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .arg(arg)
         .arg(shell_script)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .kill_on_drop(true);
+    let mut child = command.spawn()?;
 
     let input = FundingTxShellBuilderInput {
         tx: tx.take().map(|tx| tx.data().into()).unwrap_or_default(),
@@ -433,8 +442,22 @@ async fn fund_via_shell(
     let mut stdin = child.stdin.take().expect("failed to get stdin");
     let input_json = serde_json::to_string(&input)?;
     stdin.write_all(input_json.as_bytes()).await?;
+    stdin.shutdown().await?;
+    drop(stdin);
 
-    let output = child.wait_with_output().await?;
+    let output = timeout(
+        Duration::from_millis(FUNDING_TX_SHELL_BUILDER_TIMEOUT_MS),
+        child.wait_with_output(),
+    )
+    .await
+    .map_err(|_| {
+        FundingError::CkbTxBuilderError(ckb_sdk::tx_builder::TxBuilderError::Other(
+            anyhow::anyhow!(
+                "funding tx shell builder timed out after {} ms",
+                FUNDING_TX_SHELL_BUILDER_TIMEOUT_MS
+            ),
+        ))
+    })??;
     if output.status.success() {
         let out_tx_json = String::from_utf8(output.stdout)?;
         let tx: ckb_jsonrpc_types::Transaction = serde_json::from_str(&out_tx_json)?;
@@ -458,4 +481,41 @@ async fn fund_via_shell(
 ) -> Result<FundingTx, FundingError> {
     // Never called in WASM
     unreachable!();
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    fn test_funding_context() -> FundingContext {
+        FundingContext {
+            rpc_url: "http://127.0.0.1:8114".to_string(),
+            funding_source_lock_script: packed::Script::default(),
+            funding_source_lock_script_cell_deps: Vec::new(),
+            funding_cell_lock_script: packed::Script::default(),
+            funding_udt_type_script: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fund_via_shell_closes_stdin_before_waiting() {
+        let output_tx: ckb_jsonrpc_types::Transaction = packed::Transaction::default().into();
+        let output_json = serde_json::to_string(&output_tx).expect("serialize tx json");
+        let shell_script = format!("cat >/dev/null; printf '%s' {}", shell_quote(&output_json));
+
+        let funding_tx = fund_via_shell(
+            &shell_script,
+            FundingTx::new(),
+            FundingRequest::default(),
+            test_funding_context(),
+        )
+        .await
+        .expect("shell builder should receive EOF and return tx");
+
+        assert!(funding_tx.as_ref().is_some());
+    }
 }
