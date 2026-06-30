@@ -2076,12 +2076,11 @@ where
 
                 debug_event!(myself, "PeerReconnectBackoffAttempt");
 
-                let addresses = state.get_peer_addresses_by_pubkey(&pubkey);
-                if let Some(addr) = addresses.iter().choose(&mut rand::thread_rng()) {
+                if let Some(addr) = state.select_auto_connect_peer_address(&pubkey) {
                     myself
                         .send_message(NetworkActorMessage::new_command(
                             NetworkActorCommand::ConnectPeer(
-                                addr.clone(),
+                                addr,
                                 false,
                                 PeerConnectSource::Automatic,
                                 None,
@@ -2110,7 +2109,10 @@ where
             NetworkActorCommand::MaintainConnections => {
                 debug!("Trying to connect to peers with mutual channels");
 
-                for (pubkey, channel_id, channel_state) in self.store.get_channel_states(None) {
+                let mut reconnecting_peers = HashSet::new();
+                for (pubkey, channel_id, channel_state) in
+                    self.store.get_active_channel_states(None)
+                {
                     if state.peer_session_map.contains_key(&pubkey) {
                         continue;
                     }
@@ -2121,18 +2123,20 @@ where
                         );
                         continue;
                     }
-                    let addresses = state.get_peer_addresses_by_pubkey(&pubkey);
+                    if !reconnecting_peers.insert(pubkey) {
+                        continue;
+                    }
 
                     debug!(
-                        "Reconnecting channel {:x} peers {:?} in state {:?} with addresses {:?}",
-                        &channel_id, &pubkey, &channel_state, &addresses
+                        "Reconnecting channel {:x} peers {:?} in state {:?}",
+                        &channel_id, &pubkey, &channel_state
                     );
 
-                    if let Some(addr) = addresses.iter().choose(&mut rand::thread_rng()) {
+                    if let Some(addr) = state.select_auto_connect_peer_address(&pubkey) {
                         myself
                             .send_message(NetworkActorMessage::new_command(
                                 NetworkActorCommand::ConnectPeer(
-                                    addr.to_owned(),
+                                    addr,
                                     false,
                                     PeerConnectSource::Automatic,
                                     None,
@@ -4039,6 +4043,7 @@ pub struct NetworkActorState<S, C> {
     gossip_actor: Option<ActorRef<GossipActorMessage>>,
     max_inbound_peers: usize,
     min_outbound_peers: usize,
+    announce_private_addr: bool,
     enable_peer_reconnect_backoff: bool,
     peer_reconnect_backoff_attempts: HashMap<Pubkey, u32>,
     // Peers manually disconnected by the user. Automatic reconnect stays disabled until the user
@@ -5460,6 +5465,13 @@ where
             .collect()
     }
 
+    fn select_auto_connect_peer_address(&self, pubkey: &Pubkey) -> Option<Multiaddr> {
+        select_auto_connect_peer_address(
+            self.get_peer_addresses_by_pubkey(pubkey),
+            self.announce_private_addr,
+        )
+    }
+
     pub(crate) fn save_peer_address(&mut self, pubkey: Pubkey, address: Multiaddr) -> bool {
         if self
             .state_to_be_persisted
@@ -6333,6 +6345,7 @@ where
             gossip_actor,
             max_inbound_peers: config.max_inbound_peers(),
             min_outbound_peers: config.min_outbound_peers(),
+            announce_private_addr: config.announce_private_addr(),
             enable_peer_reconnect_backoff: config.enable_peer_reconnect_backoff(),
             peer_reconnect_backoff_attempts: Default::default(),
             requested_disconnect_peers: Default::default(),
@@ -6732,6 +6745,20 @@ where
             .filter(target_default_transport_matches)
             .choose(&mut rng),
     }
+}
+
+pub(crate) fn select_auto_connect_peer_address<I>(
+    addresses: I,
+    announce_private_addr: bool,
+) -> Option<Multiaddr>
+where
+    I: IntoIterator<Item = Multiaddr>,
+{
+    let filtered_addresses = addresses
+        .into_iter()
+        .filter(|addr| announce_private_addr || crate::utils::is_addr_reachable(addr));
+
+    select_connect_peer_address(filtered_addresses, None)
 }
 
 #[cfg(target_arch = "wasm32")]

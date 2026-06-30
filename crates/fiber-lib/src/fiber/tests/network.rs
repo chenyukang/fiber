@@ -15,8 +15,8 @@ use crate::{
         gossip::{GossipActorMessage, GossipMessageStore},
         graph::ChannelUpdateInfo,
         network::{
-            select_connect_peer_address, AcceptChannelCommand, DebugEvent, NetworkActorStateStore,
-            OpenChannelCommand, PeerDisconnectReason,
+            select_auto_connect_peer_address, select_connect_peer_address, AcceptChannelCommand,
+            DebugEvent, NetworkActorStateStore, OpenChannelCommand, PeerDisconnectReason,
         },
         payment::{SendPaymentCommand, SendPaymentDataExt},
         types::{
@@ -179,6 +179,30 @@ fn test_select_connect_peer_address_defaults_to_tcp_on_native() {
     let selected = select_connect_peer_address(vec![tcp.clone(), ws, wss], None);
 
     assert_eq!(selected, Some(tcp));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn test_select_auto_connect_peer_address_filters_private_addresses() {
+    let private =
+        Multiaddr::from_str("/ip4/192.168.1.1/tcp/8346").expect("valid private multiaddr");
+
+    assert!(select_auto_connect_peer_address(vec![private.clone()], false).is_none());
+    assert_eq!(
+        select_auto_connect_peer_address(vec![private.clone()], true),
+        Some(private)
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn test_select_auto_connect_peer_address_keeps_public_tcp_addresses() {
+    let public = Multiaddr::from_str("/ip4/1.1.1.1/tcp/8346").expect("valid public multiaddr");
+
+    assert_eq!(
+        select_auto_connect_peer_address(vec![public.clone()], false),
+        Some(public)
+    );
 }
 
 #[cfg(target_arch = "wasm32")]
