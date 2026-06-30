@@ -118,7 +118,7 @@ benchmark-test:
 
 .PHONY: wasm-test
 wasm-test:
-	export WORKING_DIR=$(shell pwd) && cd ./.github/wasm-test-runner && npm install && node ./index.js
+	export WORKING_DIR="$$(pwd)" && cd ./.github/wasm-test-runner && npm install && node ./index.js
 
 FUZZ_DURATION ?= 30
 .PHONY: fuzz
