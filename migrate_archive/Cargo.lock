@@ -2118,7 +2118,7 @@ dependencies = [
 [[package]]
 name = "fiber-wasm-db-common"
 version = "0.1.0"
-source = "git+https://github.com/nervosnetwork/fiber.git?branch=migrate%2Fv0.6.0#1cce085111eaa28f8062d5ea394c316bb67de7e6"
+source = "git+https://github.com/nervosnetwork/fiber.git?rev=1cce085111eaa28f8062d5ea394c316bb67de7e6#1cce085111eaa28f8062d5ea394c316bb67de7e6"
 dependencies = [
  "anyhow",
  "bincode 2.0.1",
@@ -2129,7 +2129,7 @@ dependencies = [
 [[package]]
 name = "fiber-wasm-db-common"
 version = "0.1.0"
-source = "git+https://github.com/nervosnetwork/fiber.git?branch=migrate%2Fv0.6.1#1318597f168574c4ed5d68dd1c830c026e392b29"
+source = "git+https://github.com/nervosnetwork/fiber.git?rev=1318597f168574c4ed5d68dd1c830c026e392b29#1318597f168574c4ed5d68dd1c830c026e392b29"
 dependencies = [
  "anyhow",
  "bincode 2.0.1",
@@ -2140,7 +2140,7 @@ dependencies = [
 [[package]]
 name = "fiber-wasm-db-common"
 version = "0.1.0"
-source = "git+https://github.com/nervosnetwork/fiber.git?branch=migrate%2Fv0.7.0#433de2da8bada5be84d4cd5785e693fe8326df68"
+source = "git+https://github.com/nervosnetwork/fiber.git?rev=433de2da8bada5be84d4cd5785e693fe8326df68#433de2da8bada5be84d4cd5785e693fe8326df68"
 dependencies = [
  "anyhow",
  "bincode 2.0.1",
@@ -2173,7 +2173,7 @@ dependencies = [
 [[package]]
 name = "fnn"
 version = "0.6.0"
-source = "git+https://github.com/nervosnetwork/fiber.git?branch=migrate%2Fv0.6.0#1cce085111eaa28f8062d5ea394c316bb67de7e6"
+source = "git+https://github.com/nervosnetwork/fiber.git?rev=1cce085111eaa28f8062d5ea394c316bb67de7e6#1cce085111eaa28f8062d5ea394c316bb67de7e6"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2198,7 +2198,7 @@ dependencies = [
  "console_error_panic_hook",
  "either",
  "fiber-sphinx",
- "fiber-wasm-db-common 0.1.0 (git+https://github.com/nervosnetwork/fiber.git?branch=migrate%2Fv0.6.0)",
+ "fiber-wasm-db-common 0.1.0 (git+https://github.com/nervosnetwork/fiber.git?rev=1cce085111eaa28f8062d5ea394c316bb67de7e6)",
  "futures",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
@@ -2242,7 +2242,7 @@ dependencies = [
 [[package]]
 name = "fnn"
 version = "0.6.1"
-source = "git+https://github.com/nervosnetwork/fiber.git?branch=migrate%2Fv0.6.1#1318597f168574c4ed5d68dd1c830c026e392b29"
+source = "git+https://github.com/nervosnetwork/fiber.git?rev=1318597f168574c4ed5d68dd1c830c026e392b29#1318597f168574c4ed5d68dd1c830c026e392b29"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2267,7 +2267,7 @@ dependencies = [
  "console_error_panic_hook",
  "either",
  "fiber-sphinx",
- "fiber-wasm-db-common 0.1.0 (git+https://github.com/nervosnetwork/fiber.git?branch=migrate%2Fv0.6.1)",
+ "fiber-wasm-db-common 0.1.0 (git+https://github.com/nervosnetwork/fiber.git?rev=1318597f168574c4ed5d68dd1c830c026e392b29)",
  "futures",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
@@ -2311,7 +2311,7 @@ dependencies = [
 [[package]]
 name = "fnn"
 version = "0.7.0-rc1"
-source = "git+https://github.com/nervosnetwork/fiber.git?branch=migrate%2Fv0.7.0#433de2da8bada5be84d4cd5785e693fe8326df68"
+source = "git+https://github.com/nervosnetwork/fiber.git?rev=433de2da8bada5be84d4cd5785e693fe8326df68#433de2da8bada5be84d4cd5785e693fe8326df68"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2336,7 +2336,7 @@ dependencies = [
  "console_error_panic_hook",
  "either",
  "fiber-sphinx",
- "fiber-wasm-db-common 0.1.0 (git+https://github.com/nervosnetwork/fiber.git?branch=migrate%2Fv0.7.0)",
+ "fiber-wasm-db-common 0.1.0 (git+https://github.com/nervosnetwork/fiber.git?rev=433de2da8bada5be84d4cd5785e693fe8326df68)",
  "futures",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
