@@ -360,7 +360,6 @@ where
                             id,
                             amount: tlc.amount,
                             expiry: tlc.expiry,
-                            payment_hash: tlc.payment_hash.into(),
                             forwarding_channel_id: tlc
                                 .forwarding_tlc
                                 .map(|(channel_id, _)| channel_id.into()),

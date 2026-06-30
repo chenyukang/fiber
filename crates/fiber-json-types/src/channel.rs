@@ -533,8 +533,6 @@ pub struct Htlc {
     #[serde_as(as = "U128Hex")]
     #[schemars(schema_with = "schema_as_uint_hex")]
     pub amount: u128,
-    /// The payment hash of the htlc
-    pub payment_hash: Hash256,
     /// The expiry of the htlc
     #[serde_as(as = "U64Hex")]
     #[schemars(schema_with = "schema_as_uint_hex")]
