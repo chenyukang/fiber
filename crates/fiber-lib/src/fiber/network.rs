@@ -2456,18 +2456,20 @@ where
                         let _ = reply.send(Ok(()));
                     }
                     Err(err) => {
-                        self.on_add_tlc_result_event(
-                            myself,
-                            state,
-                            command.payment_hash,
-                            command.attempt_id,
-                            Err((
-                                ProcessingChannelError::TlcForwardingError(err.clone()),
-                                err.clone(),
-                            )),
-                            command.previous_tlc,
-                        )
-                        .await;
+                        if command.previous_tlc.is_some() {
+                            self.on_add_tlc_result_event(
+                                myself,
+                                state,
+                                command.payment_hash,
+                                command.attempt_id,
+                                Err((
+                                    ProcessingChannelError::TlcForwardingError(err.clone()),
+                                    err.clone(),
+                                )),
+                                command.previous_tlc,
+                            )
+                            .await;
+                        }
                         let _ = reply.send(Err(err));
                     }
                 }

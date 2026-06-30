@@ -28,9 +28,9 @@ use ckb_types::packed::{OutPoint, Script};
 pub use fiber_types::PaymentSession;
 pub use fiber_types::SendPaymentData;
 use fiber_types::{
-    Attempt, BasicMppPaymentData, EntityHex, Hash256, HashAlgorithm, HopHint, PaymentCustomRecords,
-    PaymentHopData, PaymentStatus, PeeledPaymentOnionPacket, Privkey, Pubkey, RemoveTlcReason,
-    RouterHop, TlcErr, TlcErrData, TlcErrPacket, TlcErrorCode, TrampolineContext,
+    Attempt, AttemptStatus, BasicMppPaymentData, EntityHex, Hash256, HashAlgorithm, HopHint,
+    PaymentCustomRecords, PaymentHopData, PaymentStatus, PeeledPaymentOnionPacket, Privkey, Pubkey,
+    RemoveTlcReason, RouterHop, TlcErr, TlcErrData, TlcErrPacket, TlcErrorCode, TrampolineContext,
     DEFAULT_MAX_PARTS, DEFAULT_PAYMENT_MPP_ATTEMPT_TRY_LIMIT, USER_CUSTOM_RECORDS_MAX_INDEX,
 };
 use ractor::{call_t, Actor, ActorProcessingErr};
@@ -831,6 +831,10 @@ pub struct PaymentActor<S> {
     store: S,
     network_graph: Arc<RwLock<NetworkGraph<S>>>,
     network: ActorRef<NetworkActorMessage>,
+}
+
+fn should_process_add_tlc_result(status: AttemptStatus) -> bool {
+    matches!(status, AttemptStatus::Created)
 }
 
 #[async_trait::async_trait]
@@ -1737,6 +1741,14 @@ where
             return;
         };
 
+        if !should_process_add_tlc_result(attempt.status) {
+            debug!(
+                "Ignoring stale AddTlc result for payment {:?} attempt {:?} in status {:?}",
+                payment_hash, attempt_id, attempt.status
+            );
+            return;
+        }
+
         match add_tlc_result {
             Ok(_) => {
                 attempt.set_inflight_status();
@@ -1997,5 +2009,19 @@ where
         self.resume_payment_session(myself, state, None).await?;
         payment_session.flush_attempts(&self.store);
         return Ok(payment_session.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_tlc_result_is_processed_only_before_attempt_leaves_created() {
+        assert!(should_process_add_tlc_result(AttemptStatus::Created));
+        assert!(!should_process_add_tlc_result(AttemptStatus::Inflight));
+        assert!(!should_process_add_tlc_result(AttemptStatus::Retrying));
+        assert!(!should_process_add_tlc_result(AttemptStatus::Success));
+        assert!(!should_process_add_tlc_result(AttemptStatus::Failed));
     }
 }
