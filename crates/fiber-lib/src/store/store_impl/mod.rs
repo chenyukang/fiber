@@ -988,7 +988,13 @@ impl ChannelOpenRecordStore for Store {
 impl InvoiceStore for Store {
     fn get_invoice(&self, id: &Hash256) -> Option<CkbInvoice> {
         let key = [&[CKB_INVOICE_PREFIX], id.as_ref()].concat();
-        self.get(key).map(|v| deserialize_from(&v, "CkbInvoice"))
+        self.get(key).and_then(|v| match bincode::deserialize(&v) {
+            Ok(invoice) => Some(invoice),
+            Err(err) => {
+                tracing::warn!("Failed to deserialize stored invoice {:?}: {}", id, err);
+                None
+            }
+        })
     }
 
     fn insert_invoice(

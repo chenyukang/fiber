@@ -160,30 +160,75 @@ uint_as_hex!(U64Hex, u64);
 uint_as_hex!(U32Hex, u32);
 uint_as_hex!(U16Hex, u16);
 
+fn parse_u64_hex(hex: &str) -> Result<u64, String> {
+    let bytes = hex.as_bytes();
+    if bytes.len() < 3 || &bytes[..2] != b"0x" {
+        return Err(format!("uint hex string does not start with 0x: {}", hex));
+    }
+    if bytes.len() > 3 && &bytes[2..3] == b"0" {
+        return Err(format!(
+            "uint hex string starts with redundant leading zeros: {}",
+            hex
+        ));
+    }
+    u64::from_str_radix(&hex[2..], 16)
+        .map_err(|err| format!("failed to parse uint hex {}: {:?}", hex, err))
+}
+
+pub mod u64_hex {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(&format!("0x{:x}", value))
+        } else {
+            value.serialize(serializer)
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let hex = String::deserialize(deserializer)?;
+            super::parse_u64_hex(&hex).map_err(serde::de::Error::custom)
+        } else {
+            u64::deserialize(deserializer)
+        }
+    }
+}
+
 /// Module for hex serialization of Duration
 pub mod duration_hex {
     use core::time::Duration;
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let nanos = duration.as_secs();
-        serializer.serialize_str(&format!("0x{:x}", nanos))
+        if serializer.is_human_readable() {
+            let seconds = duration.as_secs();
+            serializer.serialize_str(&format!("0x{:x}", seconds))
+        } else {
+            duration.serialize(serializer)
+        }
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
     where
         D: Deserializer<'de>,
     {
+        if !deserializer.is_human_readable() {
+            return Duration::deserialize(deserializer);
+        }
+
         let hex_str = String::deserialize(deserializer)?;
-        let seconds = u64::from_str_radix(&hex_str[2..], 16).map_err(|err| {
-            serde::de::Error::custom(format!(
-                "failed to parse duration hex {}: {:?}",
-                hex_str, err
-            ))
-        })?;
+        let seconds = super::parse_u64_hex(&hex_str).map_err(serde::de::Error::custom)?;
 
         Ok(Duration::from_secs(seconds))
     }

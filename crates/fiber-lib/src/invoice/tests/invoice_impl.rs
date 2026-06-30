@@ -417,13 +417,39 @@ fn test_invoice_serialize() {
     eprintln!("{:?}", bincode);
     let check_sum = blake2b_256(&bincode);
     let expect_check_sum = [
-        168, 120, 74, 42, 101, 19, 106, 192, 101, 97, 97, 237, 107, 124, 175, 49, 149, 137, 212,
-        75, 217, 64, 239, 42, 138, 4, 219, 200, 8, 123, 112, 75,
+        138, 248, 143, 176, 155, 250, 154, 226, 131, 16, 50, 245, 72, 168, 179, 83, 232, 145, 27,
+        235, 114, 166, 59, 156, 22, 83, 30, 61, 31, 151, 51, 10,
     ];
     assert_eq!(check_sum, &expect_check_sum[..]);
     eprintln!("{:?}", check_sum);
     let decoded = bincode::deserialize::<CkbInvoice>(&bincode).unwrap();
     assert_eq!(decoded, invoice);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_invoice_attribute_bincode_uses_non_human_readable_layout() {
+    let attrs = vec![
+        Attribute::FinalHtlcTimeout(5),
+        Attribute::FinalHtlcMinimumExpiryDelta(12),
+        Attribute::ExpiryTime(Duration::from_secs(1024)),
+    ];
+
+    let encoded = bincode::serialize(&attrs).unwrap();
+    assert!(!encoded.windows(2).any(|window| window == b"0x"));
+
+    let decoded = bincode::deserialize::<Vec<Attribute>>(&encoded).unwrap();
+    assert_eq!(decoded, attrs);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn test_invoice_attribute_json_rejects_malformed_duration_without_panic() {
+    let result =
+        std::panic::catch_unwind(|| serde_json::from_str::<Attribute>(r#"{"expiry_time":""}"#));
+
+    assert!(result.is_ok());
+    assert!(result.unwrap().is_err());
 }
 
 #[test]

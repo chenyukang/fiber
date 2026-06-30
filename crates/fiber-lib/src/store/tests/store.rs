@@ -37,7 +37,9 @@ use ckb_types::prelude::*;
 use ckb_types::H256;
 #[cfg(not(target_arch = "wasm32"))]
 use core::cmp::Ordering;
+use fiber_store::backend::StorageBackend;
 use fiber_types::protocol::AnnouncedNodeName;
+use fiber_types::schema::CKB_INVOICE_PREFIX;
 use fiber_types::{AttemptStatus, CloseFlags, HashAlgorithm, PaymentHopData};
 #[cfg(not(target_arch = "wasm32"))]
 use fiber_types::{SettlementTlc, TLCId};
@@ -126,6 +128,21 @@ fn test_store_invoice() {
     let status = CkbInvoiceStatus::Paid;
     store.update_invoice_status(hash, status).unwrap();
     assert_eq!(store.get_invoice_status(hash), Some(status));
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+fn test_store_get_invoice_returns_none_for_malformed_bincode() {
+    let (store, _dir) = generate_store();
+    let payment_hash = gen_rand_sha256_hash();
+    let key = [&[CKB_INVOICE_PREFIX], payment_hash.as_ref()].concat();
+
+    store.put(key, b"malformed invoice bincode");
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.get_invoice(&payment_hash)
+    }));
+    assert_eq!(result.unwrap(), None);
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), test)]

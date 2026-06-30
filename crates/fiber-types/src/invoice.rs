@@ -544,7 +544,7 @@ impl InvoiceSignature {
 }
 
 use crate::protocol::FeatureVector;
-use crate::serde_utils::{duration_hex, U128Hex, U64Hex};
+use crate::serde_utils::{duration_hex, u64_hex, U128Hex};
 use crate::Hash256;
 use secp256k1::PublicKey;
 use std::time::Duration;
@@ -555,10 +555,10 @@ use std::time::Duration;
 #[serde(rename_all = "snake_case")]
 pub enum Attribute {
     /// This attribute is deprecated since v0.6.0. The final TLC timeout, in milliseconds.
-    #[serde(with = "U64Hex")]
+    #[serde(with = "u64_hex")]
     FinalHtlcTimeout(u64),
     /// The final TLC minimum expiry delta, in milliseconds. Default is 160 minutes.
-    #[serde(with = "U64Hex")]
+    #[serde(with = "u64_hex")]
     FinalHtlcMinimumExpiryDelta(u64),
     /// The expiry time of the invoice, in seconds.
     #[serde(with = "duration_hex")]
