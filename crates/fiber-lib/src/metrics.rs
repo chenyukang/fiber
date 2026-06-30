@@ -1,4 +1,4 @@
-use std::net::ToSocketAddrs;
+use std::net::{SocketAddr, ToSocketAddrs};
 use tracing::error;
 
 /// READY_CHANNEL_COUNT + SHUTTING_DOWN_CHANNEL_COUNT
@@ -47,7 +47,7 @@ pub const CCH_LND_TRACKER_INVOICE_QUEUE_LEN: &str = "fiber.cch.lnd_tracker.invoi
 pub const CCH_LND_TRACKER_ACTIVE_INVOICE_TRACKERS: &str =
     "fiber.cch.lnd_tracker.active_invoice_trackers";
 
-pub fn start_metrics(metrics_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn resolve_metrics_addr(metrics_addr: &str) -> Result<SocketAddr, std::io::Error> {
     let socket_addr = metrics_addr
         .to_socket_addrs()
         .map_err(|e| {
@@ -63,6 +63,24 @@ pub fn start_metrics(metrics_addr: &str) -> Result<(), Box<dyn std::error::Error
             error!("{}", err);
             err
         })?;
+
+    if !socket_addr.ip().is_loopback() {
+        let err = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "metrics endpoint must listen on a loopback address, got '{}'",
+                socket_addr
+            ),
+        );
+        error!("{}", err);
+        return Err(err);
+    }
+
+    Ok(socket_addr)
+}
+
+pub fn start_metrics(metrics_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let socket_addr = resolve_metrics_addr(metrics_addr)?;
 
     let prometheus_builder = metrics_exporter_prometheus::PrometheusBuilder::new()
         .set_buckets_for_metric(
@@ -120,4 +138,28 @@ pub fn start_metrics(metrics_addr: &str) -> Result<(), Box<dyn std::error::Error
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_metrics_addr;
+
+    #[test]
+    fn metrics_addr_allows_loopback_addresses() {
+        assert!(resolve_metrics_addr("127.0.0.1:9090").is_ok());
+        assert!(resolve_metrics_addr("[::1]:9090").is_ok());
+    }
+
+    #[test]
+    fn metrics_addr_rejects_non_loopback_addresses() {
+        for addr in [
+            "0.0.0.0:9090",
+            "[::]:9090",
+            "192.168.1.10:9090",
+            "8.8.8.8:9090",
+        ] {
+            let err = resolve_metrics_addr(addr).expect_err(addr);
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+    }
 }
