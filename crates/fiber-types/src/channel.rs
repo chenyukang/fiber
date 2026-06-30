@@ -893,6 +893,7 @@ pub struct AddTlcCommand {
     /// This used to mark a trampoline-boundary TLC for channel-level error wrapping. Trampoline
     /// payment failures are now resolved at the network/payment layer instead, so this field should
     /// not be used for new error attribution logic. Removing it requires a storage migration.
+    #[serde(default)]
     pub is_trampoline_hop: bool,
     pub previous_tlc: Option<PrevTlcInfo>,
 }
@@ -1794,5 +1795,34 @@ impl From<&crate::protocol::ChannelUpdate> for ChannelUpdateInfo {
             tlc_minimum_value: update.tlc_minimum_value,
             fee_rate: update.tlc_fee_proportional_millionths as u64,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_tlc_command_defaults_missing_is_trampoline_hop() {
+        let command = AddTlcCommand {
+            amount: 42,
+            payment_hash: Hash256::from([1u8; 32]),
+            attempt_id: None,
+            expiry: 100,
+            hash_algorithm: HashAlgorithm::CkbHash,
+            onion_packet: None,
+            shared_secret: [0u8; 32],
+            is_trampoline_hop: true,
+            previous_tlc: None,
+        };
+        let mut value = serde_json::to_value(command).expect("serialize AddTlcCommand");
+        value
+            .as_object_mut()
+            .expect("AddTlcCommand is an object")
+            .remove("is_trampoline_hop");
+
+        let decoded: AddTlcCommand =
+            serde_json::from_value(value).expect("deserialize AddTlcCommand");
+        assert!(!decoded.is_trampoline_hop);
     }
 }
