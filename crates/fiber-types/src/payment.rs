@@ -1,6 +1,7 @@
 //! Payment-related types.
 
 use crate::gen::fiber as molecule_fiber;
+use crate::serde_utils::{human_readable_u128_hex, human_readable_u64_hex};
 use crate::Hash256;
 use crate::{EntityHex, Pubkey, SliceHex};
 use ckb_types::prelude::{Pack, Unpack};
@@ -444,8 +445,6 @@ pub struct SessionRouteNode {
     pub channel_outpoint: OutPoint,
 }
 
-use crate::U64Hex;
-
 /// A router hop information for a payment, a paymenter router is an array of RouterHop,
 /// a router hop generally implies hop `target` will receive `amount_received` with `channel_outpoint` of channel.
 /// Improper hop hint may make payment fail, for example the specified channel do not have enough capacity.
@@ -459,12 +458,12 @@ pub struct RouterHop {
     pub channel_outpoint: OutPoint,
     /// The amount that the source node will transfer to the target node.
     /// We have already added up all the fees along the path, so this amount can be used directly for the TLC.
-    #[serde_as(as = "U128Hex")]
+    #[serde(with = "human_readable_u128_hex")]
     pub amount_received: u128,
     /// The expiry for the TLC that the source node sends to the target node.
     /// We have already added up all the expiry deltas along the path,
     /// the only thing missing is current time. So the expiry is the current time plus the expiry delta.
-    #[serde_as(as = "U64Hex")]
+    #[serde(with = "human_readable_u64_hex")]
     pub incoming_tlc_expiry: u64,
 }
 
@@ -1150,4 +1149,66 @@ pub struct TimedResult {
 pub enum Direction {
     Forward,
     Backward,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use ckb_types::prelude::Pack;
+    use serde::Serialize;
+    use serde_with::serde_as;
+
+    fn sample_router_hop() -> RouterHop {
+        let pubkey_bytes =
+            hex::decode("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+                .expect("valid hex pubkey");
+
+        RouterHop {
+            target: Pubkey::from_slice(&pubkey_bytes).expect("valid compressed pubkey"),
+            channel_outpoint: OutPoint::new([42u8; 32].pack(), 7),
+            amount_received: 123_456_789_012_345_678_901u128,
+            incoming_tlc_expiry: 1_234_567u64,
+        }
+    }
+
+    #[test]
+    fn test_router_hop_json_uses_hex_fields() {
+        let hop = sample_router_hop();
+        let json = serde_json::to_value(&hop).expect("serialize router hop to json");
+
+        assert_eq!(json["amount_received"], "0x6b14e9f812f366c35");
+        assert_eq!(json["incoming_tlc_expiry"], "0x12d687");
+
+        let decoded: RouterHop =
+            serde_json::from_value(json).expect("deserialize router hop from json");
+        assert_eq!(decoded, hop);
+    }
+
+    #[test]
+    fn test_router_hop_deserializes_legacy_bincode_numeric_layout() {
+        #[serde_as]
+        #[derive(Serialize)]
+        struct LegacyRouterHop {
+            target: Pubkey,
+            #[serde_as(as = "EntityHex")]
+            channel_outpoint: OutPoint,
+            amount_received: u128,
+            incoming_tlc_expiry: u64,
+        }
+
+        let hop = sample_router_hop();
+        let legacy = LegacyRouterHop {
+            target: hop.target,
+            channel_outpoint: hop.channel_outpoint.clone(),
+            amount_received: hop.amount_received,
+            incoming_tlc_expiry: hop.incoming_tlc_expiry,
+        };
+
+        let encoded = bincode::serialize(&legacy).expect("serialize legacy router hop");
+        let decoded: RouterHop =
+            bincode::deserialize(&encoded).expect("deserialize legacy router hop");
+
+        assert_eq!(decoded, hop);
+    }
 }

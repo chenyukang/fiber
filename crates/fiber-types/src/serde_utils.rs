@@ -160,6 +160,56 @@ uint_as_hex!(U64Hex, u64);
 uint_as_hex!(U32Hex, u32);
 uint_as_hex!(U16Hex, u16);
 
+macro_rules! human_readable_uint_as_hex {
+    ($name:ident, $ty:ty) => {
+        pub mod $name {
+            use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+
+            pub fn serialize<S>(value: &$ty, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                if serializer.is_human_readable() {
+                    serializer.serialize_str(&format!("0x{:x}", value))
+                } else {
+                    value.serialize(serializer)
+                }
+            }
+
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<$ty, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                if !deserializer.is_human_readable() {
+                    return <$ty>::deserialize(deserializer);
+                }
+
+                let hex = String::deserialize(deserializer)?;
+                let bytes = hex.as_bytes();
+                if bytes.len() < 3 || &bytes[..2] != b"0x" {
+                    return Err(Error::custom(format!(
+                        "uint hex string does not start with 0x: {}",
+                        hex
+                    )));
+                }
+                if bytes.len() > 3 && &bytes[2..3] == b"0" {
+                    return Err(Error::custom(format!(
+                        "uint hex string starts with redundant leading zeros: {}",
+                        hex
+                    )));
+                }
+
+                <$ty>::from_str_radix(&hex[2..], 16).map_err(|err| {
+                    Error::custom(format!("failed to parse uint hex {}: {:?}", hex, err))
+                })
+            }
+        }
+    };
+}
+
+human_readable_uint_as_hex!(human_readable_u128_hex, u128);
+human_readable_uint_as_hex!(human_readable_u64_hex, u64);
+
 /// Module for hex serialization of Duration
 pub mod duration_hex {
     use core::time::Duration;
