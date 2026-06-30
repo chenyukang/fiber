@@ -159,24 +159,11 @@ impl ActionExecutor for SendLightningOutgoingPaymentExecutor {
         }
         let event = match payment_result_opt {
             Some(Ok(payment)) => map_lnd_payment_changed_event(payment)?,
-            Some(Err(err)) if err.code() == tonic::Code::AlreadyExists => {
-                CchTrackingEvent::PaymentChanged {
-                    payment_hash: self.payment_hash,
-                    payment_preimage: None,
-                    status: PaymentStatus::Inflight,
-                    failure_reason: None,
-                }
-            }
             Some(Err(err)) => {
                 let failure_reason =
                     format!("SendLightningOutgoingPaymentExecutor failure: {:?}", err);
-                if Self::is_permanent_error(&err) {
-                    CchTrackingEvent::PaymentChanged {
-                        payment_hash: self.payment_hash,
-                        payment_preimage: None,
-                        status: PaymentStatus::Failed,
-                        failure_reason: Some(failure_reason),
-                    }
+                if let Some(event) = Self::map_lnd_send_payment_error(self.payment_hash, &err) {
+                    event
                 } else {
                     tracing::warn!(
                         "SendLightningOutgoingPaymentExecutor transient error, will retry. code: {}, error: {}",
@@ -198,6 +185,42 @@ impl ActionExecutor for SendLightningOutgoingPaymentExecutor {
 }
 
 impl SendLightningOutgoingPaymentExecutor {
+    pub(crate) fn map_lnd_send_payment_error(
+        payment_hash: Hash256,
+        status: &tonic::Status,
+    ) -> Option<CchTrackingEvent> {
+        if Self::is_already_paid_error(status) {
+            return Some(CchTrackingEvent::PaymentChanged {
+                payment_hash,
+                payment_preimage: None,
+                status: PaymentStatus::Inflight,
+                failure_reason: None,
+            });
+        }
+
+        if Self::is_permanent_error(status) {
+            return Some(CchTrackingEvent::PaymentChanged {
+                payment_hash,
+                payment_preimage: None,
+                status: PaymentStatus::Failed,
+                failure_reason: Some(format!(
+                    "SendLightningOutgoingPaymentExecutor failure: {:?}",
+                    status
+                )),
+            });
+        }
+
+        None
+    }
+
+    fn is_already_paid_error(status: &tonic::Status) -> bool {
+        matches!(status.code(), tonic::Code::AlreadyExists)
+            || status
+                .message()
+                .to_lowercase()
+                .contains("invoice is already paid")
+    }
+
     fn is_permanent_error(status: &tonic::Status) -> bool {
         // Check for explicit invalid argument errors
         if matches!(status.code(), tonic::Code::InvalidArgument) {
@@ -210,7 +233,6 @@ impl SendLightningOutgoingPaymentExecutor {
             let msg = status.message().to_lowercase();
             // These are validation/policy errors that won't be fixed by retrying
             return msg.contains("self-payments not allowed")
-                || msg.contains("invoice is already paid")
                 || msg.contains("invoice expired")
                 || msg.contains("incorrect payment amount")
                 || msg.contains("payment hash mismatch")
