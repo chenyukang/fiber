@@ -575,8 +575,7 @@ pub struct ShutdownChannelParams {
 pub struct UpdateChannelParams {
     /// The channel ID of the channel to update
     pub channel_id: Hash256,
-    /// Whether the channel is enabled, default value is true
-    #[serde(default = "default_true")]
+    /// Whether the channel is enabled
     pub enabled: Option<bool>,
     /// The expiry delta for the TLC locktime
     #[serde_as(as = "Option<U64Hex>")]
@@ -590,4 +589,29 @@ pub struct UpdateChannelParams {
     #[serde_as(as = "Option<U128Hex>")]
     #[schemars(schema_with = "schema_as_uint_hex_optional")]
     pub tlc_fee_proportional_millionths: Option<u128>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_update_channel_params_preserves_omitted_enabled() {
+        let params: UpdateChannelParams = serde_json::from_str(
+            r#"{"channel_id":"0x0000000000000000000000000000000000000000000000000000000000000000"}"#,
+        )
+        .expect("valid update_channel params");
+
+        assert_eq!(params.enabled, None);
+    }
+
+    #[test]
+    fn test_update_channel_params_accepts_explicit_enabled() {
+        let params: UpdateChannelParams = serde_json::from_str(
+            r#"{"channel_id":"0x0000000000000000000000000000000000000000000000000000000000000000","enabled":true}"#,
+        )
+        .expect("valid update_channel params");
+
+        assert_eq!(params.enabled, Some(true));
+    }
 }
