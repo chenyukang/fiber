@@ -203,11 +203,8 @@ impl UdtCfgInfosExt for UdtCfgInfos {
 pub const CKB_RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub fn new_ckb_rpc_async_client(rpc_url: &str) -> CkbRpcAsyncClient {
-    #[cfg(not(target_arch = "wasm32"))]
-    return CkbRpcAsyncClient::with_builder(rpc_url, |builder| builder.timeout(CKB_RPC_TIMEOUT))
-        .expect("create ckb rpc client should not fail");
-    #[cfg(target_arch = "wasm32")]
-    return CkbRpcAsyncClient::new(rpc_url);
+    CkbRpcAsyncClient::with_builder(rpc_url, |builder| builder.timeout(CKB_RPC_TIMEOUT))
+        .expect("create ckb rpc client should not fail")
 }
 
 pub fn new_default_cell_collector(rpc_url: &str) -> DefaultCellCollector {
