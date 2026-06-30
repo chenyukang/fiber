@@ -52,6 +52,7 @@ pub(crate) fn map_tx_builder_error(e: TxBuilderError) -> FundingError {
 // 64-byte compact signature + 1-byte recovery id. The full serialized witness
 // is larger because it also includes Molecule table/bytes headers.
 pub(crate) const SECP_SIGHASH_PLACEHOLDER_SIGNATURE_BYTES: usize = 65;
+const LEGACY_SECP_SIGHASH_PLACEHOLDER_SIGNATURE_BYTES: usize = 170;
 
 pub(crate) fn secp_sighash_placeholder_witness() -> packed::WitnessArgs {
     packed::WitnessArgs::new_builder()
@@ -66,7 +67,26 @@ pub(crate) fn secp_sighash_placeholder_witness() -> packed::WitnessArgs {
 }
 
 pub(crate) fn is_secp_sighash_placeholder_witness(witness: &[u8]) -> bool {
-    witness == secp_sighash_placeholder_witness().as_slice()
+    is_zero_lock_placeholder_witness(witness, SECP_SIGHASH_PLACEHOLDER_SIGNATURE_BYTES)
+        || is_zero_lock_placeholder_witness(
+            witness,
+            LEGACY_SECP_SIGHASH_PLACEHOLDER_SIGNATURE_BYTES,
+        )
+}
+
+fn is_zero_lock_placeholder_witness(witness: &[u8], lock_len: usize) -> bool {
+    let Ok(witness_args) = packed::WitnessArgs::from_slice(witness) else {
+        return false;
+    };
+    if witness_args.input_type().to_opt().is_some() || witness_args.output_type().to_opt().is_some()
+    {
+        return false;
+    }
+    let Some(lock) = witness_args.lock().to_opt() else {
+        return false;
+    };
+    let lock = lock.raw_data();
+    lock.len() == lock_len && lock.iter().all(|byte| *byte == 0)
 }
 
 /// Funding transaction wrapper.

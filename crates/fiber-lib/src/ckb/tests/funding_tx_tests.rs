@@ -434,4 +434,18 @@ fn test_secp_sighash_placeholder_witness_matches_sdk_layout() {
 
     assert_eq!(lock.len(), SECP_SIGHASH_PLACEHOLDER_SIGNATURE_BYTES);
     assert!(is_secp_sighash_placeholder_witness(placeholder.as_slice()));
+
+    let legacy_placeholder = packed::WitnessArgs::new_builder()
+        .lock(Some(molecule::bytes::Bytes::from(vec![0u8; 170])).pack())
+        .build();
+    assert!(is_secp_sighash_placeholder_witness(
+        legacy_placeholder.as_slice()
+    ));
+
+    let non_zero_lock = packed::WitnessArgs::new_builder()
+        .lock(Some(molecule::bytes::Bytes::from(vec![1u8; 170])).pack())
+        .build();
+    assert!(!is_secp_sighash_placeholder_witness(
+        non_zero_lock.as_slice()
+    ));
 }
