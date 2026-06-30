@@ -31,13 +31,14 @@ pub struct ProfileArtifacts {
 /// `./profiles`.
 pub async fn collect_flamegraph(duration_secs: u64) -> Result<PathBuf> {
     let duration_secs = duration_secs.max(1);
+    let profiler = Arc::clone(global_profiler());
 
-    global_profiler().start().await?;
+    let mut session = profiler.start_session().await?;
 
     tokio::time::sleep(Duration::from_secs(duration_secs)).await;
 
-    global_profiler().stop().await?;
-    let artifacts = global_profiler().export().await?;
+    session.stop().await?;
+    let artifacts = profiler.export().await?;
 
     Ok(artifacts.flamegraph_svg)
 }
@@ -78,7 +79,45 @@ struct CompletedProfile {
     duration: Duration,
 }
 
+struct ActiveProfile {
+    profiler: Arc<Profiler>,
+    stopped: bool,
+}
+
+impl ActiveProfile {
+    async fn stop(&mut self) -> Result<()> {
+        self.profiler.stop().await?;
+        self.stopped = true;
+        Ok(())
+    }
+}
+
+impl Drop for ActiveProfile {
+    fn drop(&mut self) {
+        if self.stopped {
+            return;
+        }
+
+        let profiler = Arc::clone(&self.profiler);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                if let Err(err) = profiler.abort().await {
+                    tracing::warn!("failed to abort cancelled profiler session: {err:?}");
+                }
+            });
+        }
+    }
+}
+
 impl Profiler {
+    async fn start_session(self: &Arc<Self>) -> Result<ActiveProfile> {
+        self.start().await?;
+        Ok(ActiveProfile {
+            profiler: Arc::clone(self),
+            stopped: false,
+        })
+    }
+
     async fn start(&self) -> Result<()> {
         {
             let state = self.state.read().await;
@@ -103,6 +142,13 @@ impl Profiler {
         // Discard stale exports so callers cannot read a profile from a previous run by mistake.
         state.last_capture = None;
 
+        Ok(())
+    }
+
+    async fn abort(&self) -> Result<()> {
+        let mut state = self.state.write().await;
+        state.guard.take();
+        state.last_capture = None;
         Ok(())
     }
 
