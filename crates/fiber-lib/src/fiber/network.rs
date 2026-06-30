@@ -2877,6 +2877,12 @@ where
                         ))
                         .expect(ASSUME_NETWORK_MYSELF_ALIVE);
                 }
+            } else {
+                myself
+                    .send_message(NetworkActorMessage::new_command(
+                        NetworkActorCommand::SettleHoldTlcSet(payment_hash),
+                    ))
+                    .expect(ASSUME_NETWORK_MYSELF_ALIVE);
             }
         }
     }
