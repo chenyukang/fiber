@@ -2888,8 +2888,8 @@ where
         Cursor::new(timestamp, BroadcastMessageID::default())
     }
 
-    fn get_control(&self) -> &ServiceAsyncControl {
-        self.control.as_ref().expect("control exists")
+    fn get_control(&self) -> crate::Result<&ServiceAsyncControl> {
+        require_gossip_control(self.control.as_ref())
     }
 
     async fn send_message_to_session(
@@ -2897,7 +2897,7 @@ where
         session_id: SessionId,
         message: GossipMessage,
     ) -> crate::Result<()> {
-        send_message_to_session(self.get_control(), session_id, message).await?;
+        send_message_to_session(self.get_control()?, session_id, message).await?;
         Ok(())
     }
 
@@ -3187,6 +3187,12 @@ fn classify_verify_and_save_broadcast_message_error(
         }
         _ => Some(GossipViolation::InvalidBroadcastMessage),
     }
+}
+
+fn require_gossip_control(
+    control: Option<&ServiceAsyncControl>,
+) -> crate::Result<&ServiceAsyncControl> {
+    control.ok_or(Error::GossipControlNotReady)
 }
 
 async fn send_message_to_session(
@@ -4391,6 +4397,14 @@ mod tests {
             outbound_delay_queue_capacity: 16,
             inbound_channel_update: ChannelUpdateRateLimitConfig::default(),
         })
+    }
+
+    #[test]
+    fn test_missing_gossip_control_returns_error_without_panicking() {
+        let result = std::panic::catch_unwind(|| require_gossip_control(None));
+
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), Err(Error::GossipControlNotReady)));
     }
 
     #[test]

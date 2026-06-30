@@ -24,6 +24,8 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("Peer not found error: {0:?}")]
     PeerNotFound(Pubkey),
+    #[error("Gossip service control is not ready")]
+    GossipControlNotReady,
     #[error("No matching address for peer {0:?} with transport type {1:?}")]
     NoMatchingAddress(Pubkey, TransportType),
     #[error(
