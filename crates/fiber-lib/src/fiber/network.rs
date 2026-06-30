@@ -6106,6 +6106,7 @@ where
 
             // Set SOCKS5 proxy config
             if let Some(proxy_url) = &config.proxy.proxy_url {
+                let log_proxy_url = super::proxy::redact_proxy_url_for_log(proxy_url);
                 match super::proxy::check_proxy_url(proxy_url) {
                     Ok(()) => {
                         builder = builder
@@ -6113,13 +6114,13 @@ where
                             .tcp_proxy_random_auth(config.proxy.proxy_random_auth);
                         info!(
                             "Set tcp_proxy_config: {:?}, proxy_random_auth: {}",
-                            proxy_url, config.proxy.proxy_random_auth
+                            log_proxy_url, config.proxy.proxy_random_auth
                         );
                     }
                     Err(err) => {
                         error!(
                             "Invalid proxy_url in config, skipping tcp_proxy_config. proxy_url={:?}, error={}",
-                            proxy_url, err
+                            log_proxy_url, err
                         );
                     }
                 }
@@ -6134,12 +6135,15 @@ where
                 }
             });
             if let Some(ref onion_proxy_url) = onion_proxy_url {
-                use crate::fiber::proxy::check_proxy_url;
+                use crate::fiber::proxy::{check_proxy_url, redact_proxy_url_for_log};
 
                 check_proxy_url(onion_proxy_url)
                     .map_err(|e| anyhow::anyhow!("Invalid onion proxy url: {}", e))?;
 
-                info!("Set tcp_onion_config: {:?}", onion_proxy_url);
+                info!(
+                    "Set tcp_onion_config: {:?}",
+                    redact_proxy_url_for_log(onion_proxy_url)
+                );
                 builder = builder.tcp_onion_config(onion_proxy_url);
             }
 

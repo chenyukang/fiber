@@ -28,7 +28,7 @@ fn default_proxy_random_auth() -> bool {
 pub(crate) fn check_proxy_url(proxy_url: &str) -> Result<(), String> {
     let parsed_url = Url::parse(proxy_url).map_err(|e| e.to_string())?;
     if parsed_url.host_str().is_none() {
-        return Err(format!("missing host in proxy url: {}", proxy_url));
+        return Err("missing host in proxy url".to_string());
     }
     let scheme = parsed_url.scheme();
     if scheme != "socks5" {
@@ -38,9 +38,24 @@ pub(crate) fn check_proxy_url(proxy_url: &str) -> Result<(), String> {
         ));
     }
     if parsed_url.port().is_none() {
-        return Err(format!("missing port in proxy url: {}", proxy_url));
+        return Err("missing port in proxy url".to_string());
     }
     Ok(())
+}
+
+pub(crate) fn redact_proxy_url_for_log(proxy_url: &str) -> String {
+    let Ok(mut parsed_url) = Url::parse(proxy_url) else {
+        return "<invalid proxy url>".to_string();
+    };
+
+    if !parsed_url.username().is_empty() {
+        let _ = parsed_url.set_username("REDACTED");
+    }
+    if parsed_url.password().is_some() {
+        let _ = parsed_url.set_password(Some("REDACTED"));
+    }
+
+    parsed_url.to_string()
 }
 
 #[cfg(test)]
@@ -62,9 +77,12 @@ mod tests {
 
     #[test]
     fn test_missing_port() {
-        let result = check_proxy_url("socks5://127.0.0.1");
+        let result = check_proxy_url("socks5://username:password@127.0.0.1");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("missing port"));
+        let err = result.unwrap_err();
+        assert!(err.contains("missing port"));
+        assert!(!err.contains("username"));
+        assert!(!err.contains("password"));
     }
 
     #[test]
@@ -81,5 +99,13 @@ mod tests {
         assert_eq!(parsed.password(), Some("password"));
         assert_eq!(parsed.host_str(), Some("localhost"));
         assert_eq!(parsed.port(), Some(1080));
+    }
+
+    #[test]
+    fn test_redact_proxy_url_for_log() {
+        let redacted = redact_proxy_url_for_log("socks5://username:password@localhost:1080");
+        assert_eq!(redacted, "socks5://REDACTED:REDACTED@localhost:1080");
+        assert!(!redacted.contains("username"));
+        assert!(!redacted.contains("password"));
     }
 }
