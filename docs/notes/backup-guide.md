@@ -51,7 +51,11 @@ Back up the entire node directory (`fiber-dir`), which includes:
    ```
 2. **Start Node**:
    ```bash
-   FIBER_SECRET_KEY_PASSWORD='YOUR_PASSWORD' ./fnn -c ./fiber-dir/config.yml -d ./fiber-dir
+   read -r -s -p "Fiber secret key password: " FIBER_SECRET_KEY_PASSWORD
+   printf '\n'
+   export FIBER_SECRET_KEY_PASSWORD
+   ./fnn -c ./fiber-dir/config.yml -d ./fiber-dir
+   unset FIBER_SECRET_KEY_PASSWORD
    ```
 
 **Warning**: Using the wrong password will trigger a startup error (`Secret key file error: decryption failed`). Double-check the password before starting.
@@ -71,11 +75,20 @@ If you lose the `FIBER_SECRET_KEY_PASSWORD` but have a plaintext private key (no
    ```
 3. **Add Plaintext Key**:
    ```bash
-   mkdir fiber-dir/ckb
-   echo "YOUR_PLAINTEXT_KEY" > fiber-dir/ckb/key
+   umask 077
+   mkdir -p fiber-dir/ckb
+   read -r -s -p "Plaintext CKB private key: " PLAINTEXT_CKB_KEY
+   printf '\n'
+   printf '%s\n' "$PLAINTEXT_CKB_KEY" > fiber-dir/ckb/key
+   unset PLAINTEXT_CKB_KEY
+   chmod 600 fiber-dir/ckb/key
    ```
 4. **Start Node with New Password**:
    ```bash
-   FIBER_SECRET_KEY_PASSWORD='NEW_PASSWORD' ./fnn -c ./fiber-dir/config.yml -d ./fiber-dir
+   read -r -s -p "New Fiber secret key password: " FIBER_SECRET_KEY_PASSWORD
+   printf '\n'
+   export FIBER_SECRET_KEY_PASSWORD
+   ./fnn -c ./fiber-dir/config.yml -d ./fiber-dir
+   unset FIBER_SECRET_KEY_PASSWORD
    ```
 5. **Secure the Key**: The `ckb/key` file will be re-encrypted with the new password. Store the new password securely.
