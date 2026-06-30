@@ -177,6 +177,9 @@ pub enum OutboundTlcStatus {
     RemoveWaitAck,
     // We have received the ACK for the RemoveTlc, it's safe to remove this tlc
     RemoveAckConfirmed,
+    // Legacy persisted status. Kept only so old bincode channel states can be decoded.
+    #[doc(hidden)]
+    RemoveApplyConfirmed,
 }
 
 /// The status of an inbound tlc
@@ -195,6 +198,9 @@ pub enum InboundTlcStatus {
     LocalRemoved,
     // We have received the ACK for the RemoveTlc, it's safe to remove this tlc
     RemoveAckConfirmed,
+    // Legacy persisted status. Kept only so old bincode channel states can be decoded.
+    #[doc(hidden)]
+    RemoveApplyConfirmed,
 }
 
 /// The status of a tlc
@@ -577,8 +583,10 @@ impl TlcInfo {
             && matches!(
                 self.status,
                 TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed)
+                    | TlcStatus::Outbound(OutboundTlcStatus::RemoveApplyConfirmed)
                     | TlcStatus::Outbound(OutboundTlcStatus::RemoveWaitAck)
                     | TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed)
+                    | TlcStatus::Inbound(InboundTlcStatus::RemoveApplyConfirmed)
             )
     }
 
@@ -777,6 +785,7 @@ impl TlcState {
                 OutboundTlcStatus::RemoveWaitPrevAck => for_remote,
                 OutboundTlcStatus::RemoveWaitAck => false,
                 OutboundTlcStatus::RemoveAckConfirmed => false,
+                OutboundTlcStatus::RemoveApplyConfirmed => false,
             })
             .chain(
                 self.received_tlcs
@@ -789,6 +798,7 @@ impl TlcState {
                         InboundTlcStatus::Committed => true,
                         InboundTlcStatus::LocalRemoved => !for_remote,
                         InboundTlcStatus::RemoveAckConfirmed => false,
+                        InboundTlcStatus::RemoveApplyConfirmed => false,
                     }),
             )
     }
@@ -1794,5 +1804,31 @@ impl From<&crate::protocol::ChannelUpdate> for ChannelUpdateInfo {
             tlc_minimum_value: update.tlc_minimum_value,
             fee_rate: update.tlc_fee_proportional_millionths as u64,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_legacy_remove_apply_confirmed_bincode_indices_decode() {
+        let legacy_variant_index = 6u32.to_le_bytes();
+
+        let outbound: OutboundTlcStatus = bincode::deserialize(&legacy_variant_index)
+            .expect("legacy outbound status should decode");
+        assert_eq!(outbound, OutboundTlcStatus::RemoveApplyConfirmed);
+        assert_eq!(
+            bincode::serialize(&OutboundTlcStatus::RemoveApplyConfirmed).unwrap(),
+            legacy_variant_index
+        );
+
+        let inbound: InboundTlcStatus = bincode::deserialize(&legacy_variant_index)
+            .expect("legacy inbound status should decode");
+        assert_eq!(inbound, InboundTlcStatus::RemoveApplyConfirmed);
+        assert_eq!(
+            bincode::serialize(&InboundTlcStatus::RemoveApplyConfirmed).unwrap(),
+            legacy_variant_index
+        );
     }
 }

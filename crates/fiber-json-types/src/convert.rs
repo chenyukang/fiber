@@ -170,7 +170,8 @@ impl From<InternalOutboundTlcStatus> for JsonOutboundTlcStatus {
                 JsonOutboundTlcStatus::RemoveWaitPrevAck
             }
             InternalOutboundTlcStatus::RemoveWaitAck => JsonOutboundTlcStatus::RemoveWaitAck,
-            InternalOutboundTlcStatus::RemoveAckConfirmed => {
+            InternalOutboundTlcStatus::RemoveAckConfirmed
+            | InternalOutboundTlcStatus::RemoveApplyConfirmed => {
                 JsonOutboundTlcStatus::RemoveAckConfirmed
             }
         }
@@ -187,7 +188,8 @@ impl From<InternalInboundTlcStatus> for JsonInboundTlcStatus {
             InternalInboundTlcStatus::AnnounceWaitAck => JsonInboundTlcStatus::AnnounceWaitAck,
             InternalInboundTlcStatus::Committed => JsonInboundTlcStatus::Committed,
             InternalInboundTlcStatus::LocalRemoved => JsonInboundTlcStatus::LocalRemoved,
-            InternalInboundTlcStatus::RemoveAckConfirmed => {
+            InternalInboundTlcStatus::RemoveAckConfirmed
+            | InternalInboundTlcStatus::RemoveApplyConfirmed => {
                 JsonInboundTlcStatus::RemoveAckConfirmed
             }
         }

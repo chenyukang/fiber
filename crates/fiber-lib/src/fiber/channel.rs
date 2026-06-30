@@ -1203,7 +1203,9 @@ where
                     && matches!(
                         tlc.status,
                         TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed)
+                            | TlcStatus::Inbound(InboundTlcStatus::RemoveApplyConfirmed)
                             | TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed)
+                            | TlcStatus::Outbound(OutboundTlcStatus::RemoveApplyConfirmed)
                     )
                     && !tlc.applied_flags.contains(AppliedFlags::REMOVE)
             })
@@ -6462,7 +6464,9 @@ impl ChannelActorState {
         assert!(matches!(
             current.status,
             TlcStatus::Inbound(InboundTlcStatus::RemoveAckConfirmed)
+                | TlcStatus::Inbound(InboundTlcStatus::RemoveApplyConfirmed)
                 | TlcStatus::Outbound(OutboundTlcStatus::RemoveAckConfirmed)
+                | TlcStatus::Outbound(OutboundTlcStatus::RemoveApplyConfirmed)
         ));
 
         if let RemoveTlcReason::RemoveTlcFulfill(fulfill) = &reason {
@@ -9329,6 +9333,7 @@ impl ChannelActorState {
                 OutboundTlcStatus::RemoveWaitPrevAck => true,
                 OutboundTlcStatus::RemoveWaitAck => true,
                 OutboundTlcStatus::RemoveAckConfirmed => true,
+                OutboundTlcStatus::RemoveApplyConfirmed => true,
             })
             .chain(self.tlc_state.received_tlcs.tlcs.iter().filter(move |tlc| {
                 match tlc.inbound_status() {
@@ -9338,6 +9343,7 @@ impl ChannelActorState {
                     InboundTlcStatus::Committed => true,
                     InboundTlcStatus::LocalRemoved => true,
                     InboundTlcStatus::RemoveAckConfirmed => true,
+                    InboundTlcStatus::RemoveApplyConfirmed => true,
                 }
             }));
 
@@ -9351,6 +9357,7 @@ impl ChannelActorState {
                 let confirmed_remove_reason = (info.outbound_status()
                     == OutboundTlcStatus::RemoveWaitAck
                     || info.outbound_status() == OutboundTlcStatus::RemoveAckConfirmed
+                    || info.outbound_status() == OutboundTlcStatus::RemoveApplyConfirmed
                     || (info.outbound_status() == OutboundTlcStatus::RemoteRemoved && !for_remote))
                     .then(|| info.removed_reason.as_ref().unwrap());
                 match confirmed_remove_reason {
@@ -9373,6 +9380,7 @@ impl ChannelActorState {
             if info.is_received() {
                 let confirmed_remove_reason = (info.inbound_status()
                     == InboundTlcStatus::RemoveAckConfirmed
+                    || info.inbound_status() == InboundTlcStatus::RemoveApplyConfirmed
                     || (info.inbound_status() == InboundTlcStatus::LocalRemoved && for_remote))
                     .then(|| info.removed_reason.as_ref().unwrap());
                 match confirmed_remove_reason {
