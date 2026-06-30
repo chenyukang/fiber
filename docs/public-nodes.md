@@ -508,7 +508,11 @@ Funds changes:
 
 Mainnet public nodes do not hold any USDI yet, so UDT channels cannot be created at this time. This section only covers the testnet.
 
-On testnet, node2 exposes a public RPC endpoint (including `new_invoice`), so for simplicity this demo uses the path nodeA → node1 → node2. Only nodeA is needed.
+This demo uses the path nodeA → node1 → node2. Fiber JSON-RPC is an
+administrative interface and should only be reachable from trusted machines. Do
+not derive a public RPC endpoint from a node's public P2P address. Generate the
+receiver invoice on node2 itself, or over a private/authenticated operator
+channel, and then copy only the invoice address back to nodeA.
 
 
 ### Establishing a UDT Channel: nodeA ⟺ node1
@@ -585,7 +589,7 @@ On testnet, node2 exposes a public RPC endpoint (including `new_invoice`), so fo
 ### Payment: nodeA → node1 → node2
 
 
-1. Use `graph_nodes` to discover node2's current IP
+1. Use `graph_nodes` to confirm node2 is visible in the graph
 
    ```bash
    curl -s --location 'http://127.0.0.1:8227' --header 'Content-Type: application/json' --data '{
@@ -603,13 +607,7 @@ On testnet, node2 exposes a public RPC endpoint (including `new_invoice`), so fo
    Example response excerpt:
 
    ```json
-   {"node_name":"CkbaNode-2","version":"0.8.0","addresses":["/ip4/18.163.221.211/tcp/8119/p2p/QmbKyzq9qUmymW2Gi8Zq7kKVpPiNA1XUJ6uMvsUC4F3p89"],"features":["GOSSIP_QUERIES_REQUIRED","BASIC_MPP_REQUIRED","TRAMPOLINE_ROUTING_REQUIRED"],"pubkey":"0291a6576bd5a94bd74b27080a48340875338fff9f6d6361fe6b8db8d0d1912fcc","timestamp":"0x19d776bd919","chain_hash":"0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606","auto_accept_min_ckb_funding_amount":"0x9502f9000","udt_cfg_infos":[{"name":"RUSD","script":{"code_hash":"0x1142755a044bf2ee358cba9f2da187ce928c91cd4dc8692ded0337efa677d21a","hash_type":"type","args":"0x878fcc6f1f08d48e87bb1c3b3d5083f23f8a39c5d5c764f253b55b998526439b"},"auto_accept_amount":"0x77359400","cell_deps":[{"type_id":{"code_hash":"0x00000000000000000000000000000000000000000000000000545950455f4944","hash_type":"type","args":"0x97d30b723c0b2c66e9cb8d4d0df4ab5d7222cbb00d4a9a2055ce2e5d7f0d8b0f"}}]}]}
-   ```
-
-   Using the IP from the entry above, construct the RPC endpoint with the default port `8227`:
-
-   ```bash
-   NODE2_RPC="http://18.163.221.211:8227"
+   {"node_name":"CkbaNode-2","version":"0.8.0","addresses":["/ip4/<node2-p2p-ip>/tcp/8119/p2p/<node2-peer-id>"],"features":["GOSSIP_QUERIES_REQUIRED","BASIC_MPP_REQUIRED","TRAMPOLINE_ROUTING_REQUIRED"],"pubkey":"0291a6576bd5a94bd74b27080a48340875338fff9f6d6361fe6b8db8d0d1912fcc","timestamp":"0x19d776bd919","chain_hash":"0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606","auto_accept_min_ckb_funding_amount":"0x9502f9000","udt_cfg_infos":[{"name":"RUSD","script":{"code_hash":"0x1142755a044bf2ee358cba9f2da187ce928c91cd4dc8692ded0337efa677d21a","hash_type":"type","args":"0x878fcc6f1f08d48e87bb1c3b3d5083f23f8a39c5d5c764f253b55b998526439b"},"auto_accept_amount":"0x77359400","cell_deps":[{"type_id":{"code_hash":"0x00000000000000000000000000000000000000000000000000545950455f4944","hash_type":"type","args":"0x97d30b723c0b2c66e9cb8d4d0df4ab5d7222cbb00d4a9a2055ce2e5d7f0d8b0f"}}]}]}
    ```
 
 
@@ -618,10 +616,12 @@ On testnet, node2 exposes a public RPC endpoint (including `new_invoice`), so fo
 
    Set the amount to 0x5f5e100 (100,000,000), which is equivalent to 1 RUSD.
 
-   Here, a unique payment_preimage is still required. You can generate one using: `payment_preimage="0x$(openssl rand -hex 32)"`
+   Run this command on the node2 host, or through a private/authenticated RPC
+   path. Here, a unique payment_preimage is still required. You can generate one
+   using: `payment_preimage="0x$(openssl rand -hex 32)"`
 
    ```bash
-   curl -s --location "$NODE2_RPC" --header 'Content-Type: application/json' --data '{
+   curl -s --location 'http://127.0.0.1:8227' --header 'Content-Type: application/json' --data '{
        "id": 2,
        "jsonrpc": "2.0",
        "method": "new_invoice",
@@ -644,7 +644,8 @@ On testnet, node2 exposes a public RPC endpoint (including `new_invoice`), so fo
    }'
    ```
 
-   Record the `invoice_address` from the response.
+   Record the `invoice_address` from the response and transfer only that invoice
+   address back to nodeA.
 
 
 
