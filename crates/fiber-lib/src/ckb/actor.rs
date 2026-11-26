@@ -298,18 +298,19 @@ impl Actor for CkbChainActor {
                             .live_cells_exclusion_map
                             .migrate_funding_tx(&local_tx_hash, &funding_tx);
                         if let Some(new_tx) = funding_tx.as_ref() {
-                            if let Some(local_inputs) =
-                                state.local_funded_inputs_by_tx.remove(&local_tx_hash)
-                            {
-                                state
-                                    .local_funded_inputs_by_tx
-                                    .insert(new_tx.hash(), local_inputs);
-                            } else {
-                                state
-                                    .local_funded_inputs_by_tx
-                                    .entry(new_tx.hash())
-                                    .or_default();
-                            }
+                            // Merge into what is already recorded for the new tx. A hosted tenant
+                            // shares its LSP's chain actor, so the LSP's own `Fund` may have
+                            // recorded its inputs for this tx already; replacing that record made
+                            // the LSP refuse to sign its own cell.
+                            let local_inputs = state
+                                .local_funded_inputs_by_tx
+                                .remove(&local_tx_hash)
+                                .unwrap_or_default();
+                            state
+                                .local_funded_inputs_by_tx
+                                .entry(new_tx.hash())
+                                .or_default()
+                                .extend(local_inputs);
                         }
                         state.publish_held();
                     }
@@ -567,7 +568,12 @@ mod tests {
     use secp256k1::SecretKey;
     use tempfile::tempdir;
 
-    struct TestCkbChainActor(SecretKey);
+    /// The chain actor with its own key, and the locally funded inputs it starts with (what
+    /// earlier `Fund` calls would have recorded).
+    struct TestCkbChainActor(
+        SecretKey,
+        HashMap<packed::Byte32, HashSet<packed::OutPoint>>,
+    );
 
     #[async_trait::async_trait]
     impl Actor for TestCkbChainActor {
@@ -600,7 +606,7 @@ mod tests {
                 funding_source_lock_script,
                 ckb_tx_tracing_actor,
                 live_cells_exclusion_map: Default::default(),
-                local_funded_inputs_by_tx: Default::default(),
+                local_funded_inputs_by_tx: self.1.clone(),
             })
         }
 
@@ -625,9 +631,10 @@ mod tests {
             funding_tx_shell_builder: None,
         };
         let secret_key = SecretKey::from_slice(&[9u8; 32]).expect("valid secret key");
-        let (actor, _handle) = Actor::spawn(None, TestCkbChainActor(secret_key), config)
-            .await
-            .expect("spawn TestCkbChainActor");
+        let (actor, _handle) =
+            Actor::spawn(None, TestCkbChainActor(secret_key, HashMap::new()), config)
+                .await
+                .expect("spawn TestCkbChainActor");
 
         let local_lock = call_t!(actor, CkbChainMessage::GetFundingSourceLockScript, 5_000)
             .expect("rpc call ok")
@@ -660,5 +667,211 @@ mod tests {
             matches!(err, FundingError::ExternalFundingUsesLocalLock),
             "expected ExternalFundingUsesLocalLock, got {err:?}"
         );
+    }
+
+    /// A CKB RPC that answers `get_live_cell` for the given cells and nothing else.
+    async fn serve_live_cells(
+        cells: Vec<(packed::OutPoint, packed::CellOutput)>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let cells: HashMap<packed::OutPoint, ckb_jsonrpc_types::CellOutput> = cells
+            .into_iter()
+            .map(|(out_point, output)| (out_point, output.into()))
+            .collect();
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let server = tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let cells = cells.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 16384];
+                    let n = match socket.read(&mut buf).await {
+                        Ok(n) if n > 0 => n,
+                        _ => return,
+                    };
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let body_start = req.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+                    let json: serde_json::Value =
+                        serde_json::from_str(&req[body_start..]).unwrap_or_default();
+                    let id = json.get("id").cloned().unwrap_or(serde_json::Value::Null);
+                    let method = json.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                    let result = if method == "get_live_cell" {
+                        let out_point: Option<ckb_jsonrpc_types::OutPoint> = json
+                            .get("params")
+                            .and_then(|params| params.get(0))
+                            .and_then(|param| serde_json::from_value(param.clone()).ok());
+                        match out_point
+                            .map(packed::OutPoint::from)
+                            .and_then(|out_point| cells.get(&out_point).cloned())
+                        {
+                            Some(output) => serde_json::json!({
+                                "cell": {
+                                    "data": {
+                                        "content": "0x",
+                                        "hash": format!("{:#x}", ckb_types::H256([0u8; 32])),
+                                    },
+                                    "output": output,
+                                },
+                                "status": "live",
+                            }),
+                            None => serde_json::json!({ "cell": null, "status": "unknown" }),
+                        }
+                    } else {
+                        serde_json::Value::Null
+                    };
+                    let body = serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result })
+                        .to_string();
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        (format!("http://{addr}"), server)
+    }
+
+    /// A hosted tenant shares its LSP's chain actor. The tenant's wallet builds funding tx R,
+    /// the LSP's `Fund` adds its own cell and gets F, and the tenant then verifies R -> F. When
+    /// that verify lands before the LSP's `RemoveFundingTx(R)`, it must not replace what the
+    /// LSP recorded for F, or the LSP refuses to sign its own cell in F.
+    #[tokio::test]
+    async fn test_verify_funding_tx_keeps_local_inputs_recorded_for_the_new_tx() {
+        use ckb_types::{
+            bytes::Bytes,
+            core::{ScriptHashType, TransactionBuilder},
+            prelude::{Builder, Entity, Pack},
+            H256,
+        };
+
+        const CKB: u64 = 100_000_000;
+        fn script(code_hash: u8, args: Vec<u8>) -> packed::Script {
+            let code_hash: packed::Byte32 = H256([code_hash; 32]).pack();
+            let args: packed::Bytes = Bytes::from(args).pack();
+            let hash_type: packed::Byte = ScriptHashType::Data.into();
+            packed::Script::new_builder()
+                .code_hash(code_hash)
+                .hash_type(hash_type)
+                .args(args)
+                .build()
+        }
+        fn output(capacity: u64, lock: &packed::Script) -> packed::CellOutput {
+            let capacity: packed::Uint64 = capacity.pack();
+            packed::CellOutput::new_builder()
+                .capacity(capacity)
+                .lock(lock.clone())
+                .build()
+        }
+
+        let secret_key = SecretKey::from_slice(&[9u8; 32]).expect("valid secret key");
+        let lsp_lock = get_script_by_contract(
+            Contract::Secp256k1Lock,
+            LocalSigner::new(secret_key).pubkey_hash(),
+        );
+        let wallet_lock = script(0x77, vec![1u8; 20]);
+        let funding_cell_lock = script(0x66, vec![2u8; 32]);
+
+        // W: the tenant's wallet cell. X: the LSP's own cell.
+        let wallet_cell = packed::OutPoint::new(H256([0x11; 32]).pack(), 0);
+        let lsp_cell = packed::OutPoint::new(H256([0x22; 32]).pack(), 0);
+        let (rpc_url, server) = serve_live_cells(vec![
+            (wallet_cell.clone(), output(1_000 * CKB, &wallet_lock)),
+            (lsp_cell.clone(), output(2_000 * CKB, &lsp_lock)),
+        ])
+        .await;
+
+        // R: built by the tenant's wallet alone.
+        let tx_r = TransactionBuilder::default()
+            .input(packed::CellInput::new(wallet_cell.clone(), 0))
+            .output(output(1_000 * CKB - CKB / 100, &funding_cell_lock))
+            .output_data(Bytes::new().pack())
+            .build();
+        // F: R plus the LSP's cell and the LSP's change.
+        let tx_f = TransactionBuilder::default()
+            .input(packed::CellInput::new(wallet_cell.clone(), 0))
+            .input(packed::CellInput::new(lsp_cell.clone(), 0))
+            .output(output(1_500 * CKB - CKB / 100, &funding_cell_lock))
+            .output(output(1_500 * CKB - CKB / 100, &lsp_lock))
+            .output_data(Bytes::new().pack())
+            .output_data(Bytes::new().pack())
+            .build();
+
+        // What the LSP's `Fund(R) -> F` recorded: X is the LSP's own input of F.
+        let mut funded = HashMap::new();
+        funded.insert(tx_f.hash(), HashSet::from([lsp_cell.clone()]));
+
+        let dir = tempdir().expect("create tempdir");
+        let config = CkbConfig {
+            base_dir: Some(dir.path().to_path_buf()),
+            rpc_url,
+            tx_tracing_polling_interval_ms: 60_000,
+            udt_whitelist: None,
+            funding_tx_shell_builder: None,
+        };
+        let (actor, _handle) = Actor::spawn(None, TestCkbChainActor(secret_key, funded), config)
+            .await
+            .expect("spawn TestCkbChainActor");
+        assert_eq!(
+            call_t!(actor, CkbChainMessage::GetFundingSourceLockScript, 5_000)
+                .expect("rpc call ok"),
+            Some(lsp_lock.clone())
+        );
+
+        // The LSP accepts the tenant's R: R gets an (empty) record of its own.
+        call_t!(
+            actor,
+            |reply| CkbChainMessage::VerifyFundingTx {
+                local_tx: packed::Transaction::default(),
+                remote_tx: tx_r.data(),
+                funding_cell_lock_script: funding_cell_lock.clone(),
+                funding_udt_type_script: None,
+                funding_source_lock_script: None,
+                funding_fee_rate: 1_000,
+                reply,
+            },
+            5_000
+        )
+        .expect("rpc call ok")
+        .expect("the LSP verifies R");
+
+        // The tenant verifies R -> F before the LSP's RemoveFundingTx(R) is handled.
+        call_t!(
+            actor,
+            |reply| CkbChainMessage::VerifyFundingTx {
+                local_tx: tx_r.data(),
+                remote_tx: tx_f.data(),
+                funding_cell_lock_script: funding_cell_lock.clone(),
+                funding_udt_type_script: None,
+                funding_source_lock_script: Some(wallet_lock.clone()),
+                funding_fee_rate: 1_000,
+                reply,
+            },
+            5_000
+        )
+        .expect("rpc call ok")
+        .expect("the tenant verifies R -> F");
+        actor
+            .send_message(CkbChainMessage::RemoveFundingTx(tx_r.hash().into()))
+            .expect("chain actor alive");
+
+        // The LSP signs F, with its own cell as input #1.
+        let signed = call_t!(
+            actor,
+            |reply| CkbChainMessage::Sign(FundingTx::from(tx_f.clone()), reply),
+            5_000
+        )
+        .expect("rpc call ok")
+        .expect("the LSP signs its own input of F");
+        // Under the test contracts the lock is not the sighash type id, so no witness is
+        // written here; what the bug broke is the local-input check before signing.
+        let signed = signed.into_inner().expect("signed tx");
+        assert_eq!(signed.hash(), tx_f.hash());
+
+        actor.stop(None);
+        server.abort();
     }
 }
