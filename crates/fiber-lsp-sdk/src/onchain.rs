@@ -159,12 +159,32 @@ pub(crate) async fn validate<C: ChainVerifier>(
             ));
         }
     }
-    let unlock = &witness[17 + body_len..];
-    if unlock.len() != 67 && unlock.len() != 99 {
-        return Err(invalid("invalid unlock length"));
-    }
+    // One unlock, or a fulfilled inbound TLC followed by the signer's own share: a TLC worth
+    // less than one payout cell can reach the destination only together with that share.
+    let unlocks = &witness[17 + body_len..];
+    let (unlock, share_unlock) = match unlocks.len() {
+        67 | 99 => (unlocks, None),
+        len @ (134 | 166) => (&unlocks[..len - 67], Some(&unlocks[len - 67..])),
+        _ => return Err(invalid("invalid unlock length")),
+    };
     if unlock[1] > 1 || (unlock[1] == 1) != (unlock.len() == 99) || unlock[2..67] != [0; 65] {
         return Err(invalid("invalid unsigned unlock template"));
+    }
+    if let Some(share) = share_unlock {
+        let expected = if record.reference.for_remote {
+            0xff
+        } else {
+            0xfe
+        };
+        if unlock[0] >= 0xfe
+            || unlock[1] != 1
+            || source.output.type_().to_opt().is_some()
+            || share[0] != expected
+            || share[1] != 0
+            || share[2..67] != [0; 65]
+        {
+            return Err(invalid("invalid TLC and share unlock pair"));
+        }
     }
     let now = chain.median_time_ms().await?;
     let local_offset = if record.reference.for_remote { 36 } else { 0 };
@@ -214,6 +234,7 @@ pub(crate) async fn validate<C: ChainVerifier>(
             != (OnchainKeyPurpose::Tlc {
                 commitment_number: derivation,
             })
+            && !(share_unlock.is_some() && content.key_purpose == OnchainKeyPurpose::Settlement)
         {
             return Err(invalid("wrong TLC signing key"));
         }
@@ -234,6 +255,41 @@ pub(crate) async fn validate<C: ChainVerifier>(
         next.drain(1 + index * tlc_len..1 + (index + 1) * tlc_len);
         next[0] -= 1;
         (tlc.payment_amount, if inbound { 1u64 } else { 2u64 })
+    };
+    let (amount, fraction) = if share_unlock.is_some() {
+        // The same rules as a share settled alone, applied after the TLC claim.
+        let other_offset = 36 - local_offset;
+        if balances[local_offset..local_offset + 20] == [0; 20]
+            || balances[other_offset..other_offset + 20] == [0; 20]
+        {
+            return Err(invalid("settlement unlock does not belong to signer"));
+        }
+        let next_count = usize::from(next[0]);
+        if next[1..1 + next_count * tlc_len]
+            .chunks_exact(tlc_len)
+            .any(|t| {
+                let expiry = u64::from_le_bytes(t[tlc_len - 8..tlc_len].try_into().unwrap())
+                    & 0x00ff_ffff_ffff_ffff;
+                now / 1000 <= expiry
+            })
+        {
+            return Err(invalid("settlement attempted with unexpired TLCs"));
+        }
+        let share = u128::from_le_bytes(
+            balances[local_offset + 20..local_offset + 36]
+                .try_into()
+                .unwrap(),
+        );
+        let start = 1 + next_count * tlc_len + local_offset;
+        next[start..start + 36].fill(0);
+        (
+            amount
+                .checked_add(share)
+                .ok_or_else(|| invalid("payout overflow"))?,
+            3u128,
+        )
+    } else {
+        (amount, fraction)
     };
     if args[56] == 0 {
         let required = u64::from_le_bytes(args[20..28].try_into().unwrap());

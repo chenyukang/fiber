@@ -34,6 +34,15 @@ body:json {
   }
 }
 
+script:pre-request {
+  const amount = bru.getEnvVar("INCOMING_TLC_AMOUNT");
+  if (amount) {
+    const body = req.getBody();
+    body.params[0].amount = "0x" + BigInt(amount).toString(16);
+    req.setBody(body);
+  }
+}
+
 assert {
   res.body.error: isUndefined
   res.body.result.invoice_address: isDefined

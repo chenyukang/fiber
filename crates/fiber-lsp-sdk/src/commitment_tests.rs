@@ -2160,6 +2160,149 @@ async fn onchain_inbound_tlc_requires_exact_preimage_key_and_residual_state() {
 }
 
 #[tokio::test]
+async fn onchain_inbound_tlc_with_own_share_pays_both_to_destination_after_full_delay() {
+    let f = Fixture::new(false).await;
+    f.signer
+        .authorize_invoice(f.terms(true), [9; 32].into())
+        .await
+        .unwrap();
+    f.sign(false, 0, f.opening()).await;
+    f.sign(false, 1, f.incoming(false)).await;
+    f.sign(true, 0, f.opening()).await;
+    f.sign(true, 1, f.incoming(true)).await;
+    let (content, context) = f.revocation(true, 1).await;
+    let prepared = f
+        .signer
+        .prepare_revocation(content, context, 100)
+        .await
+        .unwrap();
+    f.signer.sign_revocation(prepared, 100).await.unwrap();
+    let record = f
+        .signer
+        .recovery_records()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| !r.reference.for_remote && r.reference.version == 2)
+        .unwrap();
+    let source = record.transaction.raw().outputs().get(0).unwrap();
+    let outpoint = OutPoint::new(record.transaction.calc_tx_hash(), 0);
+    let chain = TestChain {
+        outpoint: outpoint.clone(),
+        cell: VerifiedCell {
+            output: source.clone(),
+            data: vec![],
+        },
+        now: 100,
+        mature: true,
+        extras: vec![],
+    };
+    let body = fiber_types::settlement_data_to_witness(
+        &record.settlement.data,
+        false,
+        record.settlement.local_settlement_key,
+        record.settlement.remote_settlement_key,
+    );
+    // One inbound TLC of 50, then the two balances; the signer's own balance comes first.
+    let share = u128::from_le_bytes(body[98 + 20..98 + 36].try_into().unwrap());
+    let share_u64 = u64::try_from(share).unwrap();
+    assert!(share_u64 > 0);
+    let mut next = vec![0u8];
+    next.extend_from_slice(&body[98..]);
+    next[1..37].fill(0);
+    let mut args = source.lock().args().raw_data()[..36].to_vec();
+    args.extend_from_slice(&fiber_types::blake2b_hash_with_salt(&next, &[])[..20]);
+    args.push(1);
+    args.push(fiber_types::ChannelFeatures::V2.bits());
+    let source_capacity: u64 = source.capacity().unpack();
+    let remainder = source
+        .clone()
+        .as_builder()
+        .capacity(source_capacity - 50 - share_u64)
+        .lock(source.lock().as_builder().args(args.pack()).build())
+        .build();
+    let destination = Script::new_builder().args([42u8].pack()).build();
+    let build = |since: u64, share_marker: u8, payout: u64| {
+        let mut witness = vec![16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 16, 0, 0, 0, 1];
+        witness.extend_from_slice(&body);
+        witness.extend_from_slice(&[0, 1]);
+        witness.extend_from_slice(&[0; 65]);
+        witness.extend_from_slice(&[9; 32]);
+        witness.extend_from_slice(&[share_marker, 0]);
+        witness.extend_from_slice(&[0; 65]);
+        TransactionBuilder::default()
+            .input(CellInput::new(outpoint.clone(), since))
+            .output(remainder.clone())
+            .output_data(ckb_types::packed::Bytes::default())
+            .output(
+                CellOutput::new_builder()
+                    .capacity(payout)
+                    .lock(destination.clone())
+                    .build(),
+            )
+            .output_data(ckb_types::packed::Bytes::default())
+            .witness(witness.pack())
+            .build()
+            .data()
+    };
+    let full_delay = u64::from_le_bytes(f.parameters.delay_epoch);
+    let third_delay = 0xa000_0000_0000_0000u64
+        | ckb_types::core::EpochNumberWithFraction::new(0, 1, 3).full_value();
+    let payout = 50 + share_u64 - 5;
+    let terms = OnchainSpendAuthorization {
+        source: record.reference,
+        destination: destination.clone(),
+        fee_sponsor_lock: None,
+        fee: 5,
+        additional_inputs: vec![],
+        cell_deps: vec![],
+    };
+    let tlc_key = OnchainKeyPurpose::Tlc {
+        commitment_number: 1,
+    };
+    let bad = [
+        // The share needs the full delay, not the TLC's third.
+        (third_delay, 0xfe, payout, tlc_key),
+        // The other party's share.
+        (full_delay, 0xff, payout, tlc_key),
+        // Part of the share kept back from the destination.
+        (full_delay, 0xfe, payout - 1, OnchainKeyPurpose::Settlement),
+    ];
+    for (since, marker, paid, key_purpose) in bad {
+        let before = f.store.snapshot().unwrap();
+        let content = OnchainSigningContent {
+            key_purpose,
+            transaction: build(since, marker, paid),
+        };
+        assert!(f
+            .signer
+            .prepare_onchain(content, terms.clone(), &chain)
+            .await
+            .is_err());
+        assert_eq!(
+            f.store.snapshot().unwrap(),
+            before,
+            "rejection changed persistent state"
+        );
+    }
+    for key_purpose in [tlc_key, OnchainKeyPurpose::Settlement] {
+        let content = OnchainSigningContent {
+            key_purpose,
+            transaction: build(full_delay, 0xfe, payout),
+        };
+        let prepared = f
+            .signer
+            .prepare_onchain(content, terms.clone(), &chain)
+            .await
+            .unwrap();
+        assert!(matches!(
+            f.signer.sign_onchain(prepared, &chain).await.unwrap(),
+            ChannelSignature::Onchain(_)
+        ));
+    }
+}
+
+#[tokio::test]
 async fn announcement_requires_approved_network_fields_and_correct_nonce() {
     let f = Fixture::new(false).await;
     let local = f.signer.public_material().base_public_keys.funding_pubkey;

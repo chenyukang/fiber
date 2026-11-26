@@ -15,6 +15,11 @@ The hold invoice uses a fixed CKB-hash pair:
 - preimage `0x2222…22`
 - payment_hash `0x09dfb3a3fa5af1b3359b6256945af43e31be9f86f3d1b45779cebc09dc609138`
 
+The TLC is 100 CKB. `--env-var INCOMING_TLC_AMOUNT=<shannons>` runs the same
+flow with another amount; CI also runs it with 1000000 (0.01 CKB), below the
+61 CKB a secp256k1 payout cell occupies, so the TLC is claimed together with
+the tenant's own share.
+
 ```bash
 REMOVE_OLD_STATE=y ./tests/nodes/start.sh e2e/lsp-remote-signer-watchtower-preimage
 ```

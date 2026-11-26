@@ -57,6 +57,11 @@ jobs:
           - workflow: "udt"
             test_env: "xudt-test"
             release: "0.202.0"
+          # add an extra workflow to claim a hosted TLC below the payout cell's occupied capacity
+          - workflow: "lsp-remote-signer-watchtower-preimage"
+            test_env: "test"
+            release: "0.202.0"
+            extra_bru_args: "--env-var INCOMING_TLC_AMOUNT=1000000"
           # add an extra workflow to run 3-nodes-transfer with sha256 hash algorithm
           - workflow: "3-nodes-transfer"
             test_env: "test"

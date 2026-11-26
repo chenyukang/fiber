@@ -26,6 +26,10 @@ script:pre-request {
   body.terms.expires_at_ms = now + 3600000;
   // Match the explicit seven-day payer limit, plus the one-hour invoice window.
   body.terms.max_tlc_expiry_ms = now + 7 * 86400000 + 3600000;
+  const amount = bru.getEnvVar("INCOMING_TLC_AMOUNT");
+  if (amount) {
+    body.terms.amount = Number(amount);
+  }
   req.setBody(body);
   bru.setVar("LSP_INCOMING_PAYMENT_HASH", body.terms.payment_hash);
   bru.setVar("LSP_INCOMING_PREIMAGE", body.preimage);

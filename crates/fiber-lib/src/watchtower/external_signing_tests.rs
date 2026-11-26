@@ -86,6 +86,26 @@ impl Fixture {
         local_keys: bool,
         features: ChannelFeatures,
     ) -> Self {
+        Self::customized(
+            for_remote,
+            subsequent,
+            with_preimage,
+            local_keys,
+            features,
+            |_| {},
+            None,
+        )
+    }
+
+    fn customized(
+        for_remote: bool,
+        subsequent: bool,
+        with_preimage: bool,
+        local_keys: bool,
+        features: ChannelFeatures,
+        edit_settlement: impl FnOnce(&mut SettlementData),
+        payout_lock: Option<Script>,
+    ) -> Self {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = open_store(dir.path()).expect("open store");
         let node_id = NodeId::local();
@@ -121,11 +141,12 @@ impl Fixture {
         let earlier_key = Privkey::from([6; 32]);
         earlier.local_key = local_keys.then(|| earlier_key.clone());
         earlier.local_key_pubkey = Some(earlier_key.pubkey());
-        let settlement = SettlementData {
+        let mut settlement = SettlementData {
             local_amount: 100_000_000_000,
             remote_amount: 100_000_000_000,
             tlcs: vec![earlier, tlc],
         };
+        edit_settlement(&mut settlement);
         let channel_id = Hash256::from([9; 32]);
         store.insert_watch_channel(
             node_id.clone(),
@@ -143,7 +164,7 @@ impl Fixture {
             },
             settlement,
             features,
-            None,
+            payout_lock,
         );
         store.insert_watch_preimage(
             node_id.clone(),
@@ -250,6 +271,19 @@ impl Fixture {
         current_time: u64,
         collector: &mut dyn CellCollector,
     ) -> Result<Option<TransactionView>, Box<dyn std::error::Error>> {
+        self.build_at_epoch(
+            current_time,
+            EpochNumberWithFraction::new(14, 0, 1),
+            collector,
+        )
+    }
+
+    fn build_at_epoch(
+        &self,
+        current_time: u64,
+        current_epoch: EpochNumberWithFraction,
+        collector: &mut dyn CellCollector,
+    ) -> Result<Option<TransactionView>, Box<dyn std::error::Error>> {
         let signer =
             LocalSigner::new(secp256k1::SecretKey::from_slice(&[21; 32]).expect("fee key"));
         // Keep the original commitment's snapshot even after a successor cell
@@ -263,7 +297,7 @@ impl Fixture {
             &self.events,
             self.cell.clone(),
             EpochNumberWithFraction::new(10, 0, 1),
-            EpochNumberWithFraction::new(14, 0, 1),
+            current_epoch,
             current_time,
             &self.node_id,
             self.for_remote,
@@ -1257,6 +1291,131 @@ fn external_udt_settlement_refuses_to_subsidize_from_separate_fee_sponsor() {
         err.contains("separate fee sponsor"),
         "expected separate fee sponsor refusal for balance unlock, got: {err}"
     );
+}
+
+#[test]
+fn external_dust_tlc_is_claimed_with_the_own_share_after_the_full_delay() {
+    // A fulfilled TLC below one payout cell, paid to a tenant's own lock while the operator
+    // only sponsors the fee: it is claimed together with the tenant's share, never subsidized.
+    let tenant_payout_lock = get_script_by_contract(Contract::Secp256k1Lock, &[0xaa; 20]);
+    let fee_signer = LocalSigner::new(secp256k1::SecretKey::from_slice(&[21; 32]).expect("key"));
+    let sponsor_lock = get_script_by_contract(Contract::Secp256k1Lock, fee_signer.pubkey_hash());
+    let dust = 1_000_000u64;
+    let share = 100_000_000_000u64;
+    let fixture = Fixture::customized(
+        false,
+        false,
+        true,
+        false,
+        ChannelFeatures::V2,
+        |settlement| {
+            // The other TLC has expired: it is the counterparty's to take.
+            settlement.tlcs[0].expiry = 100_000;
+            settlement.tlcs[1].payment_amount = u128::from(dust);
+        },
+        Some(tenant_payout_lock.clone()),
+    );
+
+    // The TLC alone could be claimed after a third of the delay, but the share needs all of it.
+    assert!(fixture
+        .build_at_epoch(
+            200_000,
+            EpochNumberWithFraction::new(11, 1, 2),
+            &mut FeeCells
+        )
+        .unwrap()
+        .is_none());
+    let WatchtowerSignerState::External(state) = fixture
+        .store
+        .get_watchtower_signer(&fixture.node_id, &fixture.channel.channel_id)
+    else {
+        panic!("expected external signer state");
+    };
+    assert!(state.pending_requests.is_empty());
+
+    assert!(fixture.build().unwrap().is_none());
+    let WatchtowerSignerState::External(state) = fixture
+        .store
+        .get_watchtower_signer(&fixture.node_id, &fixture.channel.channel_id)
+    else {
+        panic!("expected external signer state");
+    };
+    let requests: Vec<_> = state
+        .pending_requests
+        .iter()
+        .map(|(id, content)| (*id, content.clone()))
+        .collect();
+    assert_eq!(
+        requests.len(),
+        2,
+        "one request per key of the same transaction"
+    );
+    assert_eq!(
+        requests[0].1.transaction.as_slice(),
+        requests[1].1.transaction.as_slice()
+    );
+    let tx = requests[0].1.transaction.clone().into_view();
+    let first_since: u64 = tx.inputs().get(0).unwrap().since().unpack();
+    assert_eq!(
+        first_since,
+        Since::new(
+            SinceType::EpochNumberWithFraction,
+            EpochNumberWithFraction::new(3, 0, 1).full_value(),
+            true,
+        )
+        .value()
+    );
+    let outputs: Vec<_> = tx.outputs().into_iter().collect();
+    assert_eq!(outputs.len(), 3);
+    assert_eq!(outputs[1].lock(), tenant_payout_lock);
+    let payout: u64 = outputs[1].capacity().unpack();
+    assert_eq!(payout, dust + share);
+    assert_eq!(outputs[2].lock(), sponsor_lock);
+    let commitment: u64 = fixture.cell.output.capacity.value();
+    let remainder: u64 = outputs[0].capacity().unpack();
+    assert_eq!(remainder, commitment - dust - share);
+
+    for (request_id, content) in &requests {
+        let key = match content.key_purpose {
+            OnchainKeyPurpose::Settlement => &fixture.base_key,
+            OnchainKeyPurpose::Tlc { commitment_number } => {
+                assert_eq!(commitment_number, 7);
+                &fixture.tlc_key
+            }
+        };
+        let signature = sign_onchain_request(key, content).expect("sign");
+        assert!(matches!(
+            fixture.submit(*request_id, signature).expect("accepted"),
+            SubmitWatchtowerSignatureResult::Applied
+        ));
+    }
+    let signed = fixture.build().unwrap().expect("both signatures applied");
+    assert_eq!(signed.hash(), tx.hash());
+    let bytes = signed.witnesses().get(0).unwrap().raw_data();
+    let witness = SettlementWitness::build_from_witness(&bytes[XUDT_COMPATIBLE_WITNESS.len()..])
+        .expect("signed settlement witness");
+    assert_eq!(witness.unlocks.len(), 2);
+    assert_eq!(witness.unlocks[0].unlock_type, 1);
+    assert!(witness.unlocks[0].with_preimage);
+    assert_eq!(witness.unlocks[1].unlock_type, 0xFE);
+    let content = |key_purpose| OnchainSigningContent {
+        key_purpose,
+        transaction: tx.data(),
+    };
+    verify_onchain_signature(
+        &fixture.tlc_key.pubkey(),
+        &content(OnchainKeyPurpose::Tlc {
+            commitment_number: 7,
+        }),
+        &witness.unlocks[0].signature,
+    )
+    .expect("TLC signature");
+    verify_onchain_signature(
+        &fixture.base_key.pubkey(),
+        &content(OnchainKeyPurpose::Settlement),
+        &witness.unlocks[1].signature,
+    )
+    .expect("share signature");
 }
 
 #[test]

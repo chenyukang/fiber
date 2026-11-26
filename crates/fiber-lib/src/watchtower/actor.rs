@@ -1666,7 +1666,9 @@ fn build_settlement_tx<S: WatchtowerStore>(
         ))));
     }
     let mut delay_epoch = delay_epoch.unwrap();
+    let full_delay_epoch = delay_epoch;
     let is_first_settlement = settlement_witness.is_none();
+    let settlement_witness_snapshot = settlement_witness.clone();
     if settlement_data
         .tlcs
         .iter()
@@ -2152,6 +2154,73 @@ fn build_settlement_tx<S: WatchtowerStore>(
     } else {
         (fiber_types::OnchainKeyPurpose::Settlement, unlock_key)
     };
+    let mut sign_unlocks: Vec<SettlementSigning> =
+        vec![(key_purpose, unlock_key, unlock.with_preimage)];
+
+    // A fulfilled TLC worth less than one payout cell cannot be claimed into its own output
+    // when it pays a hosted tenant's script and the operator only sponsors the fee: funding the
+    // difference from the sponsor would give operator CKB to the tenant (the reason UDT outputs
+    // are never subsidized applies to CKB too). Claim it together with the tenant's own share,
+    // into one output: the commitment lock accepts several unlocks in one witness. A first
+    // settlement then waits for the full delay that the share needs.
+    let mut party_unlock = None;
+    if separate_fee_sponsor
+        && cell_output.type_().is_none()
+        && unlock.unlock_type < 0xFE
+        && unlock.with_preimage
+    {
+        let payout_occupied_capacity = u128::from(
+            CellOutput::new_builder()
+                .lock(payout_lock_script.clone())
+                .build()
+                .occupied_capacity(Capacity::shannons(0))
+                .map_err(|err| {
+                    ArithmeticError::new(format!(
+                        "settlement output occupied capacity calculation failed: {}",
+                        err
+                    ))
+                })?
+                .as_u64(),
+        );
+        if unlock_amount < payout_occupied_capacity {
+            if let Some((party, share)) = own_share_unlock(
+                &settlement_witness_snapshot,
+                settlement_data,
+                &channel_data,
+                for_remote,
+                unlock.unlock_type as usize,
+                current_time,
+            )
+            .filter(|(_, share)| share.saturating_add(unlock_amount) >= payout_occupied_capacity)
+            {
+                if is_first_settlement {
+                    if cell_header_epoch.to_rational() + full_delay_epoch.to_rational()
+                        > current_epoch.to_rational()
+                    {
+                        debug!(
+                            "Commitment cell: {:?} waits for the full delay to claim a TLC of {} with the local share",
+                            commitment_cell.out_point.tx_hash, unlock_amount
+                        );
+                        return Ok(None);
+                    }
+                    delay_epoch = full_delay_epoch;
+                }
+                unlock_amount = unlock_amount.checked_add(share).ok_or_else(|| {
+                    ArithmeticError::new("settlement amount overflows".to_string())
+                })?;
+                sign_unlocks.push((
+                    fiber_types::OnchainKeyPurpose::Settlement,
+                    channel_data.local_settlement_key.clone(),
+                    false,
+                ));
+                party_unlock = Some(party);
+            }
+        }
+    }
+    let unlocks_witness: Vec<u8> = std::iter::once(&unlock)
+        .chain(party_unlock.as_ref())
+        .flat_map(|unlock| unlock.to_witness())
+        .collect();
 
     let fee_input_since = if unlock.unlock_type < 0xFE && !unlock.with_preimage {
         let tracked_tlc = tracked_tlcs
@@ -2172,6 +2241,7 @@ fn build_settlement_tx<S: WatchtowerStore>(
         )
         .expect("valid data");
         sw.unlocks.push(unlock.clone());
+        sw.unlocks.extend(party_unlock.clone());
         sw.update();
         blake160(&sw.to_witness()).0
     };
@@ -2191,7 +2261,7 @@ fn build_settlement_tx<S: WatchtowerStore>(
             XUDT_COMPATIBLE_WITNESS.as_slice(),
             &[1],
             new_settlement_witness.as_slice(),
-            unlock.to_witness().as_slice(),
+            unlocks_witness.as_slice(),
         ]
         .concat();
         if let fiber_types::WatchtowerSignerState::External(external) =
@@ -2235,9 +2305,10 @@ fn build_settlement_tx<S: WatchtowerStore>(
                     self_node_id,
                     channel_data.channel_id,
                     content.transaction.clone().into_view(),
-                    key_purpose,
-                    unlock.with_preimage,
-                    None,
+                    &sign_unlocks
+                        .iter()
+                        .map(|(key_purpose, _, with_preimage)| (*key_purpose, None, *with_preimage))
+                        .collect::<Vec<_>>(),
                     signer,
                 );
             }
@@ -2290,6 +2361,8 @@ fn build_settlement_tx<S: WatchtowerStore>(
             unlock_amount = capacity as u128;
         }
         let new_capacity = (capacity as u128).saturating_sub(unlock_amount) as u64;
+        // The contract wants no successor cell when nothing is left in it.
+        let keep_remainder = !two_parties_all_settled && new_capacity > 0;
         let payout_capacity =
             checked_sub_u64(capacity, new_capacity, "settlement payout capacity")?;
         let new_commitment_output = cell_output
@@ -2313,7 +2386,7 @@ fn build_settlement_tx<S: WatchtowerStore>(
             XUDT_COMPATIBLE_WITNESS.as_slice(),
             &[0x01],
             new_settlement_witness.as_slice(),
-            unlock.to_witness().as_slice(),
+            unlocks_witness.as_slice(),
         ]
         .concat();
 
@@ -2341,7 +2414,7 @@ fn build_settlement_tx<S: WatchtowerStore>(
                 &None,
             )?)
             .input(input);
-        if !two_parties_all_settled {
+        if keep_remainder {
             tx_builder = tx_builder
                 .output(new_commitment_output.clone())
                 .output_data(Bytes::default());
@@ -2444,14 +2517,14 @@ fn build_settlement_tx<S: WatchtowerStore>(
                             })?;
                     let final_change_output =
                         change_output.as_builder().capacity(change_capacity).build();
-                    if two_parties_all_settled {
-                        vec![settlement_output, final_change_output]
-                    } else {
+                    if keep_remainder {
                         vec![
                             new_commitment_output,
                             settlement_output,
                             final_change_output,
                         ]
+                    } else {
+                        vec![settlement_output, final_change_output]
                     }
                 } else {
                     let adjusted_settlement_output = change_output
@@ -2467,10 +2540,10 @@ fn build_settlement_tx<S: WatchtowerStore>(
                             })?,
                         )
                         .build();
-                    if two_parties_all_settled {
-                        vec![adjusted_settlement_output]
-                    } else {
+                    if keep_remainder {
                         vec![new_commitment_output, adjusted_settlement_output]
+                    } else {
+                        vec![adjusted_settlement_output]
                     }
                 };
                 let tx = tx_builder.set_outputs(outputs).build();
@@ -2480,9 +2553,7 @@ fn build_settlement_tx<S: WatchtowerStore>(
                     self_node_id,
                     channel_data.channel_id,
                     tx,
-                    key_purpose,
-                    unlock.with_preimage,
-                    unlock_key,
+                    &sign_unlocks,
                     signer,
                 );
             }
@@ -2534,7 +2605,7 @@ fn build_settlement_tx<S: WatchtowerStore>(
             XUDT_COMPATIBLE_WITNESS.as_slice(),
             &[0x01],
             new_settlement_witness.as_slice(),
-            unlock.to_witness().as_slice(),
+            unlocks_witness.as_slice(),
         ]
         .concat();
 
@@ -2754,9 +2825,7 @@ fn build_settlement_tx<S: WatchtowerStore>(
                     self_node_id,
                     channel_data.channel_id,
                     tx,
-                    key_purpose,
-                    unlock.with_preimage,
-                    unlock_key,
+                    &sign_unlocks,
                     signer,
                 );
             }
@@ -2766,18 +2835,128 @@ fn build_settlement_tx<S: WatchtowerStore>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// One unlock to sign in a settlement witness: the key's purpose, the local key when the
+/// watchtower holds it, and whether the unlock carries a preimage. Unlocks are listed in
+/// witness order.
+type SettlementSigning = (fiber_types::OnchainKeyPurpose, Option<Privkey>, bool);
+
+/// The local party unlock and its share, when they can be settled in the same transaction
+/// as the fulfilled TLC at `tlc_index`: the counterparty has not settled its share yet, the
+/// local share is not empty, and every other pending TLC has expired (the hosted signer refuses
+/// a party settlement that leaves unexpired TLCs behind).
+fn own_share_unlock(
+    settlement_witness: &Option<SettlementWitness>,
+    settlement_data: &SettlementData,
+    channel_data: &ChannelData,
+    for_remote: bool,
+    tlc_index: usize,
+    current_time: u64,
+) -> Option<(Unlock, u128)> {
+    let party = |unlock_type| Unlock {
+        unlock_type,
+        with_preimage: false,
+        signature: [0u8; 65],
+        preimage: None,
+    };
+    match settlement_witness {
+        None => {
+            let others_expired = settlement_data
+                .tlcs
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != tlc_index)
+                .all(|(_, tlc)| current_time > tlc.expiry);
+            (others_expired && settlement_data.local_amount > 0).then(|| {
+                (
+                    party(if for_remote { 0xFF } else { 0xFE }),
+                    settlement_data.local_amount,
+                )
+            })
+        }
+        Some(sw) => {
+            let mut sw = sw.clone();
+            if !sw.update() {
+                return None;
+            }
+            let (unlock_type, own_hash, other_hash, amount) = if for_remote {
+                (
+                    0xFF,
+                    sw.settlement_local_pubkey_hash,
+                    sw.settlement_remote_pubkey_hash,
+                    sw.settlement_local_amount,
+                )
+            } else {
+                (
+                    0xFE,
+                    sw.settlement_remote_pubkey_hash,
+                    sw.settlement_local_pubkey_hash,
+                    sw.settlement_remote_amount,
+                )
+            };
+            let others_expired = sw
+                .pending_htlcs
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != tlc_index)
+                .all(|(_, tlc)| {
+                    tlc.absolute_expiry()
+                        .is_some_and(|expiry| current_time > expiry)
+                });
+            (own_hash == channel_data_local_settlement_pubkey_hash(channel_data)
+                && other_hash != [0u8; 20]
+                && amount > 0
+                && others_expired)
+                .then(|| (party(unlock_type), amount))
+        }
+    }
+}
+
+/// Request a signature for every unlock of `tx` and return it signed once all are available.
+/// Requests still outstanding stay registered with the external signer.
 fn build_signed_settlement_tx<S: WatchtowerStore>(
     events: &crate::signing::SigningEvents,
     store: &S,
     node_id: &NodeId,
     channel_id: Hash256,
     tx: TransactionView,
-    key_purpose: fiber_types::OnchainKeyPurpose,
-    with_preimage: bool,
-    unlock_key: Option<Privkey>,
+    unlocks: &[SettlementSigning],
     change_signer: &LocalSigner,
 ) -> Result<Option<TransactionView>, Box<dyn std::error::Error>> {
+    let mut signatures = Vec::with_capacity(unlocks.len());
+    for (key_purpose, unlock_key, with_preimage) in unlocks {
+        let signature = request_settlement_signature(
+            events,
+            store,
+            node_id,
+            channel_id,
+            &tx,
+            *key_purpose,
+            unlock_key.clone(),
+            unlocks.len() > 1,
+        )?;
+        signatures.push(signature.map(|signature| (signature, *with_preimage)));
+    }
+    match signatures.into_iter().collect::<Option<Vec<_>>>() {
+        Some(signatures) => Ok(Some(apply_settlement_signatures(
+            tx,
+            change_signer,
+            &signatures,
+        )?)),
+        None => Ok(None),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn request_settlement_signature<S: WatchtowerStore>(
+    events: &crate::signing::SigningEvents,
+    store: &S,
+    node_id: &NodeId,
+    channel_id: Hash256,
+    tx: &TransactionView,
+    key_purpose: fiber_types::OnchainKeyPurpose,
+    unlock_key: Option<Privkey>,
+    per_key_request_id: bool,
+) -> Result<Option<[u8; 65]>, Box<dyn std::error::Error>> {
     use fiber_types::OnchainSigningContent;
 
     let content = OnchainSigningContent {
@@ -2793,16 +2972,28 @@ fn build_signed_settlement_tx<S: WatchtowerStore>(
         .request_onchain_with_key(content.clone(), unlock_key)
         .map_err(|e| Box::new(std::io::Error::other(e)) as Box<dyn std::error::Error>)?;
     match outcome {
-        WatchtowerSignOutcome::Ready(signature) => Ok(Some(apply_settlement_signature(
-            tx,
-            change_signer,
-            signature,
-            with_preimage,
-        )?)),
+        WatchtowerSignOutcome::Ready(signature) => Ok(Some(signature)),
         WatchtowerSignOutcome::AwaitingExternal {
             request_id,
             content: awaiting,
         } => {
+            // A request is named by its transaction. When one transaction needs several keys,
+            // name each request by its key too, or the second would replace the first.
+            let request_id = if per_key_request_id {
+                let purpose = match key_purpose {
+                    fiber_types::OnchainKeyPurpose::Settlement => [0u8; 9],
+                    fiber_types::OnchainKeyPurpose::Tlc { commitment_number } => {
+                        let mut tag = [1u8; 9];
+                        tag[1..].copy_from_slice(&commitment_number.to_le_bytes());
+                        tag
+                    }
+                };
+                Hash256::from(ckb_hash::blake2b_256(
+                    [request_id.as_ref(), purpose.as_slice()].concat(),
+                ))
+            } else {
+                request_id
+            };
             let now_ms = crate::now_timestamp_as_millis_u64();
             let fee_inputs = fee_inputs(&awaiting);
             let signing_scope = events.watchtower(node_id);
@@ -2872,20 +3063,17 @@ fn build_signed_settlement_tx<S: WatchtowerStore>(
             signing_update.publish();
             // Only signer-state mutation holds the lock; transaction construction
             // and broadcasting must not block other signer submissions.
-            signature
-                .map(|signature| {
-                    apply_settlement_signature(tx, change_signer, signature, with_preimage)
-                })
-                .transpose()
+            Ok(signature)
         }
     }
 }
 
-fn apply_settlement_signature(
+/// Place each unlock's signature in the settlement witness. `signatures` follow the unlocks'
+/// witness order; each unlock is 2 bytes, the signature, then a preimage when it has one.
+fn apply_settlement_signatures(
     tx: TransactionView,
     change_signer: &LocalSigner,
-    signature_bytes: [u8; 65],
-    with_preimage: bool,
+    signatures: &[([u8; 65], bool)],
 ) -> Result<TransactionView, Box<dyn std::error::Error>> {
     let tx = tx.data().into_view();
     let mut settlement_witness = tx
@@ -2894,13 +3082,12 @@ fn apply_settlement_signature(
         .expect("get witness at index 0")
         .raw_data()
         .to_vec();
-    if with_preimage {
-        let start = checked_sub_usize(settlement_witness.len(), 97, "settlement witness length")?;
-        let end = checked_sub_usize(settlement_witness.len(), 32, "settlement witness length")?;
-        settlement_witness.splice(start..end, signature_bytes);
-    } else {
-        let start = checked_sub_usize(settlement_witness.len(), 65, "settlement witness length")?;
-        settlement_witness.splice(start.., signature_bytes);
+    let mut unlock_end = settlement_witness.len();
+    for (signature_bytes, with_preimage) in signatures.iter().rev() {
+        let unlock_len = if *with_preimage { 2 + 65 + 32 } else { 2 + 65 };
+        let start = checked_sub_usize(unlock_end, unlock_len, "settlement witness length")?;
+        settlement_witness.splice(start + 2..start + 2 + 65, *signature_bytes);
+        unlock_end = start;
     }
 
     let witness = tx.witnesses().get(1).expect("get witness at index 1");
